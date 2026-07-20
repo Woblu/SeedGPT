@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seed Finder</title>
+<style>
+  :root {
+    --bg:        #F7F8F4;
+    --panel:     #FFFFFF;
+    --panel-2:   #F0F2EC;
+    --ink:       #14180F;
+    --ink-soft:  #4A5142;
+    --ink-faint: #7B8372;
+    --rule:      #DDE0D5;
+    --rule-soft: #EAEDE4;
+    --lapis:     #3A6EA5;
+    --lapis-dim: #E4EDF7;
+    --good:      #2F6B4F;
+    --warn:      #8A6A1C;
+    --bad:       #9B3F32;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0F120D; --panel:#161A13; --panel-2:#1D2219; --ink:#E6E9DE;
+      --ink-soft:#AEB5A3; --ink-faint:#79806E; --rule:#2A2F25; --rule-soft:#20251C;
+      --lapis:#7BA8D9; --lapis-dim:#1B2836; --good:#6FB48D; --warn:#D4AC5A; --bad:#D98A7B;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#0F120D; --panel:#161A13; --panel-2:#1D2219; --ink:#E6E9DE;
+    --ink-soft:#AEB5A3; --ink-faint:#79806E; --rule:#2A2F25; --rule-soft:#20251C;
+    --lapis:#7BA8D9; --lapis-dim:#1B2836; --good:#6FB48D; --warn:#D4AC5A; --bad:#D98A7B;
+  }
+  :root[data-theme="light"] {
+    --bg:#F7F8F4; --panel:#FFFFFF; --panel-2:#F0F2EC; --ink:#14180F;
+    --ink-soft:#4A5142; --ink-faint:#7B8372; --rule:#DDE0D5; --rule-soft:#EAEDE4;
+    --lapis:#3A6EA5; --lapis-dim:#E4EDF7; --good:#2F6B4F; --warn:#8A6A1C; --bad:#9B3F32;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--sans); font-size:14px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  header {
+    display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
+    padding:14px 20px; border-bottom:1px solid var(--rule); background:var(--panel);
+  }
+  header h1 { font-size:15px; font-weight:650; margin:0; letter-spacing:-0.01em; }
+  header .sub { font-family:var(--mono); font-size:11px; color:var(--ink-faint); }
+  header .spacer { flex:1; }
+
+  .wrap { display:grid; grid-template-columns:1fr; gap:0; }
+  @media (min-width:960px) { .wrap { grid-template-columns:400px minmax(0,1fr); } }
+
+  .col { padding:20px; min-width:0; }
+  .col.left { border-right:1px solid var(--rule); }
+  @media (max-width:959px) { .col.left { border-right:none; border-bottom:1px solid var(--rule); } }
+
+  h2 {
+    font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.1em;
+    color:var(--ink-faint); margin:0 0 10px;
+  }
+  section + section { margin-top:26px; }
+
+  label { display:block; font-size:11px; color:var(--ink-soft); margin-bottom:4px; }
+  input, select, textarea, button {
+    font-family:inherit; font-size:13px; color:var(--ink);
+    background:var(--panel); border:1px solid var(--rule); border-radius:5px;
+    padding:7px 9px; width:100%;
+  }
+  input[type=number] { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+  textarea { resize:vertical; min-height:58px; line-height:1.45; }
+  select { cursor:pointer; }
+  :focus-visible { outline:2px solid var(--lapis); outline-offset:1px; }
+
+  button {
+    cursor:pointer; font-weight:550; width:auto;
+    background:var(--panel-2); transition:background .12s, border-color .12s;
+  }
+  button:hover:not(:disabled) { border-color:var(--lapis); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:var(--lapis); border-color:var(--lapis); color:#fff; }
+  @media (prefers-color-scheme: dark) { button.primary { color:#0F120D; } }
+  :root[data-theme="dark"] button.primary { color:#0F120D; }
+  :root[data-theme="light"] button.primary { color:#fff; }
+  button.tiny { padding:3px 7px; font-size:11px; }
+  .btnrow { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+
+  /* ---- conditions ---- */
+  .cond {
+    border:1px solid var(--rule); border-left:3px solid var(--lapis);
+    border-radius:5px; padding:10px; margin-bottom:9px; background:var(--panel);
+  }
+  .cond.biome { border-left-color:var(--good); }
+  .cond .top { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .cond .cid {
+    font-family:var(--mono); font-size:11px; font-weight:600;
+    background:var(--panel-2); border:1px solid var(--rule-soft);
+    border-radius:3px; padding:2px 6px;
+  }
+  .cond .dim {
+    font-family:var(--mono); font-size:9.5px; letter-spacing:.07em; text-transform:uppercase;
+    color:var(--ink-faint);
+  }
+  .cond .grid { display:grid; grid-template-columns:1fr 78px; gap:7px; }
+  .cond .grid.full { grid-template-columns:1fr; }
+  .cond .x { margin-left:auto; }
+
+  .empty {
+    border:1px dashed var(--rule); border-radius:5px; padding:16px;
+    text-align:center; color:var(--ink-faint); font-size:12px;
+  }
+
+  /* ---- output ---- */
+  .card {
+    background:var(--panel); border:1px solid var(--rule);
+    border-radius:6px; padding:14px 16px; margin-bottom:14px;
+  }
+  .card h3 {
+    font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.1em;
+    color:var(--ink-faint); margin:0 0 12px;
+  }
+
+  .pass { margin-bottom:14px; }
+  .pass:last-child { margin-bottom:0; }
+  .pass .hd {
+    font-family:var(--mono); font-size:10.5px; color:var(--ink-faint);
+    margin-bottom:7px; display:flex; justify-content:space-between; gap:10px;
+  }
+  .step { display:flex; align-items:center; gap:9px; margin-bottom:5px; }
+  .step .n {
+    font-family:var(--mono); font-size:10px; color:var(--ink-faint);
+    width:14px; flex:none; text-align:right;
+  }
+  .step .d { font-size:12.5px; flex:1; min-width:0; }
+  .step .bar { flex:none; width:110px; height:5px; background:var(--rule-soft); border-radius:2px; overflow:hidden; }
+  .step .bar i { display:block; height:100%; background:var(--lapis); }
+  .step .bar i.slow { background:var(--warn); }
+  .step .c {
+    font-family:var(--mono); font-size:10.5px; color:var(--ink-faint);
+    width:74px; flex:none; text-align:right; font-variant-numeric:tabular-nums;
+  }
+
+  .note {
+    font-size:12px; color:var(--ink-soft); background:var(--lapis-dim);
+    border-radius:5px; padding:9px 11px; margin-top:10px;
+  }
+  .note.warn { background:color-mix(in srgb, var(--warn) 14%, transparent); }
+  .note.bad  { background:color-mix(in srgb, var(--bad) 14%, transparent); }
+
+  .stats { display:flex; flex-wrap:wrap; gap:20px; }
+  .stat .k {
+    font-family:var(--mono); font-size:9.5px; letter-spacing:.09em;
+    text-transform:uppercase; color:var(--ink-faint);
+  }
+  .stat .v {
+    font-family:var(--mono); font-size:17px; font-variant-numeric:tabular-nums;
+    margin-top:1px;
+  }
+  .stat .v.good { color:var(--good); }
+  .stat .v.warn { color:var(--warn); }
+  .stat .v.bad  { color:var(--bad); }
+
+  .funnel { height:7px; background:var(--rule-soft); border-radius:3px; overflow:hidden; margin:12px 0 4px; }
+  .funnel i { display:block; height:100%; background:var(--lapis); }
+  .funnel-l { font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); }
+
+  .seed {
+    border:1px solid var(--rule); border-radius:5px; padding:10px 12px;
+    margin-bottom:8px; background:var(--panel);
+  }
+  .seed .n {
+    display:flex; align-items:center; gap:9px; margin-bottom:6px;
+  }
+  .seed .num {
+    font-family:var(--mono); font-size:14px; font-weight:600;
+    cursor:pointer; border-bottom:1px dashed var(--rule);
+  }
+  .seed .num:hover { color:var(--lapis); border-bottom-color:var(--lapis); }
+  .seed table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:11.5px; }
+  .seed td { padding:1.5px 0; color:var(--ink-soft); font-variant-numeric:tabular-nums; }
+  .seed td.id { color:var(--ink); width:112px; }
+  .seed td.d { text-align:right; color:var(--ink-faint); }
+
+  pre {
+    font-family:var(--mono); font-size:11px; line-height:1.55;
+    background:var(--panel-2); border:1px solid var(--rule-soft); border-radius:5px;
+    padding:11px; overflow-x:auto; margin:0; white-space:pre;
+  }
+  details { margin-top:10px; }
+  summary {
+    cursor:pointer; font-size:11px; color:var(--ink-faint);
+    font-family:var(--mono); user-select:none;
+  }
+  summary:hover { color:var(--lapis); }
+  details[open] summary { margin-bottom:8px; }
+
+  .busy { color:var(--ink-faint); font-size:12.5px; display:flex; align-items:center; gap:8px; }
+  .busy::before {
+    content:""; width:11px; height:11px; border-radius:50%;
+    border:2px solid var(--rule); border-top-color:var(--lapis);
+    animation:spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .busy::before { animation:none; } }
+
+  .err {
+    border:1px solid var(--bad); border-radius:5px; padding:10px 12px;
+    font-size:12.5px; background:color-mix(in srgb, var(--bad) 10%, transparent);
+  }
+  .err b { display:block; font-family:var(--mono); font-size:10px; letter-spacing:.08em;
+           text-transform:uppercase; color:var(--bad); margin-bottom:3px; }
+  .hint { font-size:11.5px; color:var(--ink-faint); margin-top:6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Seed Finder</h1>
+  <span class="sub" id="engine">cubiomes · loading…</span>
+  <span class="spacer"></span>
+  <button class="tiny" id="theme">theme</button>
+</header>
+
+<div class="wrap">
+  <div class="col left">
+
+    <section>
+      <h2>Describe it</h2>
+      <textarea id="nl" placeholder="a mansion near spawn with a village next to it"></textarea>
+      <div class="btnrow">
+        <button id="askBtn">Translate to query</button>
+      </div>
+      <div class="hint">Needs an Anthropic key. The builder below works without one.</div>
+      <div id="askOut"></div>
+    </section>
+
+    <section>
+      <h2>Version</h2>
+      <select id="version">
+        <option>1.21</option><option>1.20</option><option>1.19</option>
+        <option>1.18</option><option>1.17</option><option>1.16</option>
+        <option>1.13</option><option>1.12</option>
+      </select>
+      <div class="hint">A finder generates for the version you pick — it can't infer one.</div>
+    </section>
+
+    <section>
+      <h2>Conditions</h2>
+      <div id="conds"></div>
+      <div class="btnrow">
+        <button id="addStruct">+ structure</button>
+        <button id="addBiome">+ biome</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Search</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+        <div><label for="range">seeds to scan</label>
+          <input type="number" id="range" value="3000000" min="1" step="100000"></div>
+        <div><label for="threads">threads</label>
+          <input type="number" id="threads" value="16" min="1" max="64"></div>
+      </div>
+      <div class="btnrow">
+        <button id="planBtn">Plan</button>
+        <button id="explainBtn">Estimate</button>
+        <button class="primary" id="searchBtn">Search</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="col" id="out">
+    <div class="card">
+      <h3>How this works</h3>
+      <p style="margin:0 0 10px;font-size:13px;color:var(--ink-soft)">
+        A structure check costs <b>~9&nbsp;ns</b>; a biome check <b>~31&nbsp;µs</b> — a
+        ~3,650× gap. So the planner splits every structure condition into cheap
+        48-bit geometry (pass&nbsp;1) and expensive biome viability (pass&nbsp;2), and
+        <b>reorders by measured cost</b> — not the order you wrote them.
+      </p>
+      <p style="margin:0;font-size:13px;color:var(--ink-soft)">
+        <b>Plan</b> shows that ordering. <b>Estimate</b> samples the seed space and
+        predicts whether the search will ever finish. <b>Search</b> runs it.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const el = (t, c, x) => { const n = document.createElement(t);
+    if (c) n.className = c; if (x !== undefined) n.textContent = x; return n; };
+  const esc = s => String(s).replace(/[&<>"]/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  let vocab = { structures:{}, biomes:{} }, conds = [], nextId = 1;
+
+  // ---- theme -------------------------------------------------------------
+  const root = document.documentElement;
+  $('#theme').onclick = () => {
+    const cur = root.getAttribute('data-theme')
+      || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+  };
+
+  // ---- vocabulary --------------------------------------------------------
+  async function loadVocab() {
+    const v = $('#version').value;
+    try {
+      const r = await fetch('/api/vocab?v=' + encodeURIComponent(v));
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      vocab = d;
+      $('#engine').textContent =
+        `cubiomes · MC ${d.version} · ${Object.keys(d.structures).length} structures · ${Object.keys(d.biomes).length} biomes`;
+      // Drop conditions this version can't express, rather than failing later.
+      const before = conds.length;
+      conds = conds.filter(c => c.kind === 'structure'
+        ? c.name in vocab.structures : c.name in vocab.biomes);
+      render();
+      if (conds.length !== before) toast(`${before - conds.length} condition(s) not in MC ${d.version} — removed`);
+    } catch (e) { $('#engine').textContent = 'vocab failed: ' + e.message; }
+  }
+  $('#version').onchange = loadVocab;
+
+  function toast(msg) {
+    const n = el('div', 'note warn', msg);
+    $('#out').prepend(n);
+    setTimeout(() => n.remove(), 5000);
+  }
+
+  // ---- conditions --------------------------------------------------------
+  function addCond(kind) {
+    const names = Object.keys(kind === 'structure' ? vocab.structures : vocab.biomes);
+    if (!names.length) { toast('vocabulary not loaded yet'); return; }
+    const pick = kind === 'structure'
+      ? (names.includes('mansion') ? 'mansion' : names[0])
+      : (names.includes('jungle') ? 'jungle' : names[0]);
+    conds.push({ id: kind.slice(0,1) + (nextId++), kind, name: pick,
+                 within: 400, of: 'spawn', precision: 'fine' });
+    render();
+  }
+  $('#addStruct').onclick = () => addCond('structure');
+  $('#addBiome').onclick  = () => addCond('biome');
+
+  function dimOf(c) {
+    return (c.kind === 'structure' ? vocab.structures[c.name] : vocab.biomes[c.name]) || '';
+  }
+
+  function render() {
+    const box = $('#conds'); box.innerHTML = '';
+    if (!conds.length) {
+      box.append(el('div', 'empty', 'No conditions yet — add a structure or biome.'));
+      return;
+    }
+    conds.forEach((c, i) => {
+      const d = el('div', 'cond ' + c.kind);
+
+      const top = el('div', 'top');
+      top.append(el('span', 'cid', c.id));
+      const dim = dimOf(c);
+      if (dim) top.append(el('span', 'dim', dim));
+      const x = el('button', 'tiny x', '×');
+      x.title = 'remove'; x.onclick = () => { conds.splice(i,1); render(); };
+      top.append(x);
+      d.append(top);
+
+      const g = el('div', 'grid');
+      const sel = el('select');
+      const names = Object.keys(c.kind === 'structure' ? vocab.structures : vocab.biomes);
+      names.sort().forEach(n => {
+        const o = el('option', null, n); o.value = n;
+        if (n === c.name) o.selected = true; sel.append(o);
+      });
+      sel.onchange = e => { c.name = e.target.value; render(); };
+
+      const w = el('input'); w.type = 'number'; w.value = c.within;
+      w.min = 1; w.step = 50; w.title = 'radius in blocks';
+      w.onchange = e => c.within = Math.max(1, +e.target.value || 1);
+      g.append(sel, w); d.append(g);
+
+      const g2 = el('div', 'grid' + (c.kind === 'biome' ? '' : ' full'));
+      const of = el('select');
+      const opts = ['spawn', ...conds.filter(o => o.id !== c.id).map(o => o.id)];
+      opts.forEach(o => {
+        const n = el('option', null, o === 'spawn' ? 'from spawn' : 'from ' + o);
+        n.value = o; if (o === c.of) n.selected = true; of.append(n);
+      });
+      of.onchange = e => { c.of = e.target.value; render(); };
+      g2.append(of);
+
+      if (c.kind === 'biome') {
+        const p = el('select'); p.title = 'scan precision';
+        [['fast','fast'],['fine','fine'],['exact','exact']].forEach(([v,t]) => {
+          const o = el('option', null, t); o.value = v;
+          if (v === c.precision) o.selected = true; p.append(o);
+        });
+        p.onchange = e => c.precision = e.target.value;
+        g2.append(p);
+      }
+      d.append(g2);
+      box.append(d);
+    });
+  }
+
+  // ---- build the query ---------------------------------------------------
+  function buildQuery() {
+    return {
+      version: $('#version').value,
+      conditions: conds.map(c => {
+        const o = { id: c.id, within: c.within, of: c.of };
+        if (c.kind === 'structure') o.structure = c.name;
+        else { o.biome = c.name; o.precision = c.precision; }
+        return o;
+      })
+    };
+  }
+
+  // ---- rendering output --------------------------------------------------
+  const out = $('#out');
+  const busy = t => {
+    out.innerHTML = `<div class="card"><div class="busy">${esc(t)}</div></div>`;
+  };
+  const fail = (e) => { out.innerHTML =
+    `<div class="err"><b>error</b>${esc(e)}</div>`; };
+
+  function nsFmt(n) {
+    if (n >= 1e6) return (n/1e6).toFixed(1) + ' ms';
+    if (n >= 1e3) return (n/1e3).toFixed(1) + ' µs';
+    return Math.round(n) + ' ns';
+  }
+
+  function planCard(plan) {
+    const c = el('div', 'card');
+    c.append(el('h3', null, 'Execution plan — reordered by measured cost'));
+    const maxNs = Math.max(1, ...[...plan.pass1, ...plan.pass2].map(s => s.ns));
+    [['pass1','pass 1 · 48-bit geometry · no biome generator yet'],
+     ['pass2','pass 2 · biome-dependent · only for pass-1 survivors']]
+    .forEach(([k, title]) => {
+      if (!plan[k].length) return;
+      const p = el('div', 'pass');
+      const hd = el('div', 'hd');
+      hd.append(el('span', null, title));
+      p.append(hd);
+      plan[k].forEach((s, i) => {
+        const row = el('div', 'step');
+        row.append(el('span','n', (i+1)+'.'), el('span','d', s.desc));
+        const bar = el('div','bar'), fill = el('i');
+        fill.style.width = Math.max(2, 100*s.ns/maxNs) + '%';
+        if (s.ns > 1e5) fill.className = 'slow';
+        bar.append(fill);
+        row.append(bar, el('span','c', nsFmt(s.ns)));
+        p.append(row);
+      });
+      c.append(p);
+    });
+    const t1 = plan.pass1.reduce((a,s)=>a+s.ns, 0);
+    const t2 = plan.pass2.reduce((a,s)=>a+s.ns, 0);
+    if (t1 > 0 && t2 > 0) {
+      const ratio = t2 / t1;
+      c.append(el('div','note',
+        `Pass 1 totals ${nsFmt(t1)} per seed; pass 2 totals ${nsFmt(t2)} — ` +
+        `${ratio >= 10 ? Math.round(ratio).toLocaleString() : ratio.toFixed(1)}× more expensive. ` +
+        `The bars share one scale, so pass 1 looks like a sliver: that gap is exactly why it runs first.`));
+    }
+    if (plan.conditions.length) {
+      const written = plan.conditions.map(x => x.id).join(', ');
+      const execd = plan.pass1.map(s => {
+        const hit = plan.conditions.find(x => s.desc.startsWith(x.desc.split(' ')[0]));
+        return hit ? hit.id : null;
+      }).filter(Boolean).join(', ');
+      if (execd && written !== execd)
+        c.append(el('div','note',
+          `Written: ${written} — executed: ${execd}. The planner reordered them.`));
+    }
+    return c;
+  }
+
+  function statsCard(title, items) {
+    const c = el('div','card'); c.append(el('h3', null, title));
+    const s = el('div','stats');
+    items.forEach(([k, v, tone]) => {
+      const d = el('div','stat');
+      d.append(el('div','k', k));
+      const val = el('div','v' + (tone ? ' ' + tone : ''), v);
+      d.append(val); s.append(d);
+    });
+    c.append(s); return c;
+  }
+
+  function rawCard(raw) {
+    const d = el('details');
+    d.append(el('summary', null, 'raw tool output'));
+    const p = el('pre'); p.textContent = raw; d.append(p);
+    return d;
+  }
+
+  // ---- actions -----------------------------------------------------------
+  async function post(path, body) {
+    const r = await fetch(path, { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'request failed');
+    return d;
+  }
+
+  function guard() {
+    if (!conds.length) { fail('Add at least one condition first.'); return false; }
+    return true;
+  }
+
+  $('#planBtn').onclick = async () => {
+    if (!guard()) return;
+    busy('planning…');
+    try {
+      const d = await post('/api/plan', { query: buildQuery() });
+      out.innerHTML = ''; out.append(planCard(d.plan), rawCard(d.raw));
+    } catch (e) { fail(e.message); }
+  };
+
+  $('#explainBtn').onclick = async () => {
+    if (!guard()) return;
+    busy('sampling the seed space…');
+    try {
+      const d = await post('/api/explain',
+        { query: buildQuery(), threads: +$('#threads').value });
+      const e = d.explain;
+      out.innerHTML = '';
+      const tone = v => v == null ? '' : v > 50 ? 'bad' : v > 5 ? 'warn' : 'good';
+      out.append(statsCard('Estimate — will this finish?', [
+        ['pass 1 survival', (e.pass1_pct ?? '—') + '%', tone(e.pass1_pct)],
+        ['seeds per hit', e.seeds_per_hit != null ? Math.round(e.seeds_per_hit).toLocaleString() : '—'],
+        ['predicted rate', e.rate || '—'],
+        ['first hit', e.first_hit || '—'],
+        ['12 hits', e.twelve || '—'],
+      ]));
+      if (e.verdict) {
+        const bad = /too rare|impossible|not/i.test(e.verdict);
+        out.append(el('div','note' + (bad ? ' bad' : ''), 'Verdict: ' + e.verdict));
+      }
+      if (e.pass1_pct > 50) out.append(el('div','note warn',
+        `Pass 1 keeps ${e.pass1_pct}% of seeds — it isn't filtering, so every seed pays full biome cost. Tighten a radius.`));
+      if (e.pass1_share != null) out.append(el('div','note',
+        `Time split: pass 1 ${e.pass1_share}%, pass 2 ${(100-e.pass1_share).toFixed(1)}%.`));
+      out.append(planCard(d.plan), rawCard(d.raw));
+    } catch (e) { fail(e.message); }
+  };
+
+  $('#searchBtn').onclick = async () => {
+    if (!guard()) return;
+    busy('searching…');
+    try {
+      const d = await post('/api/search', { query: buildQuery(),
+        range: +$('#range').value, threads: +$('#threads').value });
+      const f = d.funnel;
+      out.innerHTML = '';
+
+      out.append(statsCard('Result', [
+        ['seeds found', String(d.seeds.length), d.seeds.length ? 'good' : 'warn'],
+        ['scanned', (f.scanned ?? 0).toLocaleString()],
+        ['elapsed', (f.seconds ?? 0) + ' s'],
+        ['throughput', (f.mseeds_s ?? 0) + ' M/s'],
+      ]));
+
+      if (f.pass1_pct != null) {
+        const c = el('div','card');
+        c.append(el('h3', null, 'Funnel'));
+        const bar = el('div','funnel'), i = el('i');
+        i.style.width = Math.max(1.5, Math.min(100, f.pass1_pct)) + '%';
+        if (f.pass1_pct > 50) i.style.background = 'var(--warn)';
+        bar.append(i); c.append(bar);
+        c.append(el('div','funnel-l',
+          `pass 1 kept ${f.pass1_pct}% (${(f.pass1||0).toLocaleString()}) · pass 2 confirmed ${(f.pass2||0).toLocaleString()}`));
+        if (f.too_loose) c.append(el('div','note warn',
+          "Pass 1 isn't filtering — every seed paid full biome cost. Tighten a radius."));
+        out.append(c);
+      }
+
+      if (!d.seeds.length) {
+        out.append(el('div','note warn',
+          'No seeds in that range. Scan more seeds, loosen a radius, or run Estimate first.'));
+      } else {
+        const c = el('div','card');
+        c.append(el('h3', null, `Seeds — click a number to copy`));
+        d.seeds.forEach(s => {
+          const box = el('div','seed');
+          const n = el('div','n');
+          const num = el('span','num', s.seed);
+          num.title = 'copy';
+          num.onclick = () => { navigator.clipboard?.writeText(s.seed);
+            num.textContent = 'copied'; setTimeout(()=>num.textContent = s.seed, 800); };
+          const desc = el('button','tiny','describe');
+          desc.onclick = () => describe(s.seed);
+          n.append(num, desc); box.append(n);
+          if (s.places.length) {
+            const t = el('table');
+            s.places.forEach(p => {
+              const tr = el('tr');
+              tr.append(el('td','id', p.id),
+                        el('td',null,`x=${p.x}  z=${p.z}`),
+                        el('td','d', p.dist + ' from origin'));
+              t.append(tr);
+            });
+            box.append(t);
+          }
+          c.append(box);
+        });
+        out.append(c);
+      }
+      out.append(planCard(d.plan), rawCard(d.raw));
+    } catch (e) { fail(e.message); }
+  };
+
+  async function describe(seed) {
+    busy('reading world ' + seed + '…');
+    try {
+      const d = await post('/api/describe',
+        { seed, version: $('#version').value, radius: 2000 });
+      out.innerHTML = '';
+      const c = el('div','card');
+      c.append(el('h3', null, 'World ' + seed));
+      const p = el('pre'); p.textContent = d.raw; c.append(p);
+      out.append(c);
+      const back = el('button','tiny','← back to search');
+      back.onclick = () => $('#searchBtn').click();
+      out.append(back);
+    } catch (e) { fail(e.message); }
+  }
+
+  $('#askBtn').onclick = async () => {
+    const text = $('#nl').value.trim();
+    if (!text) return;
+    $('#askOut').innerHTML = '<div class="busy">translating…</div>';
+    try {
+      const d = await post('/api/ask', { text, version: $('#version').value });
+      conds = (d.query.conditions || []).map(c => ({
+        id: c.id, kind: c.structure ? 'structure' : 'biome',
+        name: c.structure || c.biome, within: c.within ?? 400,
+        of: c.of || 'spawn', precision: c.precision || 'fine'
+      }));
+      nextId = conds.length + 1;
+      render();
+      $('#askOut').innerHTML = d.notes
+        ? `<div class="note">${esc(d.notes)}</div>` : '';
+    } catch (e) {
+      $('#askOut').innerHTML = `<div class="err"><b>error</b>${esc(e.message)}</div>`;
+    }
+  };
+
+  // ---- start -------------------------------------------------------------
+  loadVocab().then(() => {
+    conds = [
+      { id:'mansion', kind:'structure', name:'mansion', within:300, of:'spawn' },
+      { id:'village', kind:'structure', name:'village', within:400, of:'mansion' },
+    ];
+    nextId = 3;
+    render();
+  });
+})();
+</script>
+</body>
+</html>

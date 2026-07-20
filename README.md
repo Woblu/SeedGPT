@@ -9,7 +9,7 @@ A Minecraft Java Edition **seed finder**: describe the world features you want, 
 ```sh
 ./setup.sh                 # clone + pin the engine (first time only)
 ./build.sh tools/find.c    # library + build/find.exe
-./test.sh                  # 24-check regression suite
+./test.sh                  # 27-check regression suite
 ```
 
 Requires `clang`, `git`, and a JDK (for the verifiers). No `make`/`ninja` needed.
@@ -20,6 +20,22 @@ tracking `main`. Engine currency is the whole reason this project uses
 bump the pin, then re-run `./test.sh`.
 
 ## Run
+
+### Web UI
+
+```sh
+python serve.py        # opens http://127.0.0.1:8777
+```
+
+Build queries by clicking, see the execution plan, estimate whether a search
+will finish, run it, and click any result to see what is actually in that world.
+Binds to loopback only — the search is a native binary, so this cannot be a
+hosted page; the server exists to bridge the browser to `build/find.exe`.
+
+The natural-language box needs an Anthropic key; everything else works without
+one.
+
+### Command line
 
 Describe what you want in English:
 
@@ -175,12 +191,13 @@ done < /tmp/hits.tsv
 
 `tools/biomecheck.c` shows what "viable" actually resolved to for a seed.
 
-`./test.sh` runs the whole thing as a regression suite (24 checks, ~11s): the
+`./test.sh` runs the whole thing as a regression suite (27 checks, ~12s): the
 cross-validation above, planner reordering *and* cost-based ordering, six error
 paths, same-type distinctness, nether/end queries including the end-city
 exclusion zone, biome-precision plumbing, a real search whose every seed is
 re-verified under the JDK reference, the loose-query warning, estimator
-calibration, and `describe` round-tripping a found seed. Each assertion has been
+calibration, `describe` round-tripping a found seed, and the UI server's
+endpoints. Each assertion has been
 confirmed to fail when the behaviour it checks is broken — a green run means
 something.
 
@@ -228,6 +245,8 @@ caps at 1.21 — it cannot generate current worlds), and **not** `cubiomes-viewe
 ## Layout
 
 ```
+serve.py            local web UI server (loopback only)
+ui/index.html       the UI
 ask.py              English -> Claude -> condition JSON -> find
 test.sh             regression suite (16 checks; ./test.sh -v to see commands)
 build.sh            build everything

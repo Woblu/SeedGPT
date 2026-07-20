@@ -240,6 +240,37 @@ else
   bad "describe missed a known structure" "$(echo "$desc" | head -8)"
 fi
 
+# ---------------------------------------------------------------- ui
+section "web ui"
+# Smoke-test the server's own endpoints. Full browser coverage lives outside
+# this suite (it needs playwright); this catches the cheap breakages -- a
+# syntax error in serve.py, a renamed tool, a broken parser.
+UIPORT=8791
+SEED_UI_PORT=$UIPORT python serve.py >/tmp/sc_test/ui.log 2>&1 &
+uipid=$!
+for _ in $(seq 1 30); do
+  curl -s -m 1 "http://127.0.0.1:$UIPORT/api/vocab?v=1.21" >/dev/null 2>&1 && break
+  sleep 0.3
+done
+if curl -s -m 3 "http://127.0.0.1:$UIPORT/api/vocab?v=1.21" | grep -q '"fortress": "nether"'; then
+  ok "server serves version-aware vocabulary"
+else
+  bad "ui vocab endpoint failed" "$(tail -3 /tmp/sc_test/ui.log)"
+fi
+uiplan=$(curl -s -m 20 -X POST "http://127.0.0.1:$UIPORT/api/plan" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":{"version":"1.21","conditions":[{"id":"j","biome":"jungle","within":400,"of":"m"},{"id":"m","structure":"mansion","within":500,"of":"spawn"}]}}')
+echo "$uiplan" | grep -q '"pass1"' && echo "$uiplan" | grep -q 'mansion within 500' \
+  && ok "server parses the plan into structured JSON" \
+  || bad "ui plan endpoint failed" "$uiplan"
+curl -s -m 10 -X POST "http://127.0.0.1:$UIPORT/api/plan" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":{"version":"1.21","conditions":[{"id":"a","biome":"lava_sea","within":300}]}}' \
+  | grep -q '"error"' \
+  && ok "server surfaces tool errors as JSON" \
+  || bad "ui error path did not return an error"
+kill "$uipid" 2>/dev/null; wait "$uipid" 2>/dev/null
+
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
