@@ -1,0 +1,6 @@
+{
+  "version": "1.21",
+  "conditions": [
+    { "id": "chest", "loot": { "structure": "desert_pyramid", "item": "diamond", "count": 1 }, "within": 3000 }
+  ]
+}

@@ -9,7 +9,7 @@ A Minecraft Java Edition **seed finder**: describe the world features you want, 
 ```sh
 ./setup.sh                 # clone + pin the engine (first time only)
 ./build.sh tools/find.c    # library + build/find.exe
-./test.sh                  # 40-check regression suite
+./test.sh                  # 45-check regression suite
 ```
 
 Requires `clang`, `git`, and a JDK (for the verifiers). No `make`/`ninja` needed.
@@ -212,7 +212,7 @@ done < /tmp/hits.tsv
 
 `tools/biomecheck.c` shows what "viable" actually resolved to for a seed.
 
-`./test.sh` runs the whole thing as a regression suite (40 checks, ~60s): the
+`./test.sh` runs the whole thing as a regression suite (45 checks, ~85s): the
 cross-validation above, planner reordering *and* cost-based ordering, six error
 paths, same-type distinctness, nether/end queries including the end-city
 exclusion zone, biome-precision plumbing, a real search whose every seed is
@@ -222,6 +222,32 @@ and the hand-rolled PNG encoder (signature, chunk CRCs, zlib length). Each
 assertion has been
 confirmed to fail when the behaviour it checks is broken — a green run means
 something.
+
+## Chest loot
+
+Search for a structure whose chests hold a rare item:
+
+```json
+{ "id": "chest",
+  "loot": { "structure": "desert_pyramid", "item": "diamond", "count": 1 },
+  "within": 3000 }
+```
+
+Supported structures: `desert_pyramid`, `jungle_temple`, `igloo`, `outpost`,
+`shipwreck` (the ones cubiomes can enumerate chests for). The item list per
+structure is exposed at `/api/lootitems` and in the UI dropdown, so you can
+only ask for something that can actually appear there. `count` aggregates
+across every chest in an instance, and the search scans **all** instances
+within the radius — a farther pyramid with the diamond still counts.
+
+Rolling a chest is ~5 us, cheap next to the ~42 us structure viability check,
+so a loot search costs about the same as a plain structure search. What makes a
+specific item rare is the loot table, not the tool: a diamond in a desert
+pyramid is roughly 1 in a few hundred pyramids, which is why the default radius
+is small (a stray large radius rolls loot for thousands of instances per seed).
+
+Every reported count is re-derived independently by `tools/checkloot.c` in the
+suite, so the numbers aren't a plumbing artefact.
 
 ## End portal eyes
 
@@ -364,6 +390,9 @@ tools/checkpng.py   validates that PNG is spec-correct, not just non-empty
 tools/checkspawn.py re-verifies spawn-relative hits against describe.exe
 tools/confidence.c  measures how much the engine actually verifies each structure
 tools/checkeyes.c   recomputes an end portal's eye count independently
+tools/checkloot.c   recomputes a structure's chest loot independently
+tools/lootitems.c   dumps the items each structure's loot tables can produce
+src/loot.{h,c}      per-thread loot-table cache + item counting
 tools/vocab.c       dumps valid structures/biomes per version (ask.py reads this)
 tools/xval.c        cubiomes side of cross-validation
 tools/XVal.java     independent JDK reference

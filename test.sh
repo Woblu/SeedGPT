@@ -27,7 +27,7 @@ section "build"
 if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/vocab.c  >/tmp/sc_test/b2 2>&1 \
 && ./build.sh tools/xval.c   >/tmp/sc_test/b3 2>&1 \
-&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1 \n&& ./build.sh tools/checkeyes.c >/tmp/sc_test/b7 2>&1; then
+&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1 \n&& ./build.sh tools/checkeyes.c >/tmp/sc_test/b7 2>&1 \n&& ./build.sh tools/checkloot.c >/tmp/sc_test/b8 2>&1 && ./build.sh tools/lootitems.c >/tmp/sc_test/b9 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -318,6 +318,29 @@ done
 check_err "eyes above 12 rejected"   '{"version":"1.21","conditions":[{"id":"p","eyes":13}]}'   "eyes must be"
 
 
+# Chest loot search. A diamond in a desert pyramid is ~1 in a few hundred
+# pyramids, so the counts must be real -- verified independently, not trusted.
+section "chest loot"
+cat > /tmp/sc_test/loot.json <<'EOF'
+{"version":"1.21","conditions":[
+ {"id":"chest","loot":{"structure":"desert_pyramid","item":"diamond","count":1},"within":3000}]}
+EOF
+FIND_TSV=/tmp/sc_test/loot.tsv ./build/find.exe /tmp/sc_test/loot.json 300000 16 > /tmp/sc_test/loot.log 2>&1
+nl=$(grep -c '^SEED' /tmp/sc_test/loot.log)
+[ "$nl" -gt 0 ]   && ok "loot query returns seeds ($nl)"   || bad "loot query found nothing" "$(tail -3 /tmp/sc_test/loot.log)"
+
+# Reproduce every reported count with the independent verifier.
+badloot=0
+while IFS=$'	' read -r s a x z; do
+  got=$(./build/checkloot.exe "$s" desert_pyramid "$x" "$z" 1.21 diamond 2>/dev/null | sed 's/.*diamond=//')
+  if [ -z "$got" ] || [ "$got" -lt 1 ]; then badloot=$((badloot+1)); fi
+done < /tmp/sc_test/loot.tsv
+[ "$badloot" -eq 0 ]   && ok "all reported loot reproduces independently"   || bad "loot counts do not reproduce" "$badloot seeds disagreed"
+
+check_err "unsupported loot structure rejected"   '{"version":"1.21","conditions":[{"id":"c","loot":{"structure":"mansion","item":"diamond"}}]}'   "not supported"
+check_err "loot missing item rejected"   '{"version":"1.21","conditions":[{"id":"c","loot":{"structure":"igloo"}}]}'   "needs"
+
+
 # ---------------------------------------------------------------- ui
 section "web ui"
 # Smoke-test the server's own endpoints. Full browser coverage lives outside
@@ -347,6 +370,7 @@ curl -s -m 10 -X POST "http://127.0.0.1:$UIPORT/api/plan" \
   | grep -q '"error"' \
   && ok "server surfaces tool errors as JSON" \
   || bad "ui error path did not return an error"
+curl -s -m 15 "http://127.0.0.1:$UIPORT/api/lootitems?v=1.21" | grep -q '"desert_pyramid"' && ok "server serves loot item vocabulary" || bad "ui lootitems endpoint failed"
 curl -s -m 60 "http://127.0.0.1:$UIPORT/api/map?seed=281474976710732&v=1.21&r=1000&px=256"   -o /tmp/sc_test/map.png -w '%{content_type}' 2>/dev/null | grep -q 'image/png'   && ok "server renders a map PNG"   || bad "ui map endpoint failed"
 kill "$uipid" 2>/dev/null; wait "$uipid" 2>/dev/null
 

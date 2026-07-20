@@ -2,6 +2,7 @@
 #include "util.h"
 #include "cJSON.h"
 #include "features/stronghold.h"
+#include "loot.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,7 @@
 #define NS_BIOME_AT    2300.0
 #define NS_SPAWN    2300000.0   // getSpawn: ~437/s
 #define NS_EYES    10250000.0   // locate stronghold + pieces + loot: ~98/s
+#define NS_LOOT       47000.0   // structure viability + a ~5us loot roll
 
 static double geomCost(const Query *q, int i)
 {
@@ -37,6 +39,7 @@ static double viabCost(const Query *q, int i)
 {
     const Cond *c = &q->cond[i];
     if (c->type == CT_EYES) return NS_EYES;
+    if (c->type == CT_LOOT) return NS_LOOT;
     if (c->type == CT_STRUCTURE)
         return NS_VIABLE + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
     // biome scan: samples on a `scanStep` lattice across the disc
@@ -143,9 +146,50 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         c->within = (x && cJSON_IsNumber(x)) ? x->valueint : 1000;
 
         cJSON *je = cJSON_GetObjectItem(e, "eyes");
+        cJSON *jl = cJSON_GetObjectItem(e, "loot");
         cJSON *js = cJSON_GetObjectItem(e, "structure");
         cJSON *jb = cJSON_GetObjectItem(e, "biome");
-        if (je && cJSON_IsNumber(je)) {
+        if (jl && cJSON_IsObject(jl)) {
+            c->type = CT_LOOT;
+            cJSON *ls = cJSON_GetObjectItem(jl, "structure");
+            cJSON *li = cJSON_GetObjectItem(jl, "item");
+            cJSON *lc = cJSON_GetObjectItem(jl, "count");
+            if (!ls || !cJSON_IsString(ls) || !li || !cJSON_IsString(li)) {
+                snprintf(err, errlen,
+                    "condition \"%s\": loot needs \"structure\" and \"item\"", c->id);
+                goto done;
+            }
+            c->structType = str2struct_(ls->valuestring);
+            if (c->structType < 0 || !lootStructureSupported(c->structType)) {
+                snprintf(err, errlen,
+                    "condition \"%s\": loot search not supported for \"%s\" "
+                    "(try desert_pyramid, jungle_temple, igloo, outpost, shipwreck)",
+                    c->id, ls->valuestring);
+                goto done;
+            }
+            // Accept "diamond" or "minecraft:diamond".
+            if (strchr(li->valuestring, ':'))
+                snprintf(c->lootItem, sizeof c->lootItem, "%s", li->valuestring);
+            else
+                snprintf(c->lootItem, sizeof c->lootItem, "minecraft:%s", li->valuestring);
+            c->lootMin = (lc && cJSON_IsNumber(lc)) ? lc->valueint : 1;
+            if (c->lootMin < 1) c->lootMin = 1;
+            // Loot rolls per instance, so the radius bounds cost directly.
+            // Default small; cap so a stray big radius can't wedge the search.
+            cJSON *lw = cJSON_GetObjectItem(e, "within");
+            c->within = (lw && cJSON_IsNumber(lw)) ? lw->valueint : 3000;
+            if (c->within > 10000) c->within = 10000;
+            if (c->within < 100)   c->within = 100;
+            cJSON *of = cJSON_GetObjectItem(e, "of");
+            snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "origin");
+            StructureConfig sc;
+            if (!getStructureConfig(c->structType, q->mc, &sc)) {
+                snprintf(err, errlen, "condition \"%s\": %s not in %s",
+                         c->id, ls->valuestring, jv->valuestring);
+                goto done;
+            }
+            c->dim = sc.dim;
+        } else if (je && cJSON_IsNumber(je)) {
             c->type = CT_EYES;
             c->eyesMin = je->valueint;
             c->dim = DIM_OVERWORLD;
@@ -239,7 +283,8 @@ int queryPlan(Query *q, char *err, size_t errlen)
         // among currently-schedulable geometry tasks, take the cheapest
         int best = -1; double bestc = 1e30;
         for (int i = 0; i < q->n; i++) {
-            if (done[i] || q->cond[i].type != CT_STRUCTURE) continue;
+            if (done[i] || (q->cond[i].type != CT_STRUCTURE
+                          && q->cond[i].type != CT_LOOT)) continue;
             int p = q->cond[i].parent;
             if (p >= 0 && !done[p]) continue;          // parent not placed yet
             double c = geomCost(q, i);
@@ -252,7 +297,7 @@ int queryPlan(Query *q, char *err, size_t errlen)
 
     // any structure condition left unscheduled means a dependency cycle
     for (int i = 0; i < q->n; i++)
-        if (q->cond[i].type == CT_STRUCTURE && !done[i]) {
+        if ((q->cond[i].type == CT_STRUCTURE || q->cond[i].type == CT_LOOT) && !done[i]) {
             snprintf(err, errlen, "dependency cycle involving \"%s\"", q->cond[i].id);
             return 1;
         }
@@ -324,6 +369,13 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
     const Cond *c = &q->cond[i];
     if (c->type == CT_EYES) {
         snprintf(buf, n, "end portal with >= %d of %d eyes", c->eyesMin, EYE_FRAMES);
+        return buf;
+    }
+    if (c->type == CT_LOOT) {
+        const char *it = c->lootItem;
+        if (!strncmp(it, "minecraft:", 10)) it += 10;
+        snprintf(buf, n, "%s with >= %d %s in its chests",
+                 struct2str(c->structType), c->lootMin, it);
         return buf;
     }
     const char *what = (c->type == CT_STRUCTURE)
@@ -409,9 +461,9 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
 }
 
 static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
-                     const Match *m, Match *fixed, int *haveSpawn, Pos *spawn);
+                     const Match *m, Match *fixed, int *haveSpawn, Pos *spawn, LootCache *lc);
 
-int queryStage2(const Query *q, Generator *g, uint64_t worldSeed, Match *m)
+int queryStage2(const Query *q, Generator *g, uint64_t worldSeed, Match *m, LootCache *lc)
 {
     // Outer loop over dimensions: applySeed (~25 us) is the dominant per-seed
     // cost, so pay it once per dimension rather than once per condition. A
@@ -421,7 +473,7 @@ int queryStage2(const Query *q, Generator *g, uint64_t worldSeed, Match *m)
     for (int d = 0; d < q->ndims; d++) {
         int dim = q->dims[d];
         applySeed(g, dim, worldSeed);
-        if (!stage2Dim(q, g, dim, worldSeed, m, &fixed, &haveSpawn, &spawn)) return 0;
+        if (!stage2Dim(q, g, dim, worldSeed, m, &fixed, &haveSpawn, &spawn, lc)) return 0;
     }
     fixed.spawn = spawn; fixed.haveSpawn = haveSpawn;
     *m = fixed;   // report the positions actually verified
@@ -492,7 +544,7 @@ static int resolveEyes(const Query *q, Generator *g, uint64_t worldSeed, Match *
 }
 
 static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
-                     const Match *m, Match *fixed, int *haveSpawn, Pos *spawn)
+                     const Match *m, Match *fixed, int *haveSpawn, Pos *spawn, LootCache *lc)
 {
     uint64_t s48 = worldSeed & ((1ULL << 48) - 1);
     for (int i = 0; i < q->nviab; i++) {
@@ -503,6 +555,45 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
         if (c->type == CT_EYES) {
             if (!resolveEyes(q, g, worldSeed, fixed)) return 0;
             if (fixed->eyes < c->eyesMin) return 0;
+            continue;
+        }
+
+        if (c->type == CT_LOOT) {
+            // Scan every viable instance in range and roll its loot; the FIRST
+            // one meeting the count wins. Checking only the nearest would
+            // reject seeds where a farther instance holds the item.
+            Pos centre = (c->parent >= 0) ? fixed->pos[c->parent] : (Pos){0,0};
+            if (c->parent == PARENT_SPAWN) {
+                if (!*haveSpawn) { *spawn = getSpawn(g); *haveSpawn = 1; }
+                centre = *spawn;
+            }
+            StructureConfig sc;
+            if (!getStructureConfig(c->structType, q->mc, &sc)) return 0;
+            double span = sc.regionSize * 16.0;
+            int r0x = (int)floor((centre.x - c->within) / span);
+            int r1x = (int)floor((centre.x + c->within) / span);
+            int r0z = (int)floor((centre.z - c->within) / span);
+            int r1z = (int)floor((centre.z + c->within) / span);
+            int64_t lim = (int64_t)c->within * c->within;
+            int hit = 0;
+            for (int rx = r0x; rx <= r1x && !hit; rx++)
+            for (int rz = r0z; rz <= r1z && !hit; rz++) {
+                Pos p;
+                if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
+                if (d2(p, centre) > lim) continue;
+                if (!isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
+                StructureVariant sv;
+                int biome = getBiomeAt(g, 0, (p.x>>4)*4+2, 319>>2, (p.z>>4)*4+2);
+                getVariant(&sv, c->structType, q->mc, s48, p.x, p.z, biome);
+                int cnt = lootCountItem(lc, q->mc, s48, c->structType,
+                                        p.x, p.z, &sv, c->lootItem);
+                if (cnt >= c->lootMin) {
+                    fixed->pos[k] = p;
+                    fixed->lootCount[k] = cnt;
+                    hit = 1;
+                }
+            }
+            if (!hit) return 0;
             continue;
         }
 

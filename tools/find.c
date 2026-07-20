@@ -6,6 +6,7 @@
 // auditable, and reports the pass-1 survival rate afterwards -- the single
 // number that tells you whether the query is selective enough to be fast.
 #include "query.h"
+#include "loot.h"
 #include "explain.h"
 #include "util.h"
 #include <stdio.h>
@@ -37,6 +38,7 @@ static DWORD WINAPI worker(LPVOID arg)
     Job *j = (Job*)arg;
     Generator g;
     setupGenerator(&g, j->q->mc, 0);
+    LootCache *lc = lootCacheNew();   // one per thread; loot tables are stateful
 
     for (uint64_t s48 = j->lo; s48 < j->hi; s48++) {
         if (g_found >= g_want) break;
@@ -60,7 +62,7 @@ static DWORD WINAPI worker(LPVOID arg)
             j->applies++;
             // queryStage2 applies the seed itself, once per dimension the query
             // touches -- the caller must not applySeed here.
-            if (!queryStage2(j->q, &g, ws, &m)) continue;
+            if (!queryStage2(j->q, &g, ws, &m, lc)) continue;
             j->pass2++;
 
             EnterCriticalSection(&g_lock);
@@ -70,6 +72,7 @@ static DWORD WINAPI worker(LPVOID arg)
             break;
         }
     }
+    lootCacheFree(lc);
     return 0;
 }
 
@@ -166,6 +169,13 @@ int main(int argc, char **argv)
                 printf("   %-14s x=%6d z=%6d   %d/%d eyes\n", "(end portal)",
                        h->m.stronghold.x, h->m.stronghold.z, h->m.eyes, EYE_FRAMES);
             for (int c = 0; c < q.n; c++) {
+                if (q.cond[c].type == CT_LOOT) {
+                    const char *it = q.cond[c].lootItem;
+                    if (!strncmp(it, "minecraft:", 10)) it += 10;
+                    printf("   %-14s x=%6d z=%6d   %d %s\n", q.cond[c].id,
+                           h->m.pos[c].x, h->m.pos[c].z, h->m.lootCount[c], it);
+                    continue;
+                }
                 if (q.cond[c].type != CT_STRUCTURE) continue;
                 Pos p = h->m.pos[c];
                 // Say which reference the distance is measured from: "spawn"
@@ -183,7 +193,9 @@ int main(int argc, char **argv)
             if (tsv) {
                 fprintf(tsv, "%" PRId64, (int64_t)h->ws);
                 for (int c = 0; c < q.n; c++) {
-                    if (q.cond[c].type != CT_STRUCTURE) continue;
+                    // Anything with a matched position: structures and loot.
+                    if (q.cond[c].type != CT_STRUCTURE && q.cond[c].type != CT_LOOT)
+                        continue;
                     fprintf(tsv, "\t%s\t%d\t%d", q.cond[c].id, h->m.pos[c].x, h->m.pos[c].z);
                 }
                 fprintf(tsv, "\n");

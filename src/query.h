@@ -39,6 +39,7 @@ typedef enum {
     CT_STRUCTURE,   // structure of a type within `within` blocks of parent
     CT_BIOME,       // biome present within `within` blocks of parent
     CT_EYES,        // the first stronghold's end portal has >= N eyes
+    CT_LOOT,        // a structure's chests hold >= N of an item
 } CondType;
 
 // End portal frames: 12, each independently 10% likely to hold an eye. That
@@ -69,6 +70,8 @@ typedef struct {
     int      dim;           // DIM_OVERWORLD / DIM_NETHER / DIM_END, inferred
     int      scanStep;      // CT_BIOME: sample spacing in blocks (see below)
     int      eyesMin;       // CT_EYES: minimum filled frames required
+    int      lootMin;       // CT_LOOT: minimum item count
+    char     lootItem[48];  // CT_LOOT: item id, e.g. "minecraft:diamond"
 } Cond;
 
 // Biome scan precision. A biome condition samples points across the disc; the
@@ -125,6 +128,7 @@ typedef struct {
     Pos stronghold;  // first stronghold, filled iff a CT_EYES condition ran
     int eyes;        // its end portal's filled frame count
     int haveEyes;
+    int lootCount[MAX_COND];  // CT_LOOT: item count found at the winning chest
 } Match;
 
 // Pass 1: geometry only. No Generator required. Returns 1 if all geometry
@@ -135,7 +139,11 @@ int  queryStage1(const Query *q, uint64_t s48, Match *m);
 // seed once per dimension the query actually touches (applySeed is the
 // dominant per-seed cost, so a single-dimension query pays for exactly one) --
 // the caller does NOT call applySeed itself.
-int  queryStage2(const Query *q, Generator *g, uint64_t worldSeed, Match *m);
+#ifndef LOOTCACHE_TYPEDEF
+#define LOOTCACHE_TYPEDEF
+typedef struct LootCache LootCache;   // defined in loot.h
+#endif
+int  queryStage2(const Query *q, Generator *g, uint64_t worldSeed, Match *m, LootCache *lc);
 
 const char *condDesc(const Query *q, int i, char *buf, size_t n);
 const char *dimName(int dim);

@@ -161,6 +161,12 @@ def parse_seeds(out: str) -> list:
             cur["portal"] = {"x": int(m.group(1)), "z": int(m.group(2)),
                              "eyes": int(m.group(3))}
             continue
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) (\w+)$", line)
+        if m and cur and m.group(5) not in ("from",):
+            cur.setdefault("loot", []).append(
+                {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
+                 "count": int(m.group(4)), "item": m.group(5)})
+            continue
         m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) from (\w+)", line)
         if m and cur:
             cur["places"].append({"id": m.group(1), "x": int(m.group(2)),
@@ -201,6 +207,14 @@ def api_vocab(qs) -> dict:
     rc, out, err = run([tool("vocab"), v], TIMEOUTS["plan"])
     if rc != 0:
         raise Failure(err.strip() or f"vocab failed for {v}")
+    return json.loads(out)
+
+
+def api_lootitems(qs) -> dict:
+    v = check_version((qs.get("v") or ["1.21"])[0])
+    rc, out, err = run([tool("lootitems"), v], TIMEOUTS["plan"])
+    if rc != 0:
+        raise Failure(err.strip() or f"lootitems failed for {v}")
     return json.loads(out)
 
 
@@ -326,6 +340,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, api_vocab(parse_qs(u.query)))
             elif u.path == "/api/map":
                 self._send(200, api_map(parse_qs(u.query)), "image/png")
+            elif u.path == "/api/lootitems":
+                self._send(200, api_lootitems(parse_qs(u.query)))
             else:
                 self._send(404, {"error": "not found"})
         except Failure as e:
@@ -349,7 +365,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    for name in ("find", "vocab", "describe", "map"):
+    for name in ("find", "vocab", "describe", "map", "lootitems"):
         try:
             tool(name)
         except Failure as e:

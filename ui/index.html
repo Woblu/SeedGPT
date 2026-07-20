@@ -273,6 +273,7 @@
         <button id="addStruct">+ structure</button>
         <button id="addBiome">+ biome</button>
         <button id="addEyes">+ end portal eyes</button>
+        <button id="addLoot">+ chest loot</button>
       </div>
     </section>
 
@@ -317,7 +318,8 @@
   const esc = s => String(s).replace(/[&<>"]/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-  let vocab = { structures:{}, biomes:{} }, conds = [], nextId = 1;
+  let vocab = { structures:{}, biomes:{} }, lootVocab = { structures:{} };
+  let conds = [], nextId = 1;
 
   // ---- theme -------------------------------------------------------------
   const root = document.documentElement;
@@ -335,6 +337,10 @@
       const d = await r.json();
       if (!r.ok) throw new Error(d.error);
       vocab = d;
+      try {
+        const lr = await fetch('/api/lootitems?v=' + encodeURIComponent(v));
+        lootVocab = await lr.json();
+      } catch (e) { lootVocab = { structures:{} }; }
       $('#engine').textContent =
         `cubiomes · MC ${d.version} · ${Object.keys(d.structures).length} structures · ${Object.keys(d.biomes).length} biomes`;
       // Drop conditions this version can't express, rather than failing later.
@@ -366,6 +372,17 @@
   }
   $('#addStruct').onclick = () => addCond('structure');
   $('#addBiome').onclick  = () => addCond('biome');
+  $('#addLoot').onclick = () => {
+    const ls = Object.keys(lootVocab.structures || {});
+    if (!ls.length) { toast('loot vocabulary not loaded'); return; }
+    const st = ls.includes('desert_pyramid') ? 'desert_pyramid' : ls[0];
+    const items = lootVocab.structures[st] || [];
+    conds.push({ id: 'c' + (nextId++), kind: 'loot', struct: st,
+                 item: items.includes('diamond') ? 'diamond' : items[0],
+                 count: 1, within: 3000 });
+    render();
+  };
+
   $('#addEyes').onclick = () => {
     if (conds.some(c => c.kind === 'eyes')) { toast('one eye condition is enough'); return; }
     conds.push({ id: 'portal', kind: 'eyes', eyes: 6 });
@@ -389,6 +406,43 @@
     }
     conds.forEach((c, i) => {
       const d = el('div', 'cond ' + c.kind);
+      if (c.kind === 'loot') {
+        const top = el('div','top');
+        top.append(el('span','cid', c.id), el('span','dim','CHEST LOOT'));
+        const x = el('button','tiny x','×');
+        x.onclick = () => { conds.splice(i,1); render(); };
+        top.append(x); d.append(top);
+
+        const g = el('div','grid');
+        const ss = el('select');
+        Object.keys(lootVocab.structures).forEach(n => {
+          const o = el('option', null, n.replace(/_/g,' ')); o.value = n;
+          if (n === c.struct) o.selected = true; ss.append(o);
+        });
+        ss.onchange = e => {
+          c.struct = e.target.value;
+          const items = lootVocab.structures[c.struct] || [];
+          if (!items.includes(c.item)) c.item = items[0];
+          render();
+        };
+        const w = el('input'); w.type='number'; w.value=c.within; w.min=100; w.max=10000; w.step=500;
+        w.title='search radius (blocks)';
+        w.onchange = e => c.within = Math.max(100, Math.min(10000, +e.target.value||3000));
+        g.append(ss, w); d.append(g);
+
+        const g2 = el('div','grid');
+        const it = el('select');
+        (lootVocab.structures[c.struct] || []).sort().forEach(n => {
+          const o = el('option', null, n.replace(/_/g,' ')); o.value = n;
+          if (n === c.item) o.selected = true; it.append(o);
+        });
+        it.onchange = e => c.item = e.target.value;
+        const cnt = el('input'); cnt.type='number'; cnt.value=c.count; cnt.min=1; cnt.title='minimum count';
+        cnt.onchange = e => c.count = Math.max(1, +e.target.value||1);
+        g2.append(it, cnt); d.append(g2);
+        box.append(d);
+        return;
+      }
       if (c.kind === 'eyes') {
         const top = el('div','top');
         top.append(el('span','cid', c.id), el('span','dim','END PORTAL'));
@@ -466,6 +520,8 @@
       version: $('#version').value,
       conditions: conds.map(c => {
         if (c.kind === 'eyes') return { id: c.id, eyes: c.eyes };
+        if (c.kind === 'loot') return { id: c.id, within: c.within,
+          loot: { structure: c.struct, item: c.item, count: c.count } };
         const o = { id: c.id, within: c.within, of: c.of };
         if (c.kind === 'structure') o.structure = c.name;
         else { o.biome = c.name; o.precision = c.precision; }
@@ -655,7 +711,7 @@
           const desc = el('button','tiny','describe');
           desc.onclick = () => describe(s.seed);
           n.append(num, desc); box.append(n);
-          if (s.places.length || s.spawn || s.portal) {
+          if (s.places.length || s.spawn || s.portal || s.loot) {
             const t = el('table');
             if (s.spawn) {
               const tr = el('tr');
@@ -671,6 +727,13 @@
                         el('td','d', s.portal.eyes + '/12 eyes'));
               t.append(tr);
             }
+            (s.loot || []).forEach(l => {
+              const tr = el('tr');
+              tr.append(el('td','id', l.id),
+                        el('td',null,`x=${l.x}  z=${l.z}`),
+                        el('td','d', `${l.count} ${l.item}`));
+              t.append(tr);
+            });
             s.places.forEach(p => {
               const tr = el('tr');
               tr.append(el('td','id', p.id),

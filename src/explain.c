@@ -19,6 +19,7 @@
 //     probes at UPPER_SAMPLES and counts the expected number tried before a
 //     success, which is what actually dominates wall clock.
 #include "explain.h"
+#include "loot.h"
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
@@ -79,21 +80,23 @@ static DWORD WINAPI workerB(LPVOID arg)
     PhaseB *s = (PhaseB*)arg;
     Generator g;
     setupGenerator(&g, s->q->mc, 0);
+    LootCache *lc = lootCacheNew();
     LARGE_INTEGER t;
     for (int i = 0; i < s->nseeds; i++)
         for (int p = 0; p < s->probesEach; p++) {
             uint64_t up = (splitmix64(&s->rngState) >> 16) & 0xFFFF;
             s->tried++;
             // queryStage2 applies the seed itself, once per dimension.
-            if (queryStage2(s->q, &g, (up << 48) | s->seeds[i], &s->matches[i])) s->passed++;
+            if (queryStage2(s->q, &g, (up << 48) | s->seeds[i], &s->matches[i], lc)) s->passed++;
             // A fine/exact biome scan costs milliseconds, so a fixed probe
             // budget can run for minutes. Stop on wall clock instead and
             // report the smaller sample honestly.
             if ((s->tried & 0x3F) == 0) {
                 QueryPerformanceCounter(&t);
-                if ((double)t.QuadPart / s->qpcFreq.QuadPart > s->deadline) return 0;
+                if ((double)t.QuadPart / s->qpcFreq.QuadPart > s->deadline) { lootCacheFree(lc); return 0; }
             }
         }
+    lootCacheFree(lc);
     return 0;
 }
 

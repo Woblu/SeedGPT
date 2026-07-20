@@ -19,7 +19,10 @@ SRCS=$(find "$CUB" -name '*.c' -not -path '*/.git/*' \
        -not -name 'tests.c' -not -name 'xradv.c' | sort)
 
 STAMP="$OBJ/.built"
-NEWEST=$(ls -t $SRCS "$CUB"/*.h 2>/dev/null | head -1)
+# Watch our own headers too: a change to src/*.h that alters how cubiomes
+# headers are seen (an include, a macro) must force a recompile, or a stale
+# object links against a mismatched declaration and the binary crashes.
+NEWEST=$(ls -t $SRCS "$CUB"/*.h src/*.h 2>/dev/null | head -1)
 if [ ! -f "$STAMP" ] || [ "$NEWEST" -nt "$STAMP" ]; then
   echo "compiling cubiomes ($(echo "$SRCS" | wc -l) files)..."
   for s in $SRCS; do
