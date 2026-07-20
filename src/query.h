@@ -122,3 +122,6 @@ const char *dimName(int dim);
 int         queryStructureCount(void);
 const char *queryStructureName(int i);
 int         queryStructureType(int i);
+// 0 if the engine performs no real placement check for this structure, so a
+// reported position may not exist in game. See query.c for the measurement.
+int         queryStructureVerified(int i);

@@ -114,6 +114,23 @@ int main(int argc, char **argv)
     printf("\n");
     queryPrintPlan(&q, stdout);
 
+    // Warn when a condition uses a structure the engine cannot verify. Its
+    // position is exact, but whether the game actually places anything there
+    // is unmodelled -- which looks exactly like a wrong answer in game.
+    for (int i = 0; i < q.n; i++) {
+        if (q.cond[i].type != CT_STRUCTURE) continue;
+        for (int k = 0; k < queryStructureCount(); k++) {
+            if (queryStructureType(k) != q.cond[i].structType) continue;
+            if (queryStructureVerified(k)) continue;
+            printf("NOTE: \"%s\" is a %s. The engine reports EVERY generation attempt\n"
+                   "      for these without checking whether the game actually places\n"
+                   "      one, so a reported hit may not exist in your world.\n"
+                   "      Measured: 100%% of attempts pass, vs 0.9-31.7%% for\n"
+                   "      biome-checked structures like village/mansion/monument.\n\n",
+                   q.cond[i].id, queryStructureName(k));
+        }
+    }
+
     if (bias)    { explainCompare(&q, samples, nthreads, stdout); free(json); return 0; }
     if (explain) { explainQuery(&q, samples, nthreads, stdout);   free(json); return 0; }
 

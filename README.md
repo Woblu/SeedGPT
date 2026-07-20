@@ -9,7 +9,7 @@ A Minecraft Java Edition **seed finder**: describe the world features you want, 
 ```sh
 ./setup.sh                 # clone + pin the engine (first time only)
 ./build.sh tools/find.c    # library + build/find.exe
-./test.sh                  # 33-check regression suite
+./test.sh                  # 37-check regression suite
 ```
 
 Requires `clang`, `git`, and a JDK (for the verifiers). No `make`/`ninja` needed.
@@ -212,7 +212,7 @@ done < /tmp/hits.tsv
 
 `tools/biomecheck.c` shows what "viable" actually resolved to for a seed.
 
-`./test.sh` runs the whole thing as a regression suite (33 checks, ~15s): the
+`./test.sh` runs the whole thing as a regression suite (37 checks, ~15s): the
 cross-validation above, planner reordering *and* cost-based ordering, six error
 paths, same-type distinctness, nether/end queries including the end-city
 exclusion zone, biome-precision plumbing, a real search whose every seed is
@@ -222,6 +222,32 @@ and the hand-rolled PNG encoder (signature, chunk CRCs, zlib length). Each
 assertion has been
 confirmed to fail when the behaviour it checks is broken — a green run means
 something.
+
+## Not every structure is verified
+
+A structure position comes from two things: a generation **attempt** (exact
+LCG math, cross-validated against the JDK reference) and a **placement check**
+(does the game actually build one there). The second is where the engine's
+coverage varies. Measured pass rate of `isViableStructurePos`
+(`tools/confidence.c`, MC 1.21):
+
+| structure | attempts passing | meaning |
+|---|---|---|
+| swamp hut, desert pyramid, mansion | 0.9–2.6% | biome-checked |
+| ancient city, igloo, monument | 3–9% | biome-checked |
+| trail ruins, outpost, village | 12–23% | biome-checked |
+| ocean ruin, shipwreck | 28–32% | biome-checked |
+| trial chambers | 95.5% | weak (generates almost everywhere) |
+| **ruined portal** | **100.0%** | **no check at all** |
+
+For ruined portals, cubiomes' `isViableFeatureBiome` is literally
+`return mc >= MC_1_16_1;` — every attempt is reported and false positives
+cannot be filtered. A reported ruined portal may not exist in your world.
+`find` and the UI now print a warning when a query uses one.
+
+This is a limitation of the engine's world model, not of the search: the
+coordinates are right, but whether the game populates that spot is unmodelled.
+Prefer biome-checked structures when you intend to visit the result.
 
 ## Known limitations
 
@@ -279,6 +305,7 @@ tools/describe.c    given a seed, print spawn + nearby structures & their biomes
 tools/map.c         render a seed's biome map as a PNG (no image library)
 tools/checkpng.py   validates that PNG is spec-correct, not just non-empty
 tools/checkspawn.py re-verifies spawn-relative hits against describe.exe
+tools/confidence.c  measures how much the engine actually verifies each structure
 tools/vocab.c       dumps valid structures/biomes per version (ask.py reads this)
 tools/xval.c        cubiomes side of cross-validation
 tools/XVal.java     independent JDK reference

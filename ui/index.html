@@ -514,6 +514,10 @@
     c.append(s); return c;
   }
 
+  function noteCards(notes) {
+    return (notes || []).map(n => el('div','note warn', n));
+  }
+
   function rawCard(raw) {
     const d = el('details');
     d.append(el('summary', null, 'raw tool output'));
@@ -540,7 +544,7 @@
     busy('planning…');
     try {
       const d = await post('/api/plan', { query: buildQuery() });
-      out.innerHTML = ''; out.append(planCard(d.plan), rawCard(d.raw));
+      out.innerHTML = ''; out.append(...noteCards(d.notes), planCard(d.plan), rawCard(d.raw));
     } catch (e) { fail(e.message); }
   };
 
@@ -568,7 +572,7 @@
         `Pass 1 keeps ${e.pass1_pct}% of seeds — it isn't filtering, so every seed pays full biome cost. Tighten a radius.`));
       if (e.pass1_share != null) out.append(el('div','note',
         `Time split: pass 1 ${e.pass1_share}%, pass 2 ${(100-e.pass1_share).toFixed(1)}%.`));
-      out.append(planCard(d.plan), rawCard(d.raw));
+      out.append(...noteCards(d.notes), planCard(d.plan), rawCard(d.raw));
     } catch (e) { fail(e.message); }
   };
 

@@ -78,6 +78,19 @@ static const struct { const char *n; int t; } STRUCT_TBL[] = {
 };
 #define NSTRUCT (int)(sizeof(STRUCT_TBL)/sizeof(STRUCT_TBL[0]))
 
+// Structures the engine cannot actually verify. cubiomes' isViableFeatureBiome
+// returns unconditionally for these (`return mc >= MC_1_16_1;` for overworld
+// ruined portals; `return 1;` for the nether variant), so EVERY generation
+// attempt is reported as a hit and false positives cannot be filtered.
+// Measured: ruined_portal passes 100.0% of attempts, versus 0.9-31.7% for
+// every biome-checked structure (tools/confidence.c).
+int queryStructureVerified(int i)
+{
+    const char *n = queryStructureName(i);
+    if (!n) return 1;
+    return !(!strcmp(n, "ruined_portal") || !strcmp(n, "ruined_portal_nether"));
+}
+
 int queryStructureCount(void) { return NSTRUCT; }
 const char *queryStructureName(int i) { return (i >= 0 && i < NSTRUCT) ? STRUCT_TBL[i].n : NULL; }
 int queryStructureType(int i) { return (i >= 0 && i < NSTRUCT) ? STRUCT_TBL[i].t : -1; }

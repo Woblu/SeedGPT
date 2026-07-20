@@ -27,7 +27,7 @@ section "build"
 if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/vocab.c  >/tmp/sc_test/b2 2>&1 \
 && ./build.sh tools/xval.c   >/tmp/sc_test/b3 2>&1 \
-&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1; then
+&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -193,6 +193,23 @@ fi
 # "128", "146", ... clustered at thread boundaries.
 big=$(echo "$sp_out" | grep '^SEED' | awk '{print ($2<0?-$2:$2)}' | sort -n | tail -1)
 [ -n "$big" ] && [ "${#big}" -ge 10 ]   && ok "seeds use the full 64-bit range (largest has ${#big} digits)"   || bad "seeds look truncated" "largest magnitude: $big"
+
+# The engine cannot verify every structure. cubiomes' isViableFeatureBiome
+# returns unconditionally for ruined portals, so 100% of generation attempts
+# are reported as hits (vs 0.9-31.7% for biome-checked structures). A user hit
+# exactly this: reported portals that did not exist in game. The tool must say
+# so rather than presenting them as equivalent.
+section "verification confidence"
+cat > /tmp/sc_test/rp.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"p","structure":"ruined_portal","within":200,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/rp.json 1 1 2>&1 | grep -q "may not exist in your world"   && ok "unverifiable structure carries a warning"   || bad "no warning for ruined_portal"
+./build/find.exe queries/mansion-village.json 1 1 2>&1 | grep -q "NOTE:"   && bad "spurious warning on biome-checked structures"   || ok "biome-checked structures carry no warning"
+# And the measurement behind the claim must still hold.
+./build/confidence.exe 1.21 20 > /tmp/sc_test/conf.log 2>&1
+grep -q "ruined_portal.*NONE" /tmp/sc_test/conf.log   && ok "ruined_portal still measures as unverified"   || bad "confidence measurement changed" "$(grep ruined_portal /tmp/sc_test/conf.log)"
+grep -q "village.*biome-checked" /tmp/sc_test/conf.log   && ok "village still measures as biome-checked"   || bad "village verification changed"
+
 
 # ---------------------------------------------------------------- dimensions
 section "nether / end"

@@ -128,6 +128,20 @@ def parse_funnel(out: str) -> dict:
     return f
 
 
+def parse_notes(out: str) -> list:
+    """NOTE blocks: structures the engine cannot actually verify."""
+    notes, cur = [], None
+    for line in out.splitlines():
+        if line.startswith("NOTE:"):
+            cur = [line[5:].strip()]
+            notes.append(cur)
+        elif cur is not None and line.startswith("      "):
+            cur.append(line.strip())
+        elif cur is not None:
+            cur = None
+    return [" ".join(n) for n in notes]
+
+
 def parse_seeds(out: str) -> list:
     seeds, cur = [], None
     for line in out.splitlines():
@@ -199,7 +213,7 @@ def api_plan(body) -> dict:
     path = write_query(body)
     # range=1 thread=1: prints the plan, searches a single seed. Cheap and safe.
     _, out, _ = _plan_or_fail(path, ["1", "1"])
-    return {"plan": parse_plan(out), "raw": out}
+    return {"plan": parse_plan(out), "notes": parse_notes(out), "raw": out}
 
 
 def api_explain(body) -> dict:
@@ -208,7 +222,8 @@ def api_explain(body) -> dict:
     threads = int(body.get("threads", 16))
     _, out, _ = _plan_or_fail(path, ["--explain", str(samples), str(threads)],
                               TIMEOUTS["explain"], "explain")
-    return {"plan": parse_plan(out), "explain": parse_explain(out), "raw": out}
+    return {"plan": parse_plan(out), "explain": parse_explain(out),
+            "notes": parse_notes(out), "raw": out}
 
 
 def api_search(body) -> dict:
@@ -218,7 +233,7 @@ def api_search(body) -> dict:
     _, out, _ = _plan_or_fail(path, [str(rng), str(threads)],
                               TIMEOUTS["search"], "search")
     return {"plan": parse_plan(out), "seeds": parse_seeds(out),
-            "funnel": parse_funnel(out), "raw": out}
+            "funnel": parse_funnel(out), "notes": parse_notes(out), "raw": out}
 
 
 def api_describe(body) -> dict:
