@@ -7,11 +7,17 @@ A Minecraft Java Edition **seed finder**: describe the world features you want, 
 ## Build
 
 ```sh
-./build.sh                 # library only
+./setup.sh                 # clone + pin the engine (first time only)
 ./build.sh tools/find.c    # library + build/find.exe
+./test.sh                  # 16-check regression suite
 ```
 
-Requires `clang` and a JDK (for the verifiers). No `make`/`ninja` needed.
+Requires `clang`, `git`, and a JDK (for the verifiers). No `make`/`ninja` needed.
+
+`setup.sh` pins cubiomes at a specific commit (`b12a532`, MC 26.2) rather than
+tracking `main`. Engine currency is the whole reason this project uses
+`xpple/cubiomes`, so the version it generates against should change on purpose —
+bump the pin, then re-run `./test.sh`.
 
 ## Run
 
