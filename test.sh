@@ -64,7 +64,7 @@ cat > /tmp/sc_test/reorder.json <<'EOF'
  {"id":"jungle","biome":"jungle","within":400,"of":"mansion"},
  {"id":"mansion","structure":"mansion","within":500,"of":"spawn"}]}
 EOF
-plan=$(./build/find.exe /tmp/sc_test/reorder.json --explain 1 1 2>&1)
+plan=$(./build/find.exe /tmp/sc_test/reorder.json 1 1 2>&1)
 # pass 1 must contain mansion geometry and NOT the biome
 if echo "$plan" | sed -n '/pass 1/,/pass 2/p' | grep -q mansion \
 && ! echo "$plan" | sed -n '/pass 1/,/pass 2/p' | grep -q jungle; then
@@ -86,7 +86,7 @@ cat > /tmp/sc_test/cost.json <<'EOF'
  {"id":"village","structure":"village","within":1000,"of":"spawn"},
  {"id":"mansion","structure":"mansion","within":1000,"of":"spawn"}]}
 EOF
-p1order=$(./build/find.exe /tmp/sc_test/cost.json --explain 1 1 2>&1 \
+p1order=$(./build/find.exe /tmp/sc_test/cost.json 1 1 2>&1 \
           | sed -n '/pass 1/,/pass 2/p' | grep -oE 'mansion|village' | head -2 | tr '\n' ',')
 [ "$p1order" = "mansion,village," ] \
   && ok "pass 1 orders cheaper structure first (mansion before village)" \
@@ -116,6 +116,22 @@ check_err "unknown parent rejected" \
 check_err "cross-dimension distance rejected" \
   '{"version":"1.21","conditions":[{"id":"f","structure":"fortress","within":300,"of":"spawn"},{"id":"v","structure":"village","within":500,"of":"f"}]}' \
   "cross-dimension"
+check_err "bad biome precision rejected" \
+  '{"version":"1.21","conditions":[{"id":"j","biome":"jungle","within":300,"precision":"turbo"}]}' \
+  "fast|fine|exact"
+
+# Biome scan precision must change the plan's cost estimate, not just parse.
+cat > /tmp/sc_test/prec.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"j","biome":"jungle","within":400,"of":"spawn"}]}
+EOF
+cfine=$(./build/find.exe /tmp/sc_test/prec.json 1 1 2>&1 | sed -n 's/.*jungle.*\[fine\] *~\([0-9]*\) ns.*/\1/p' | head -1)
+sed -i 's/"of":"spawn"}/"of":"spawn","precision":"fast"}/' /tmp/sc_test/prec.json
+cfast=$(./build/find.exe /tmp/sc_test/prec.json 1 1 2>&1 | sed -n 's/.*jungle.*\[fast\] *~\([0-9]*\) ns.*/\1/p' | head -1)
+if [ -n "$cfine" ] && [ -n "$cfast" ] && [ "$cfine" -gt "$cfast" ]; then
+  ok "biome precision affects cost model (fine ${cfine}ns > fast ${cfast}ns)"
+else
+  bad "precision not reflected in cost" "fine=$cfine fast=$cfast"
+fi
 
 # ---------------------------------------------------------------- dimensions
 section "nether / end"

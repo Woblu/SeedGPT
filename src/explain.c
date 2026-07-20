@@ -27,7 +27,9 @@
 #define MASK48 ((1ULL << 48) - 1)
 #define UPPER_SAMPLES 64        // must match tools/find.c
 #define MAX_KEEP 512            // survivors retained from phase A
-#define PROBE_BUDGET 40000      // total phase-B upper probes
+#define PROBE_BUDGET 40000      // total phase-B upper probes (upper bound)
+#define PHASE_B_SECONDS  4.0    // wall-clock cap: a fine biome scan is ~6ms, so
+                                // the probe budget alone could run for minutes
 
 static inline uint64_t splitmix64(uint64_t *x)
 {
@@ -68,6 +70,8 @@ typedef struct {
     int nseeds, probesEach;
     uint64_t rngState;
     uint64_t tried, passed;
+    double deadline;          // QPC seconds; stop probing past this
+    LARGE_INTEGER qpcFreq;
 } PhaseB;
 
 static DWORD WINAPI workerB(LPVOID arg)
@@ -75,12 +79,20 @@ static DWORD WINAPI workerB(LPVOID arg)
     PhaseB *s = (PhaseB*)arg;
     Generator g;
     setupGenerator(&g, s->q->mc, 0);
+    LARGE_INTEGER t;
     for (int i = 0; i < s->nseeds; i++)
         for (int p = 0; p < s->probesEach; p++) {
             uint64_t up = (splitmix64(&s->rngState) >> 16) & 0xFFFF;
             s->tried++;
             // queryStage2 applies the seed itself, once per dimension.
             if (queryStage2(s->q, &g, (up << 48) | s->seeds[i], &s->matches[i])) s->passed++;
+            // A fine/exact biome scan costs milliseconds, so a fixed probe
+            // budget can run for minutes. Stop on wall clock instead and
+            // report the smaller sample honestly.
+            if ((s->tried & 0x3F) == 0) {
+                QueryPerformanceCounter(&t);
+                if ((double)t.QuadPart / s->qpcFreq.QuadPart > s->deadline) return 0;
+            }
         }
     return 0;
 }
@@ -149,12 +161,15 @@ void explainQuery(const Query *q, uint64_t samples, int nthreads, FILE *f)
     HANDLE *th = calloc(nthreads, sizeof(HANDLE));
     LARGE_INTEGER fr, t0, t1; QueryPerformanceFrequency(&fr); QueryPerformanceCounter(&t0);
     int per = (nkeep + nthreads - 1) / nthreads;
+    double deadline = (double)t0.QuadPart / fr.QuadPart + PHASE_B_SECONDS;
     for (int i = 0; i < nthreads; i++) {
         int lo = i * per, hi = lo + per; if (hi > nkeep) hi = nkeep;
         sp[i].q = q; sp[i].seeds = keep + lo; sp[i].matches = keepM + lo;
         sp[i].nseeds = (hi > lo) ? (hi - lo) : 0;
         sp[i].probesEach = probesEach;
         sp[i].rngState = 0xBEEF0000ULL + 0x9E3779B9ULL * (uint64_t)i;
+        sp[i].deadline = deadline;
+        sp[i].qpcFreq = fr;
         th[i] = CreateThread(NULL, 0, workerB, &sp[i], 0, NULL);
     }
     WaitForMultipleObjects(nthreads, th, TRUE, INFINITE);

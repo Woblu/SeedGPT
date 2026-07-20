@@ -34,7 +34,30 @@ typedef struct {
     char     ofId[ID_LEN];  // parent condition id, or "spawn"/"origin"
     int      parent;        // resolved index; -1 == world origin
     int      dim;           // DIM_OVERWORLD / DIM_NETHER / DIM_END, inferred
+    int      scanStep;      // CT_BIOME: sample spacing in blocks (see below)
 } Cond;
+
+// Biome scan precision. A biome condition samples points across the disc; the
+// spacing trades recall against cost.
+//
+// MEASURED (tools/biomerecall.c), MC 1.21, jungle, vs an exhaustive
+// quart-resolution scan. Recall is NOT a fixed property -- it falls with the
+// radius, because fewer sample points land inside a smaller disc:
+//
+//            radius 400            radius 300
+//   step   recall   cost/seed    recall   cost/seed
+//     64    90.4%      424 us     78.6%      260 us   "fast"
+//     16    96.2%     5451 us     89.3%     3239 us   "fine"  (default)
+//      4   100.0%   105821 us    100.0%    58595 us   "exact" (200x+)
+//
+// So treat these as indicative, not guarantees. Run biomerecall for the radius
+// and biome you actually care about before trusting a recall number.
+//
+// Every setting errs in the same direction: a coarse scan yields false
+// NEGATIVES (missed seeds) only -- a reported seed is always correct.
+#define SCAN_FAST   64
+#define SCAN_FINE   16
+#define SCAN_EXACT   4
 
 typedef struct {
     int  mc;

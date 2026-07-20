@@ -33,8 +33,9 @@ static double viabCost(const Query *q, int i)
 {
     const Cond *c = &q->cond[i];
     if (c->type == CT_STRUCTURE) return NS_VIABLE;
-    // biome scan: samples on a 64-block lattice across the disc
-    double n = 2.0 * (c->within / 64.0) + 1.0;
+    // biome scan: samples on a `scanStep` lattice across the disc
+    double step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
+    double n = 2.0 * (c->within / step) + 1.0;
     return n * n * NS_BIOME_AT;
 }
 
@@ -141,6 +142,23 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 goto done;
             }
             c->dim = getDimension(c->biomeId);   // inferred, no JSON field needed
+            // Scan precision: recall/cost tradeoff, documented in query.h.
+            // Defaults to "fine" -- silently discarding ~1 in 10 matching
+            // seeds is a worse failure than being slower on a path that
+            // usually runs only for pass-1 survivors.
+            c->scanStep = SCAN_FINE;
+            cJSON *jp = cJSON_GetObjectItem(e, "precision");
+            if (jp && cJSON_IsString(jp)) {
+                if      (!strcmp(jp->valuestring, "fast"))  c->scanStep = SCAN_FAST;
+                else if (!strcmp(jp->valuestring, "fine"))  c->scanStep = SCAN_FINE;
+                else if (!strcmp(jp->valuestring, "exact")) c->scanStep = SCAN_EXACT;
+                else {
+                    snprintf(err, errlen,
+                             "condition \"%s\": precision must be fast|fine|exact, got \"%s\"",
+                             c->id, jp->valuestring);
+                    goto done;
+                }
+            }
         } else {
             snprintf(err, errlen, "condition \"%s\": need \"structure\" or \"biome\"", c->id);
             goto done;
@@ -258,7 +276,10 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
     const Cond *c = &q->cond[i];
     const char *what = (c->type == CT_STRUCTURE)
         ? struct2str(c->structType) : biome2str(q->mc, c->biomeId);
-    snprintf(buf, n, "%s within %d of %s", what ? what : "?", c->within, c->ofId);
+    const char *prec = c->type != CT_BIOME ? ""
+                     : c->scanStep == SCAN_FAST  ? " [fast]"
+                     : c->scanStep == SCAN_EXACT ? " [exact]" : " [fine]";
+    snprintf(buf, n, "%s within %d of %s%s", what ? what : "?", c->within, c->ofId, prec);
     return buf;
 }
 
@@ -345,9 +366,10 @@ static int stage2Dim(const Query *q, Generator *g, int dim, const Match *m)
         } else {
             Pos centre = (c->parent < 0) ? (Pos){0,0} : m->pos[c->parent];
             int64_t lim = (int64_t)c->within * c->within;
+            int step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
             int hit = 0;
-            for (int dx = -c->within; dx <= c->within && !hit; dx += 64)
-            for (int dz = -c->within; dz <= c->within && !hit; dz += 64) {
+            for (int dx = -c->within; dx <= c->within && !hit; dx += step)
+            for (int dz = -c->within; dz <= c->within && !hit; dz += step) {
                 if ((int64_t)dx*dx + (int64_t)dz*dz > lim) continue;
                 int bx = centre.x + dx, bz = centre.z + dz;
                 // surface sampling: biomes are 3D since 1.18; a y=63 probe
