@@ -66,7 +66,7 @@ Query format:
 {
   "version": "1.21",
   "conditions": [
-    { "id": "mansion", "structure": "mansion", "within": 300, "of": "spawn"   },
+    { "id": "mansion", "structure": "mansion", "within": 300, "of": "origin"  },
     { "id": "village", "structure": "village", "within": 400, "of": "mansion" },
     { "id": "jungle",  "biome":     "jungle",  "within": 400, "of": "mansion" }
   ]
