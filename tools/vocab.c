@@ -19,25 +19,28 @@ int main(int argc, char **argv)
 
     printf("{\n  \"version\": \"%s\",\n", mc2str(mc));
 
-    printf("  \"structures\": [");
+    // Structures and biomes carry their dimension, so the NL layer can avoid
+    // proposing a cross-dimension distance (which the planner rejects).
+    printf("  \"structures\": {");
     int first = 1;
     for (int i = 0; i < queryStructureCount(); i++) {
         StructureConfig sc;
         if (!getStructureConfig(queryStructureType(i), mc, &sc)) continue;  // not in this version
-        printf("%s\n    \"%s\"", first ? "" : ",", queryStructureName(i));
+        printf("%s\n    \"%s\": \"%s\"", first ? "" : ",",
+               queryStructureName(i), dimName(sc.dim));
         first = 0;
     }
-    printf("\n  ],\n");
+    printf("\n  },\n");
 
-    printf("  \"biomes\": [");
+    printf("  \"biomes\": {");
     first = 1;
     for (int id = 0; id < 256; id++) {
         if (!biomeExists(mc, id)) continue;
         const char *n = biome2str(mc, id);
         if (!n) continue;
-        printf("%s\n    \"%s\"", first ? "" : ",", n);
+        printf("%s\n    \"%s\": \"%s\"", first ? "" : ",", n, dimName(getDimension(id)));
         first = 0;
     }
-    printf("\n  ]\n}\n");
+    printf("\n  }\n}\n");
     return 0;
 }

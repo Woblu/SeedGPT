@@ -33,6 +33,7 @@ typedef struct {
     int      within;        // radius, blocks
     char     ofId[ID_LEN];  // parent condition id, or "spawn"/"origin"
     int      parent;        // resolved index; -1 == world origin
+    int      dim;           // DIM_OVERWORLD / DIM_NETHER / DIM_END, inferred
 } Cond;
 
 typedef struct {
@@ -43,6 +44,7 @@ typedef struct {
     // --- plan output ---
     int  geom[MAX_COND]; int ngeom;   // pass 1: 48-bit, dependency order
     int  viab[MAX_COND]; int nviab;   // pass 2: 64-bit, cheapest first
+    int  dims[3];        int ndims;   // distinct dimensions pass 2 must visit
     double est_cost_ns;               // estimated cost per candidate seed
 } Query;
 
@@ -65,11 +67,14 @@ typedef struct { Pos pos[MAX_COND]; } Match;
 // conditions are satisfiable for this 48-bit structure seed.
 int  queryStage1(const Query *q, uint64_t s48, Match *m);
 
-// Pass 2: biome-dependent checks for one full 64-bit world seed. The caller
-// must have called applySeed(g, DIM_OVERWORLD, worldSeed) already.
-int  queryStage2(const Query *q, Generator *g, const Match *m);
+// Pass 2: biome-dependent checks for one full 64-bit world seed. Applies the
+// seed once per dimension the query actually touches (applySeed is the
+// dominant per-seed cost, so a single-dimension query pays for exactly one) --
+// the caller does NOT call applySeed itself.
+int  queryStage2(const Query *q, Generator *g, uint64_t worldSeed, const Match *m);
 
 const char *condDesc(const Query *q, int i, char *buf, size_t n);
+const char *dimName(int dim);
 
 // Vocabulary accessors -- the NL layer reads these instead of hardcoding names.
 int         queryStructureCount(void);

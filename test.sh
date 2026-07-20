@@ -111,6 +111,43 @@ check_err "version-unavailable structure rejected" \
 check_err "unknown parent rejected" \
   '{"version":"1.21","conditions":[{"id":"a","structure":"village","within":300,"of":"nope"}]}' \
   "unknown parent"
+# Nether coords are 8:1 compressed -- a radius measured across dimensions is
+# meaningless, so refuse rather than silently produce nonsense.
+check_err "cross-dimension distance rejected" \
+  '{"version":"1.21","conditions":[{"id":"f","structure":"fortress","within":300,"of":"spawn"},{"id":"v","structure":"village","within":500,"of":"f"}]}' \
+  "cross-dimension"
+
+# ---------------------------------------------------------------- dimensions
+section "nether / end"
+cat > /tmp/sc_test/nether.json <<'EOF'
+{"version":"1.21","conditions":[
+ {"id":"fortress","structure":"fortress","within":300,"of":"spawn"},
+ {"id":"bastion","structure":"bastion","within":500,"of":"fortress"}]}
+EOF
+./build/find.exe /tmp/sc_test/nether.json 2000000 16 2>&1 | grep -q '^SEED' \
+  && ok "nether query (fortress + bastion) returns seeds" \
+  || bad "nether query found nothing"
+
+cat > /tmp/sc_test/end.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"city","structure":"end_city","within":3000,"of":"spawn"}]}
+EOF
+endout=$(./build/find.exe /tmp/sc_test/end.json 500000 16 2>&1)
+echo "$endout" | grep -q '^SEED' \
+  && ok "end query (end_city) returns seeds" \
+  || bad "end query found nothing"
+# End cities never generate within 1008 blocks of the origin.
+mind=$(echo "$endout" | sed -n 's/.*city *x= *\(-\?[0-9]*\) z= *\(-\?[0-9]*\).*/\1 \2/p' \
+       | awk '{d=sqrt($1*$1+$2*$2); if(m==""||d<m) m=d} END{printf "%d", m}')
+[ -n "$mind" ] && [ "$mind" -ge 1008 ] \
+  && ok "end cities respect the 1008-block origin exclusion (nearest $mind)" \
+  || bad "end city inside exclusion zone" "nearest=$mind"
+
+# Structures must be classified into the right dimension.
+./build/vocab.exe 1.21 | grep -q '"fortress": "nether"' \
+  && ./build/vocab.exe 1.21 | grep -q '"end_city": "end"' \
+  && ./build/vocab.exe 1.21 | grep -q '"mansion": "overworld"' \
+  && ok "vocab reports per-structure dimensions" \
+  || bad "vocab dimension classification wrong"
 
 # ---------------------------------------------------------------- search + independent verify
 section "search produces independently-verifiable seeds"

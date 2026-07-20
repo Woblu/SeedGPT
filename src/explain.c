@@ -78,9 +78,9 @@ static DWORD WINAPI workerB(LPVOID arg)
     for (int i = 0; i < s->nseeds; i++)
         for (int p = 0; p < s->probesEach; p++) {
             uint64_t up = (splitmix64(&s->rngState) >> 16) & 0xFFFF;
-            applySeed(&g, DIM_OVERWORLD, (up << 48) | s->seeds[i]);
             s->tried++;
-            if (queryStage2(s->q, &g, &s->matches[i])) s->passed++;
+            // queryStage2 applies the seed itself, once per dimension.
+            if (queryStage2(s->q, &g, (up << 48) | s->seeds[i], &s->matches[i])) s->passed++;
         }
     return 0;
 }

@@ -20,6 +20,9 @@ int main(void)
         {"mansion",        Mansion,        MC_1_21},   // triangular spread
         {"monument",       Monument,       MC_1_21},   // triangular spread
         {"ancient_city",   Ancient_City,   MC_1_21},
+        {"fortress",       Fortress,       MC_1_21},
+        {"bastion",        Bastion,        MC_1_21},
+        {"end_city",       End_City,       MC_1_21},
     };
 
     // Section 1: configs, so we can check them against the wiki independently.

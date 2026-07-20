@@ -48,9 +48,10 @@ static DWORD WINAPI worker(LPVOID arg)
 
         for (uint64_t up = 0; up < UPPER_SAMPLES; up++) {
             uint64_t ws = (up << 48) | s48;
-            applySeed(&g, DIM_OVERWORLD, ws);
             j->applies++;
-            if (!queryStage2(j->q, &g, &m)) continue;
+            // queryStage2 applies the seed itself, once per dimension the query
+            // touches -- the caller must not applySeed here.
+            if (!queryStage2(j->q, &g, ws, &m)) continue;
             j->pass2++;
 
             EnterCriticalSection(&g_lock);

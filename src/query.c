@@ -38,6 +38,11 @@ static double viabCost(const Query *q, int i)
     return n * n * NS_BIOME_AT;
 }
 
+const char *dimName(int dim)
+{
+    return dim == DIM_NETHER ? "nether" : dim == DIM_END ? "end" : "overworld";
+}
+
 // ------------------------------------------------------------------- parsing
 
 static int str2biome_(int mc, const char *s)
@@ -52,13 +57,20 @@ static int str2biome_(int mc, const char *s)
 // The structure vocabulary. Exposed via queryStructureName/queryStructureAt so
 // the NL front end can read the authoritative list rather than hardcoding one.
 static const struct { const char *n; int t; } STRUCT_TBL[] = {
+    // overworld
     {"mansion", Mansion}, {"village", Village}, {"monument", Monument},
     {"desert_pyramid", Desert_Pyramid}, {"jungle_temple", Jungle_Pyramid},
     {"swamp_hut", Swamp_Hut}, {"igloo", Igloo}, {"shipwreck", Shipwreck},
     {"outpost", Outpost}, {"ancient_city", Ancient_City},
     {"ruined_portal", Ruined_Portal}, {"trail_ruins", Trail_Ruins},
     {"trial_chambers", Trial_Chambers}, {"treasure", Treasure},
-    {"ocean_ruin", Ocean_Ruin}, {"end_city", End_City},
+    {"ocean_ruin", Ocean_Ruin},
+    // nether -- fortress and bastion share salt+geometry and are mutually
+    // exclusive at a given site (nextInt(5) < 2 picks which)
+    {"fortress", Fortress}, {"bastion", Bastion},
+    {"ruined_portal_nether", Ruined_Portal_N},
+    // end
+    {"end_city", End_City},
 };
 #define NSTRUCT (int)(sizeof(STRUCT_TBL)/sizeof(STRUCT_TBL[0]))
 
@@ -120,6 +132,7 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                          c->id, js->valuestring, jv->valuestring);
                 goto done;
             }
+            c->dim = sc.dim;   // authoritative: the engine's own config
         } else if (jb && cJSON_IsString(jb)) {
             c->type = CT_BIOME;
             c->biomeId = str2biome_(q->mc, jb->valuestring);
@@ -127,6 +140,7 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 snprintf(err, errlen, "condition \"%s\": unknown biome \"%s\"", c->id, jb->valuestring);
                 goto done;
             }
+            c->dim = getDimension(c->biomeId);   // inferred, no JSON field needed
         } else {
             snprintf(err, errlen, "condition \"%s\": need \"structure\" or \"biome\"", c->id);
             goto done;
@@ -198,6 +212,30 @@ int queryPlan(Query *q, char *err, size_t errlen)
                      q->cond[i].id, q->cond[p].id);
             return 1;
         }
+    }
+
+    // A parent's matched position is a coordinate in ITS dimension. Measuring a
+    // radius from it in a different dimension is meaningless (and the nether is
+    // 8:1 compressed), so refuse rather than silently produce nonsense.
+    for (int i = 0; i < q->n; i++) {
+        int p = q->cond[i].parent;
+        if (p >= 0 && q->cond[p].dim != q->cond[i].dim) {
+            snprintf(err, errlen,
+                     "condition \"%s\" (%s) is measured from \"%s\" (%s) -- "
+                     "cross-dimension distances are not meaningful",
+                     q->cond[i].id, dimName(q->cond[i].dim),
+                     q->cond[p].id, dimName(q->cond[p].dim));
+            return 1;
+        }
+    }
+
+    // Distinct dimensions pass 2 must visit. applySeed is the dominant per-seed
+    // cost, so this is exactly how many times we pay it.
+    q->ndims = 0;
+    for (int i = 0; i < q->n; i++) {
+        int d = q->cond[i].dim, seen = 0;
+        for (int k = 0; k < q->ndims; k++) if (q->dims[k] == d) seen = 1;
+        if (!seen && q->ndims < 3) q->dims[q->ndims++] = d;
     }
 
     // Pass 2 order: everything biome-dependent, cheapest first. No dependency
@@ -279,11 +317,27 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
     return 1;
 }
 
-int queryStage2(const Query *q, Generator *g, const Match *m)
+static int stage2Dim(const Query *q, Generator *g, int dim, const Match *m);
+
+int queryStage2(const Query *q, Generator *g, uint64_t worldSeed, const Match *m)
+{
+    // Outer loop over dimensions: applySeed (~25 us) is the dominant per-seed
+    // cost, so pay it once per dimension rather than once per condition. A
+    // single-dimension query -- the common case -- pays exactly one.
+    for (int d = 0; d < q->ndims; d++) {
+        int dim = q->dims[d];
+        applySeed(g, dim, worldSeed);
+        if (!stage2Dim(q, g, dim, m)) return 0;
+    }
+    return 1;
+}
+
+static int stage2Dim(const Query *q, Generator *g, int dim, const Match *m)
 {
     for (int i = 0; i < q->nviab; i++) {
         int k = q->viab[i];
         const Cond *c = &q->cond[k];
+        if (c->dim != dim) continue;   // handled in another dimension's pass
 
         if (c->type == CT_STRUCTURE) {
             if (!isViableStructurePos(c->structType, g, m->pos[k].x, m->pos[k].z, 0))
