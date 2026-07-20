@@ -1,0 +1,3 @@
+{"version":"1.21","conditions":[
+ {"id":"mansion","structure":"mansion","within":2000,"of":"spawn"},
+ {"id":"village","structure":"village","within":800,"of":"mansion"}]}

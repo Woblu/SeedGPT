@@ -1,0 +1,4 @@
+{"version":"1.21","conditions":[
+ {"id":"mansion","structure":"mansion","within":120,"of":"spawn"},
+ {"id":"city","structure":"ancient_city","within":120,"of":"mansion"},
+ {"id":"jungle","biome":"jungle","within":120,"of":"mansion"}]}

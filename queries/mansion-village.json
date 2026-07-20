@@ -1,0 +1,7 @@
+{
+  "version": "1.21",
+  "conditions": [
+    { "id": "mansion", "structure": "mansion", "within": 300, "of": "spawn" },
+    { "id": "village", "structure": "village", "within": 400, "of": "mansion" }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "version": "1.21",
+  "conditions": [
+    { "id": "jungle",  "biome": "jungle",      "within": 400, "of": "mansion" },
+    { "id": "mansion", "structure": "mansion", "within": 500, "of": "spawn"   }
+  ]
+}
