@@ -162,6 +162,9 @@ int main(int argc, char **argv)
             printf("SEED %" PRId64 "\n", (int64_t)h->ws);
             if (h->m.haveSpawn)
                 printf("   %-14s x=%6d z=%6d\n", "(spawn)", h->m.spawn.x, h->m.spawn.z);
+            if (h->m.haveEyes)
+                printf("   %-14s x=%6d z=%6d   %d/%d eyes\n", "(end portal)",
+                       h->m.stronghold.x, h->m.stronghold.z, h->m.eyes, EYE_FRAMES);
             for (int c = 0; c < q.n; c++) {
                 if (q.cond[c].type != CT_STRUCTURE) continue;
                 Pos p = h->m.pos[c];

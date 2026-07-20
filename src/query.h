@@ -38,7 +38,25 @@
 typedef enum {
     CT_STRUCTURE,   // structure of a type within `within` blocks of parent
     CT_BIOME,       // biome present within `within` blocks of parent
+    CT_EYES,        // the first stronghold's end portal has >= N eyes
 } CondType;
+
+// End portal frames: 12, each independently 10% likely to hold an eye. That
+// makes high counts brutally rare, and the search rate is ~98 seeds/s because
+// locating a stronghold costs ~10 ms (biome checks dominate). Measured:
+//
+//   eyes  probability   seeds needed   time on this machine
+//     6    4.9e-04            2,036    21 s
+//     7    4.7e-05           21,382    4 min
+//     8    3.2e-06          307,910    52 min
+//     9    1.6e-07        6,235,191    18 hours
+//    10    5.3e-09      187,055,742    22 days
+//    11    1.1e-10    9,259,259,259    3 years
+//    12    1.0e-12  999,999,999,999    323 years
+//
+// So 6-8 is a normal search, 9-10 is an overnight-to-fortnight commitment, and
+// 11-12 is a distributed-compute problem, not a single-machine one.
+#define EYE_FRAMES 12
 
 typedef struct {
     char     id[ID_LEN];
@@ -50,6 +68,7 @@ typedef struct {
     int      parent;        // resolved index, or PARENT_ORIGIN / PARENT_SPAWN
     int      dim;           // DIM_OVERWORLD / DIM_NETHER / DIM_END, inferred
     int      scanStep;      // CT_BIOME: sample spacing in blocks (see below)
+    int      eyesMin;       // CT_EYES: minimum filled frames required
 } Cond;
 
 // Biome scan precision. A biome condition samples points across the disc; the
@@ -103,6 +122,9 @@ typedef struct {
     Pos pos[MAX_COND];
     Pos spawn;       // world spawn, filled by pass 2 iff the query needs it
     int haveSpawn;   // 0 until pass 2 resolves it
+    Pos stronghold;  // first stronghold, filled iff a CT_EYES condition ran
+    int eyes;        // its end portal's filled frame count
+    int haveEyes;
 } Match;
 
 // Pass 1: geometry only. No Generator required. Returns 1 if all geometry

@@ -1,0 +1,6 @@
+{
+  "version": "1.21",
+  "conditions": [
+    { "id": "portal", "eyes": 6 }
+  ]
+}

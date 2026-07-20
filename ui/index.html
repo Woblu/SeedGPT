@@ -272,6 +272,7 @@
       <div class="btnrow">
         <button id="addStruct">+ structure</button>
         <button id="addBiome">+ biome</button>
+        <button id="addEyes">+ end portal eyes</button>
       </div>
     </section>
 
@@ -365,6 +366,16 @@
   }
   $('#addStruct').onclick = () => addCond('structure');
   $('#addBiome').onclick  = () => addCond('biome');
+  $('#addEyes').onclick = () => {
+    if (conds.some(c => c.kind === 'eyes')) { toast('one eye condition is enough'); return; }
+    conds.push({ id: 'portal', kind: 'eyes', eyes: 6 });
+    render();
+  };
+
+  // Measured on this machine at ~98 seeds/s (locating a stronghold costs ~10ms).
+  const EYE_TIME = {0:'instant',1:'instant',2:'instant',3:'instant',4:'instant',
+    5:'~3 s', 6:'~20 s', 7:'~4 min', 8:'~50 min', 9:'~18 hours',
+    10:'~22 days', 11:'~3 years', 12:'~320 years'};
 
   function dimOf(c) {
     return (c.kind === 'structure' ? vocab.structures[c.name] : vocab.biomes[c.name]) || '';
@@ -378,6 +389,26 @@
     }
     conds.forEach((c, i) => {
       const d = el('div', 'cond ' + c.kind);
+      if (c.kind === 'eyes') {
+        const top = el('div','top');
+        top.append(el('span','cid', c.id), el('span','dim','END PORTAL'));
+        const x = el('button','tiny x','×');
+        x.onclick = () => { conds.splice(i,1); render(); };
+        top.append(x); d.append(top);
+        const g = el('div','grid');
+        const lab = el('div');
+        lab.style.cssText = 'font-size:12.5px;align-self:center';
+        lab.textContent = 'at least';
+        const n = el('input'); n.type='number'; n.min=0; n.max=12; n.value=c.eyes;
+        n.onchange = e => { c.eyes = Math.max(0, Math.min(12, +e.target.value||0)); render(); };
+        g.append(lab, n); d.append(g);
+        const est = el('div','note' + (c.eyes >= 9 ? ' warn' : ''));
+        est.textContent = `${c.eyes} of 12 frames — expect ${EYE_TIME[c.eyes] || '?'}`
+          + (c.eyes >= 11 ? '. This is a distributed-compute target, not a single machine one.' : '');
+        d.append(est);
+        box.append(d);
+        return;
+      }
 
       const top = el('div', 'top');
       top.append(el('span', 'cid', c.id));
@@ -434,6 +465,7 @@
     return {
       version: $('#version').value,
       conditions: conds.map(c => {
+        if (c.kind === 'eyes') return { id: c.id, eyes: c.eyes };
         const o = { id: c.id, within: c.within, of: c.of };
         if (c.kind === 'structure') o.structure = c.name;
         else { o.biome = c.name; o.precision = c.precision; }
@@ -623,13 +655,20 @@
           const desc = el('button','tiny','describe');
           desc.onclick = () => describe(s.seed);
           n.append(num, desc); box.append(n);
-          if (s.places.length) {
+          if (s.places.length || s.spawn || s.portal) {
             const t = el('table');
             if (s.spawn) {
               const tr = el('tr');
               tr.append(el('td','id','(spawn)'),
                         el('td',null,`x=${s.spawn.x}  z=${s.spawn.z}`),
                         el('td','d',''));
+              t.append(tr);
+            }
+            if (s.portal) {
+              const tr = el('tr');
+              tr.append(el('td','id','(end portal)'),
+                        el('td',null,`x=${s.portal.x}  z=${s.portal.z}`),
+                        el('td','d', s.portal.eyes + '/12 eyes'));
               t.append(tr);
             }
             s.places.forEach(p => {

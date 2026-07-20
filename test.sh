@@ -27,7 +27,7 @@ section "build"
 if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/vocab.c  >/tmp/sc_test/b2 2>&1 \
 && ./build.sh tools/xval.c   >/tmp/sc_test/b3 2>&1 \
-&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1; then
+&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1 \n&& ./build.sh tools/checkeyes.c >/tmp/sc_test/b7 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -296,6 +296,27 @@ if echo "$desc" | grep -qi mansion; then
 else
   bad "describe missed a known structure" "$(echo "$desc" | head -8)"
 fi
+
+# End portal eye counts. 12 frames, each independently 10% -- so a high count
+# is brutally rare and the numbers must be real, not plumbing artefacts.
+section "end portal eyes"
+cat > /tmp/sc_test/eyes.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"portal","eyes":6}]}
+EOF
+FIND_TSV=/tmp/sc_test/eyes.tsv ./build/find.exe /tmp/sc_test/eyes.json 60000 16 > /tmp/sc_test/eyes.log 2>&1
+neyes=$(grep -c '^SEED' /tmp/sc_test/eyes.log)
+[ "$neyes" -gt 0 ]   && ok "eye-count query returns seeds ($neyes)"   || bad "eye query found nothing" "$(tail -3 /tmp/sc_test/eyes.log)"
+
+# Independently recompute every reported count from scratch.
+badeyes=0
+for s in $(grep '^SEED' /tmp/sc_test/eyes.log | awk '{print $2}'); do
+  got=$(./build/checkeyes.exe "$s" 1.21 2>/dev/null | sed -n 's/.*eyes=\([0-9]*\).*//p')
+  if [ -z "$got" ] || [ "$got" -lt 6 ]; then badeyes=$((badeyes+1)); fi
+done
+[ "$badeyes" -eq 0 ]   && ok "all reported eye counts reproduce independently"   || bad "eye counts do not reproduce" "$badeyes seeds disagreed"
+
+check_err "eyes above 12 rejected"   '{"version":"1.21","conditions":[{"id":"p","eyes":13}]}'   "eyes must be"
+
 
 # ---------------------------------------------------------------- ui
 section "web ui"

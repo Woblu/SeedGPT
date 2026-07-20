@@ -1,6 +1,7 @@
 #include "query.h"
 #include "util.h"
 #include "cJSON.h"
+#include "features/stronghold.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,7 +18,8 @@
 #define NS_STRUCT_POS    9.0
 #define NS_VIABLE     42000.0
 #define NS_BIOME_AT    2300.0
-#define NS_SPAWN    2300000.0   // getSpawn: ~437/s, the most expensive call here
+#define NS_SPAWN    2300000.0   // getSpawn: ~437/s
+#define NS_EYES    10250000.0   // locate stronghold + pieces + loot: ~98/s
 
 static double geomCost(const Query *q, int i)
 {
@@ -34,6 +36,7 @@ static double geomCost(const Query *q, int i)
 static double viabCost(const Query *q, int i)
 {
     const Cond *c = &q->cond[i];
+    if (c->type == CT_EYES) return NS_EYES;
     if (c->type == CT_STRUCTURE)
         return NS_VIABLE + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
     // biome scan: samples on a `scanStep` lattice across the disc
@@ -139,9 +142,20 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         x = cJSON_GetObjectItem(e, "within");
         c->within = (x && cJSON_IsNumber(x)) ? x->valueint : 1000;
 
+        cJSON *je = cJSON_GetObjectItem(e, "eyes");
         cJSON *js = cJSON_GetObjectItem(e, "structure");
         cJSON *jb = cJSON_GetObjectItem(e, "biome");
-        if (js && cJSON_IsString(js)) {
+        if (je && cJSON_IsNumber(je)) {
+            c->type = CT_EYES;
+            c->eyesMin = je->valueint;
+            c->dim = DIM_OVERWORLD;
+            c->parent = PARENT_ORIGIN;   // a whole-world property, not a place
+            if (c->eyesMin < 0 || c->eyesMin > EYE_FRAMES) {
+                snprintf(err, errlen, "condition \"%s\": eyes must be 0..%d",
+                         c->id, EYE_FRAMES);
+                goto done;
+            }
+        } else if (js && cJSON_IsString(js)) {
             c->type = CT_STRUCTURE;
             c->structType = str2struct_(js->valuestring);
             if (c->structType < 0) {
@@ -308,6 +322,10 @@ int queryPlan(Query *q, char *err, size_t errlen)
 const char *condDesc(const Query *q, int i, char *buf, size_t n)
 {
     const Cond *c = &q->cond[i];
+    if (c->type == CT_EYES) {
+        snprintf(buf, n, "end portal with >= %d of %d eyes", c->eyesMin, EYE_FRAMES);
+        return buf;
+    }
     const char *what = (c->type == CT_STRUCTURE)
         ? struct2str(c->structType) : biome2str(q->mc, c->biomeId);
     const char *prec = c->type != CT_BIOME ? ""
@@ -343,6 +361,9 @@ static inline int64_t d2(Pos a, Pos b) {
 
 int queryStage1(const Query *q, uint64_t s48, Match *m)
 {
+    // Zero it: callers declare Match on the stack, and haveSpawn/haveEyes must
+    // start false or pass 2 will short-circuit on garbage and report junk.
+    memset(m, 0, sizeof(*m));
     for (int i = 0; i < q->ngeom; i++) {
         int k = q->geom[i];
         const Cond *c = &q->cond[k];
@@ -442,6 +463,34 @@ static int refind(const Query *q, int k, uint64_t s48, Pos centre,
     return found;
 }
 
+// Locate the first stronghold and count its end portal's filled frames.
+// ~10 ms: nextStronghold's biome checks dominate. Cached per seed in `fixed`
+// so several eye conditions (or a later report) pay for it once.
+static int resolveEyes(const Query *q, Generator *g, uint64_t worldSeed, Match *fixed)
+{
+    if (fixed->haveEyes) return 1;
+    StrongholdIter sh;
+    initFirstStronghold(&sh, q->mc, worldSeed);
+    if (!nextStronghold(&sh, g)) return 0;
+
+    StructureSaltConfig ssconf;
+    if (!getStructureSaltConfig(Stronghold, q->mc, -1, &ssconf)) return 0;
+
+    Piece pieces[512];
+    int n = getStrongholdLoot(pieces, 512, ssconf, q->mc, worldSeed,
+                              sh.pos.x >> 4, sh.pos.z >> 4);
+    for (int i = 0; i < n; i++) {
+        if (pieces[i].type != SH_PORTAL_ROOM) continue;
+        int bits = pieces[i].additionalData, eyes = 0;
+        for (int b = 0; b < EYE_FRAMES; b++) if (bits & (1 << b)) eyes++;
+        fixed->stronghold = sh.pos;
+        fixed->eyes = eyes;
+        fixed->haveEyes = 1;
+        return 1;
+    }
+    return 0;   // no portal room among the generated pieces
+}
+
 static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                      const Match *m, Match *fixed, int *haveSpawn, Pos *spawn)
 {
@@ -450,6 +499,12 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
         int k = q->viab[i];
         const Cond *c = &q->cond[k];
         if (c->dim != dim) continue;   // handled in another dimension's pass
+
+        if (c->type == CT_EYES) {
+            if (!resolveEyes(q, g, worldSeed, fixed)) return 0;
+            if (fixed->eyes < c->eyesMin) return 0;
+            continue;
+        }
 
         // Spawn-relative: pass 1 only guaranteed this is near the ORIGIN.
         // Resolve it properly now that the biome generator exists.

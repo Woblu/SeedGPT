@@ -21,7 +21,7 @@ static int surfaceBiome(Generator *g, int bx, int bz)
     return getBiomeAt(g, 0, (bx >> 4) * 4 + 2, 319 >> 2, (bz >> 4) * 4 + 2);
 }
 
-typedef struct { const char *name; Pos pos; int dist; int biome; } Found;
+typedef struct { const char *name; Pos pos; int dist; int biome; char note[40]; } Found;
 
 static int by_dist(const void *a, const void *b)
 {
@@ -70,6 +70,20 @@ int main(int argc, char **argv)
             found[nf].pos = p;
             found[nf].dist = (int)sqrt((double)d2);
             found[nf].biome = surfaceBiome(&g, p.x, p.z);
+            found[nf].note[0] = 0;
+            // Ruined portals are the one structure worth annotating: about half
+            // of those in plains/mountain biomes generate UNDERGROUND, which is
+            // why a reported portal can look absent at the surface.
+            if (type == Ruined_Portal) {
+                StructureVariant sv;
+                if (getVariant(&sv, Ruined_Portal, mc, seed, p.x, p.z,
+                               found[nf].biome) > 0) {
+                    snprintf(found[nf].note, sizeof found[nf].note, "%s%s%s",
+                             sv.underground ? "BURIED" : "surface",
+                             sv.giant ? ", giant" : "",
+                             sv.airpocket ? ", air pocket" : "");
+                }
+            }
             nf++;
         }
     }
@@ -88,9 +102,9 @@ int main(int argc, char **argv)
         int shown = 0;
         for (int j = 0; j < nf && shown < PER_TYPE; j++) {
             if (found[j].name != name) continue;   // same interned pointer
-            printf("    %-15s x=%6d z=%6d  %5d away   %s\n",
+            printf("    %-15s x=%6d z=%6d  %5d away   %-22s %s\n",
                    found[j].name, found[j].pos.x, found[j].pos.z, found[j].dist,
-                   biome2str(mc, found[j].biome));
+                   biome2str(mc, found[j].biome), found[j].note);
             shown++;
         }
         // count how many more of this type exist beyond what we showed

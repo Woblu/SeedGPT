@@ -156,6 +156,11 @@ def parse_seeds(out: str) -> list:
         if m and cur:
             cur["spawn"] = {"x": int(m.group(1)), "z": int(m.group(2))}
             continue
+        m = re.match(r"^\s+\(end portal\)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+)/", line)
+        if m and cur:
+            cur["portal"] = {"x": int(m.group(1)), "z": int(m.group(2)),
+                             "eyes": int(m.group(3))}
+            continue
         m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) from (\w+)", line)
         if m and cur:
             cur["places"].append({"id": m.group(1), "x": int(m.group(2)),

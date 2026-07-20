@@ -9,7 +9,7 @@ A Minecraft Java Edition **seed finder**: describe the world features you want, 
 ```sh
 ./setup.sh                 # clone + pin the engine (first time only)
 ./build.sh tools/find.c    # library + build/find.exe
-./test.sh                  # 37-check regression suite
+./test.sh                  # 40-check regression suite
 ```
 
 Requires `clang`, `git`, and a JDK (for the verifiers). No `make`/`ninja` needed.
@@ -212,7 +212,7 @@ done < /tmp/hits.tsv
 
 `tools/biomecheck.c` shows what "viable" actually resolved to for a seed.
 
-`./test.sh` runs the whole thing as a regression suite (37 checks, ~15s): the
+`./test.sh` runs the whole thing as a regression suite (40 checks, ~60s): the
 cross-validation above, planner reordering *and* cost-based ordering, six error
 paths, same-type distinctness, nether/end queries including the end-city
 exclusion zone, biome-precision plumbing, a real search whose every seed is
@@ -222,6 +222,63 @@ and the hand-rolled PNG encoder (signature, chunk CRCs, zlib length). Each
 assertion has been
 confirmed to fail when the behaviour it checks is broken — a green run means
 something.
+
+## End portal eyes
+
+An end portal has 12 frames, each independently 10% likely to already hold an
+eye. `{"id": "portal", "eyes": 6}` searches for a stronghold whose portal has at
+least that many. Results report the stronghold position and the count.
+
+Locating a stronghold costs ~10 ms (biome checks), so the search runs at
+**~98 seeds/s**, which sets hard expectations:
+
+| eyes | probability | seeds needed | time on one machine |
+|---|---|---|---|
+| 6 | 4.9e-04 | 2,036 | ~20 s |
+| 7 | 4.7e-05 | 21,382 | ~4 min |
+| 8 | 3.2e-06 | 307,910 | ~50 min |
+| 9 | 1.6e-07 | 6,235,191 | ~18 hours |
+| 10 | 5.3e-09 | 187,055,742 | ~22 days |
+| 11 | 1.1e-10 | 9,259,259,259 | ~3 years |
+| **12** | **1.0e-12** | **~1e12** | **~320 years** |
+
+So 6–8 is a normal search and 9–10 is a commitment. **A 12-eyed portal is a
+distributed-compute target** — the kind of thing Minecraft@home exists for — not
+something one machine finds. The UI shows the estimate as you change the number.
+
+Every reported count is re-derived independently by `tools/checkeyes.c` in the
+test suite, so the numbers are not an artefact of the search plumbing.
+
+## Ruined portals: what can and cannot be known
+
+Ruined portals are the one structure the engine cannot fully model, and it is
+worth being precise about why.
+
+The *position* is exact — cross-validated against the JDK reference like every
+other structure. What is not modelled is whether the game actually builds one
+there. From cubiomes' own source:
+
+> Ruined portals ... have no terrain restrictions, so a ruined portal *should*
+> always generate in each region. However, in locations with underground
+> biomes, a ruined portal can fail to generate ... because the biome check is
+> done after selecting the portal type and generation height. **Testing for this
+> case requires the surface height and is therefore not supported.**
+
+Surface height means block-level world generation, which cubiomes does not do.
+So a perfectly reliable ruined portal search is not achievable on this engine.
+
+What *is* now available: `describe` reports each portal's variant, because
+**about half of ruined portals in plains- and mountain-category biomes generate
+underground**. A portal marked `BURIED` is there — you just cannot see it from
+the surface:
+
+```
+ruined_portal   x=   144 z=     0    144 away   savanna    BURIED, air pocket
+ruined_portal   x=   304 z=   288    192 away   forest     surface
+```
+
+If you want results you can reliably walk to, prefer a biome-checked structure
+(see the table below).
 
 ## Not every structure is verified
 
@@ -306,6 +363,7 @@ tools/map.c         render a seed's biome map as a PNG (no image library)
 tools/checkpng.py   validates that PNG is spec-correct, not just non-empty
 tools/checkspawn.py re-verifies spawn-relative hits against describe.exe
 tools/confidence.c  measures how much the engine actually verifies each structure
+tools/checkeyes.c   recomputes an end portal's eye count independently
 tools/vocab.c       dumps valid structures/biomes per version (ask.py reads this)
 tools/xval.c        cubiomes side of cross-validation
 tools/XVal.java     independent JDK reference
