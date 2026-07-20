@@ -17,3 +17,6 @@ queries/_*.json
 /search.h
 /search.cpp
 /searchthread.cpp
+
+# scratch renders
+build/tmp/

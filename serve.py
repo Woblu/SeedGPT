@@ -13,6 +13,7 @@ Endpoints (all POST bodies are JSON):
     POST /api/explain     -> sampled rarity estimate
     POST /api/search      -> the real search
     POST /api/describe    -> what is actually in a given seed
+    GET  /api/map?...     -> biome map PNG for a seed
     POST /api/ask         -> natural language -> query JSON (needs ANTHROPIC_API_KEY)
 """
 
@@ -33,7 +34,7 @@ UI = ROOT / "ui" / "index.html"
 PORT = int(os.environ.get("SEED_UI_PORT", "8777"))
 
 # Guard against a stray query pinning all cores for minutes.
-TIMEOUTS = {"plan": 15, "explain": 90, "search": 180, "describe": 30}
+TIMEOUTS = {"plan": 15, "explain": 90, "search": 180, "describe": 30, "map": 60}
 VERSION_RE = re.compile(r"^[0-9][0-9A-Za-z._-]{0,15}$")
 
 
@@ -225,6 +226,26 @@ def api_describe(body) -> dict:
     return {"raw": out}
 
 
+def api_map(qs) -> bytes:
+    """Render a seed's biome map. Returns raw PNG bytes."""
+    seed = (qs.get("seed") or [""])[0].strip()
+    if not re.match(r"^-?\d+$", seed):
+        raise Failure("seed must be an integer")
+    v = check_version((qs.get("v") or ["1.21"])[0])
+    radius = max(200, min(20000, int((qs.get("r") or ["2000"])[0])))
+    px = max(64, min(1024, int((qs.get("px") or ["560"])[0])))
+    out = ROOT / "build" / "tmp"
+    out.mkdir(parents=True, exist_ok=True)
+    # Write to a file rather than piping: PNG bytes through a pipe are easy to
+    # corrupt, and a path keeps the failure mode obvious.
+    dest = out / "map.png"
+    rc, _, err = run([tool("map"), seed, v, str(radius), str(px), dest],
+                     TIMEOUTS["map"])
+    if rc != 0 or not dest.exists():
+        raise Failure(err.strip() or "map render failed")
+    return dest.read_bytes()
+
+
 def api_ask(body) -> dict:
     """Natural language -> query JSON, via ask.py --dry-run."""
     text = str(body.get("text", "")).strip()
@@ -276,6 +297,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, UI.read_bytes(), "text/html; charset=utf-8")
             elif u.path == "/api/vocab":
                 self._send(200, api_vocab(parse_qs(u.query)))
+            elif u.path == "/api/map":
+                self._send(200, api_map(parse_qs(u.query)), "image/png")
             else:
                 self._send(404, {"error": "not found"})
         except Failure as e:
@@ -299,13 +322,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    for name in ("find", "vocab", "describe"):
+    for name in ("find", "vocab", "describe", "map"):
         try:
             tool(name)
         except Failure as e:
             print(f"! {e}", file=sys.stderr)
             print("  run: ./build.sh tools/find.c && ./build.sh tools/vocab.c "
-                  "&& ./build.sh tools/describe.c", file=sys.stderr)
+                  "&& ./build.sh tools/describe.c && ./build.sh tools/map.c",
+                  file=sys.stderr)
             return 1
 
     url = f"http://127.0.0.1:{PORT}"

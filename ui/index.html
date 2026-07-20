@@ -188,6 +188,21 @@
   .seed td.id { color:var(--ink); width:112px; }
   .seed td.d { text-align:right; color:var(--ink-faint); }
 
+  .map { margin-bottom:12px; }
+  .map img {
+    display:block; width:100%; max-width:560px; height:auto;
+    border:1px solid var(--rule); border-radius:5px; image-rendering:pixelated;
+  }
+  .legend {
+    display:flex; flex-wrap:wrap; gap:5px 14px; margin-top:9px;
+    font-family:var(--mono); font-size:10.5px; color:var(--ink-faint);
+  }
+  .legend span { display:flex; align-items:center; gap:5px; }
+  .legend i { width:9px; height:9px; border-radius:2px; border:1px solid rgba(0,0,0,.4); }
+  .mapctl { display:flex; align-items:center; gap:8px; margin-bottom:9px; }
+  .mapctl label { margin:0; font-size:11px; }
+  .mapctl select { width:auto; padding:4px 7px; font-size:12px; }
+
   pre {
     font-family:var(--mono); font-size:11px; line-height:1.55;
     background:var(--panel-2); border:1px solid var(--rule-soft); border-radius:5px;
@@ -619,14 +634,53 @@
     } catch (e) { fail(e.message); }
   };
 
-  async function describe(seed) {
+  const MARKERS = [
+    ['mansion','#FF4646'], ['village','#FFD23C'], ['monument','#50BEFF'],
+    ['ancient city','#BE6EFF'], ['outpost','#FF8C28'], ['desert pyramid','#FAF0A0'],
+    ['jungle temple','#78DC78'], ['swamp hut','#966EC8'], ['igloo','#E6F5FF'],
+  ];
+
+  async function describe(seed, radius) {
+    radius = radius || 2000;
     busy('reading world ' + seed + '…');
     try {
       const d = await post('/api/describe',
-        { seed, version: $('#version').value, radius: 2000 });
+        { seed, version: $('#version').value, radius });
       out.innerHTML = '';
       const c = el('div','card');
       c.append(el('h3', null, 'World ' + seed));
+
+      // zoom control -- re-renders map and structure list together
+      const ctl = el('div','mapctl');
+      ctl.append(el('label', null, 'radius'));
+      const zoom = el('select');
+      [500, 1000, 2000, 4000, 8000].forEach(r => {
+        const o = el('option', null, r.toLocaleString() + ' blocks'); o.value = r;
+        if (r === radius) o.selected = true; zoom.append(o);
+      });
+      zoom.onchange = e => describe(seed, +e.target.value);
+      ctl.append(zoom);
+      c.append(ctl);
+
+      const wrap = el('div','map');
+      const img = el('img');
+      img.alt = `Biome map of seed ${seed}, ${radius} blocks around spawn`;
+      img.src = `/api/map?seed=${encodeURIComponent(seed)}`
+              + `&v=${encodeURIComponent($('#version').value)}&r=${radius}&px=560`;
+      img.onerror = () => { wrap.replaceChildren(
+        el('div','note warn','map render failed — the structure list below is still valid')); };
+      wrap.append(img);
+
+      const lg = el('div','legend');
+      MARKERS.forEach(([n, col]) => {
+        const sp = el('span'); const sw = el('i');
+        sw.style.background = col; sp.append(sw, document.createTextNode(n)); lg.append(sp);
+      });
+      const sp = el('span'); sp.append(document.createTextNode('✛ world spawn'));
+      lg.append(sp);
+      wrap.append(lg);
+      c.append(wrap);
+
       const p = el('pre'); p.textContent = d.raw; c.append(p);
       out.append(c);
       const back = el('button','tiny','← back to search');

@@ -9,7 +9,7 @@ A Minecraft Java Edition **seed finder**: describe the world features you want, 
 ```sh
 ./setup.sh                 # clone + pin the engine (first time only)
 ./build.sh tools/find.c    # library + build/find.exe
-./test.sh                  # 27-check regression suite
+./test.sh                  # 29-check regression suite
 ```
 
 Requires `clang`, `git`, and a JDK (for the verifiers). No `make`/`ninja` needed.
@@ -28,7 +28,8 @@ python serve.py        # opens http://127.0.0.1:8777
 ```
 
 Build queries by clicking, see the execution plan, estimate whether a search
-will finish, run it, and click any result to see what is actually in that world.
+will finish, run it, and click any result for a **biome map** of that world —
+structures marked, spawn crosshaired, zoomable from 500 to 8,000 blocks.
 Binds to loopback only — the search is a native binary, so this cannot be a
 hosted page; the server exists to bridge the browser to `build/find.exe`.
 
@@ -191,13 +192,14 @@ done < /tmp/hits.tsv
 
 `tools/biomecheck.c` shows what "viable" actually resolved to for a seed.
 
-`./test.sh` runs the whole thing as a regression suite (27 checks, ~12s): the
+`./test.sh` runs the whole thing as a regression suite (29 checks, ~14s): the
 cross-validation above, planner reordering *and* cost-based ordering, six error
 paths, same-type distinctness, nether/end queries including the end-city
 exclusion zone, biome-precision plumbing, a real search whose every seed is
 re-verified under the JDK reference, the loose-query warning, estimator
-calibration, `describe` round-tripping a found seed, and the UI server's
-endpoints. Each assertion has been
+calibration, `describe` round-tripping a found seed, the UI server's endpoints,
+and the hand-rolled PNG encoder (signature, chunk CRCs, zlib length). Each
+assertion has been
 confirmed to fail when the behaviour it checks is broken — a green run means
 something.
 
@@ -254,6 +256,8 @@ src/query.{h,c}     condition tree, cost model, planner, evaluator
 src/explain.{h,c}   selectivity sampling; predicts the funnel before searching
 tools/find.c        CLI: parse -> plan -> search | --explain | --bias
 tools/describe.c    given a seed, print spawn + nearby structures & their biomes
+tools/map.c         render a seed's biome map as a PNG (no image library)
+tools/checkpng.py   validates that PNG is spec-correct, not just non-empty
 tools/vocab.c       dumps valid structures/biomes per version (ask.py reads this)
 tools/xval.c        cubiomes side of cross-validation
 tools/XVal.java     independent JDK reference

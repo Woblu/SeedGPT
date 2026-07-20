@@ -27,10 +27,10 @@ section "build"
 if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/vocab.c  >/tmp/sc_test/b2 2>&1 \
 && ./build.sh tools/xval.c   >/tmp/sc_test/b3 2>&1 \
-&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1; then
+&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1; then
   ok "all tools compile"
 else
-  bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 2>/dev/null | grep -i error | head -3)"
+  bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
   echo "aborting: nothing to test"; exit 1
 fi
 
@@ -269,7 +269,23 @@ curl -s -m 10 -X POST "http://127.0.0.1:$UIPORT/api/plan" \
   | grep -q '"error"' \
   && ok "server surfaces tool errors as JSON" \
   || bad "ui error path did not return an error"
+curl -s -m 60 "http://127.0.0.1:$UIPORT/api/map?seed=281474976710732&v=1.21&r=1000&px=256"   -o /tmp/sc_test/map.png -w '%{content_type}' 2>/dev/null | grep -q 'image/png'   && ok "server renders a map PNG"   || bad "ui map endpoint failed"
 kill "$uipid" 2>/dev/null; wait "$uipid" 2>/dev/null
+
+# The PNG is hand-rolled (no image library), so verify it is structurally valid
+# rather than merely non-empty: signature, CRCs, and an inflatable zlib stream
+# whose length matches width/height exactly.
+#
+# Written under build/tmp, not /tmp: git-bash's /tmp is invisible to Windows
+# Python, which silently turns this check into a FileNotFoundError.
+section "map rendering"
+mkdir -p build/tmp
+./build/map.exe 281474976710732 1.21 1000 256 build/tmp/test.png 2>/dev/null
+if python tools/checkpng.py build/tmp/test.png >/tmp/sc_test/png.log 2>&1; then
+  ok "hand-rolled PNG is structurally valid ($(cat /tmp/sc_test/png.log))"
+else
+  bad "PNG malformed" "$(cat /tmp/sc_test/png.log)"
+fi
 
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"
