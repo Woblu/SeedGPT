@@ -133,6 +133,27 @@ else
   bad "precision not reflected in cost" "fine=$cfine fast=$cfast"
 fi
 
+# Two conditions of the same structure type must match two DIFFERENT instances.
+# Without this, "village within 400 of village" is satisfied by the same village
+# at distance 0 and multi-instance constellations (quad huts) never filter.
+cat > /tmp/sc_test/dist.json <<'EOF'
+{"version":"1.21","conditions":[
+ {"id":"v1","structure":"village","within":400,"of":"spawn"},
+ {"id":"v2","structure":"village","within":400,"of":"v1"}]}
+EOF
+FIND_TSV=/tmp/sc_test/dist.tsv ./build/find.exe /tmp/sc_test/dist.json 3000000 16 >/dev/null 2>&1
+if [ -s /tmp/sc_test/dist.tsv ]; then
+  same=0
+  while IFS=$'\t' read -r s a x1 z1 b x2 z2; do
+    [ "$x1" = "$x2" ] && [ "$z1" = "$z2" ] && same=$((same+1))
+  done < /tmp/sc_test/dist.tsv
+  [ "$same" -eq 0 ] \
+    && ok "same-type conditions match distinct instances ($(wc -l < /tmp/sc_test/dist.tsv) seeds)" \
+    || bad "same structure matched twice" "$same seeds had v1 == v2"
+else
+  bad "distinctness query returned nothing"
+fi
+
 # ---------------------------------------------------------------- dimensions
 section "nether / end"
 cat > /tmp/sc_test/nether.json <<'EOF'

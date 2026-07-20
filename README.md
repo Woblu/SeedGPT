@@ -181,9 +181,18 @@ behaviour it checks is broken — a green run means something.
 
 ## Known limitations
 
-- **Biome conditions sample on a 64-block lattice.** Small biome patches between
-  sample points can be missed. This yields false *negatives* (missed seeds),
-  never false positives — reported seeds are always correct.
+- **Biome conditions sample a lattice, so recall is below 100%.** Measured
+  against an exhaustive quart-resolution scan (`tools/biomerecall.c`): at radius
+  400, `fast` (64-block) recovers 90.4% of matching seeds and `fine` (16-block,
+  the default) 96.2%; both fall at smaller radii. `exact` is 100% but costs
+  200×. Set `"precision": "fast"|"fine"|"exact"` per biome condition. Run
+  `biomerecall` for the radius and biome you care about rather than trusting a
+  single number.
+- **Same-type matching is greedy, nearest-first.** Two conditions of the same
+  structure type are guaranteed to match distinct instances, but the assignment
+  is greedy: if an earlier condition claims the instance a later one needed, the
+  seed is rejected even though some other assignment would have worked. Another
+  false negative, never a false positive.
 - **`UPPER_SAMPLES = 64`** — only 64 of the 65,536 upper-bit variants are tried
   per surviving structure seed, so most valid world seeds are never enumerated.
   Fine for finding *a* seed; wrong for exhaustive search.
@@ -192,7 +201,11 @@ behaviour it checks is broken — a green run means something.
 - **1.18+ false positives**: per cubiomes' README, desert pyramids, jungle
   temples and mansions can fail to generate based on surface height, which
   `isViableStructurePos` does not model.
-- Overworld only. No nether/end conditions yet.
+- **No GPU acceleration, deliberately.** Pass 1 is pure integer math and would
+  port to CUDA cleanly — but `--explain` reports the pass-1/pass-2 time split,
+  and pass 1 is **0.0–0.2%** of runtime on every query that actually returns
+  results. Pass 2 (biome generation) is the real cost and does not port. Amdahl
+  caps the whole exercise at a fraction of a percent.
 
 ## Engine
 
@@ -222,6 +235,7 @@ tools/xval.c        cubiomes side of cross-validation
 tools/XVal.java     independent JDK reference
 tools/Verify.java   re-verify individual seeds
 tools/biomecheck.c  inspect what "viable" meant
+tools/biomerecall.c measures biome-scan recall vs an exhaustive scan
 queries/*.json      example queries
 cubiomes/           the engine (git clone)
 ```

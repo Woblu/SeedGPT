@@ -221,6 +221,19 @@ void explainQuery(const Query *q, uint64_t samples, int nthreads, FILE *f)
     fprintf(f, "  predicted search rate         : %s on %d threads\n",
             humanRate(1.0 / secPerSeed), nthreads);
 
+    // Where the time actually goes. Pass 1 is pure 64-bit integer math and
+    // would port to a GPU cleanly; pass 2 (biome generation) would not. So this
+    // split is exactly the Amdahl ceiling on what a GPU port could ever buy.
+    double coreA = tA * nthreads;
+    double share1 = coreSecPerSeed > 0 ? coreA / coreSecPerSeed : 0;
+    fprintf(f, "  time split                    : pass 1 %.1f%%, pass 2 %.1f%%\n",
+            100.0 * share1, 100.0 * (1.0 - share1));
+    if (share1 < 0.5)
+        fprintf(f, "    -> pass 2 dominates; a GPU port of pass 1 could save at most %.1f%%\n",
+                100.0 * share1);
+    else
+        fprintf(f, "    -> pass 1 dominates; this query is the kind a GPU port would help\n");
+
     double secPerHit = perHit * secPerSeed;
     fprintf(f, "\ntime to first hit : %s\n", humanTime(secPerHit));
     fprintf(f, "time to 12 hits   : %s\n", humanTime(secPerHit * 12));

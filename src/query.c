@@ -330,6 +330,17 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
             if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
             int64_t d = d2(p, centre);
             if (d > lim) continue;
+            // Distinctness: two conditions of the same structure type must
+            // match two DIFFERENT instances. Without this, "swamp_hut within
+            // 140 of swamp_hut" is satisfied by the same hut at distance 0,
+            // and multi-instance constellations (quad huts) never filter.
+            int taken = 0;
+            for (int j = 0; j < i && !taken; j++) {
+                int o = q->geom[j];
+                if (q->cond[o].structType == c->structType &&
+                    m->pos[o].x == p.x && m->pos[o].z == p.z) taken = 1;
+            }
+            if (taken) continue;
             if (d < best) { best = d; bp = p; found = 1; }
         }
         if (!found) return 0;      // reject: cheap, and kills 65536 world seeds
