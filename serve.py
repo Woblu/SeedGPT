@@ -136,10 +136,17 @@ def parse_seeds(out: str) -> list:
             cur = {"seed": m.group(1), "places": []}
             seeds.append(cur)
             continue
-        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) from origin", line)
+        # find.exe now labels the reference: "from spawn" or "from origin".
+        # Matching only one silently drops every coordinate for the other.
+        m = re.match(r"^\s+\(spawn\)\s+x=\s*(-?\d+) z=\s*(-?\d+)", line)
+        if m and cur:
+            cur["spawn"] = {"x": int(m.group(1)), "z": int(m.group(2))}
+            continue
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) from (\w+)", line)
         if m and cur:
             cur["places"].append({"id": m.group(1), "x": int(m.group(2)),
-                                  "z": int(m.group(3)), "dist": int(m.group(4))})
+                                  "z": int(m.group(3)), "dist": int(m.group(4)),
+                                  "ref": m.group(5)})
     return seeds
 
 

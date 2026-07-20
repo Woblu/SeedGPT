@@ -9,7 +9,7 @@ A Minecraft Java Edition **seed finder**: describe the world features you want, 
 ```sh
 ./setup.sh                 # clone + pin the engine (first time only)
 ./build.sh tools/find.c    # library + build/find.exe
-./test.sh                  # 29-check regression suite
+./test.sh                  # 33-check regression suite
 ```
 
 Requires `clang`, `git`, and a JDK (for the verifiers). No `make`/`ninja` needed.
@@ -74,8 +74,28 @@ Query format:
 ```
 
 `of` refers to another condition's `id` (coordinates are measured from that
-condition's matched position) or `"spawn"`. Forward references are fine — the
-planner resolves and orders them.
+condition's matched position), or one of two **different** reference points:
+
+| `of` | means | cost |
+|---|---|---|
+| `"origin"` (default) | the point (0, 0) | cheap — pass 1 filters on it directly |
+| `"spawn"` | the actual world spawn | slower — see below |
+
+**These are not the same place.** Measured over 400 seeds, the median world
+spawn is 22 blocks from origin, but p90 is 520 and the maximum nearly 1000 —
+**47% of seeds spawn further than 35 blocks from origin**. A query for
+"ruined portal within 35 of spawn" that quietly measured from origin would
+return seeds where you land 300 blocks from the portal. Both references are now
+supported explicitly and results state which one each distance is measured from.
+
+Spawn is a 64-bit, biome-derived quantity, so pass 1 cannot filter on it: a
+spawn-relative condition widens the pass-1 radius by a 1100-block margin (a
+conservative over-admit) and pass 2 then recomputes the match around the true
+spawn exactly. That turns a 2%-survival query into ~96%, so `origin` is the
+default and `spawn` is an informed choice. The End and Nether have no world
+spawn — using `"spawn"` there is rejected rather than silently misinterpreted.
+
+Forward references are fine — the planner resolves and orders them.
 
 ## Why the planner exists
 
@@ -192,7 +212,7 @@ done < /tmp/hits.tsv
 
 `tools/biomecheck.c` shows what "viable" actually resolved to for a seed.
 
-`./test.sh` runs the whole thing as a regression suite (29 checks, ~14s): the
+`./test.sh` runs the whole thing as a regression suite (33 checks, ~15s): the
 cross-validation above, planner reordering *and* cost-based ordering, six error
 paths, same-type distinctness, nether/end queries including the end-city
 exclusion zone, biome-precision plumbing, a real search whose every seed is
@@ -258,6 +278,7 @@ tools/find.c        CLI: parse -> plan -> search | --explain | --bias
 tools/describe.c    given a seed, print spawn + nearby structures & their biomes
 tools/map.c         render a seed's biome map as a PNG (no image library)
 tools/checkpng.py   validates that PNG is spec-correct, not just non-empty
+tools/checkspawn.py re-verifies spawn-relative hits against describe.exe
 tools/vocab.c       dumps valid structures/biomes per version (ask.py reads this)
 tools/xval.c        cubiomes side of cross-validation
 tools/XVal.java     independent JDK reference

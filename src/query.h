@@ -20,6 +20,21 @@
 #define MAX_COND 16
 #define ID_LEN   24
 
+// A condition is measured from another condition's matched position, from the
+// world ORIGIN (0,0), or from the actual world SPAWN. Those last two are not
+// the same place: measured over 400 seeds, the median spawn is 22 blocks from
+// origin but p90 is 520 and the max nearly 1000 -- 47% of seeds spawn further
+// than 35 blocks out. Conflating them silently produces results that look
+// right on paper and are wrong in game.
+#define PARENT_ORIGIN (-1)
+#define PARENT_SPAWN  (-2)
+
+// Spawn is a 64-bit, biome-dependent quantity, so pass 1 cannot know it. For
+// spawn-relative conditions pass 1 filters against origin widened by this
+// margin (a conservative over-admit), and pass 2 recomputes the match around
+// the true spawn exactly. Sized past the observed maximum.
+#define SPAWN_MARGIN 1100
+
 typedef enum {
     CT_STRUCTURE,   // structure of a type within `within` blocks of parent
     CT_BIOME,       // biome present within `within` blocks of parent
@@ -32,7 +47,7 @@ typedef struct {
     int      biomeId;       // CT_BIOME
     int      within;        // radius, blocks
     char     ofId[ID_LEN];  // parent condition id, or "spawn"/"origin"
-    int      parent;        // resolved index; -1 == world origin
+    int      parent;        // resolved index, or PARENT_ORIGIN / PARENT_SPAWN
     int      dim;           // DIM_OVERWORLD / DIM_NETHER / DIM_END, inferred
     int      scanStep;      // CT_BIOME: sample spacing in blocks (see below)
 } Cond;
@@ -84,7 +99,11 @@ void queryPrintPlan(const Query *q, FILE *f);
 // --- evaluation ---
 
 // Matched positions, one slot per condition, filled by the passes.
-typedef struct { Pos pos[MAX_COND]; } Match;
+typedef struct {
+    Pos pos[MAX_COND];
+    Pos spawn;       // world spawn, filled by pass 2 iff the query needs it
+    int haveSpawn;   // 0 until pass 2 resolves it
+} Match;
 
 // Pass 1: geometry only. No Generator required. Returns 1 if all geometry
 // conditions are satisfiable for this 48-bit structure seed.
@@ -94,7 +113,7 @@ int  queryStage1(const Query *q, uint64_t s48, Match *m);
 // seed once per dimension the query actually touches (applySeed is the
 // dominant per-seed cost, so a single-dimension query pays for exactly one) --
 // the caller does NOT call applySeed itself.
-int  queryStage2(const Query *q, Generator *g, uint64_t worldSeed, const Match *m);
+int  queryStage2(const Query *q, Generator *g, uint64_t worldSeed, Match *m);
 
 const char *condDesc(const Query *q, int i, char *buf, size_t n);
 const char *dimName(int dim);

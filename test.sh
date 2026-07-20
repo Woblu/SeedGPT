@@ -62,7 +62,7 @@ section "planner"
 cat > /tmp/sc_test/reorder.json <<'EOF'
 {"version":"1.21","conditions":[
  {"id":"jungle","biome":"jungle","within":400,"of":"mansion"},
- {"id":"mansion","structure":"mansion","within":500,"of":"spawn"}]}
+ {"id":"mansion","structure":"mansion","within":500,"of":"origin"}]}
 EOF
 plan=$(./build/find.exe /tmp/sc_test/reorder.json 1 1 2>&1)
 # pass 1 must contain mansion geometry and NOT the biome
@@ -83,8 +83,8 @@ echo "$plan" | grep -q 'jungle within 400 of mansion' \
 # (span 544) -- fewer regions to scan. A broken cost model flips this.
 cat > /tmp/sc_test/cost.json <<'EOF'
 {"version":"1.21","conditions":[
- {"id":"village","structure":"village","within":1000,"of":"spawn"},
- {"id":"mansion","structure":"mansion","within":1000,"of":"spawn"}]}
+ {"id":"village","structure":"village","within":1000,"of":"origin"},
+ {"id":"mansion","structure":"mansion","within":1000,"of":"origin"}]}
 EOF
 p1order=$(./build/find.exe /tmp/sc_test/cost.json 1 1 2>&1 \
           | sed -n '/pass 1/,/pass 2/p' | grep -oE 'mansion|village' | head -2 | tr '\n' ',')
@@ -114,7 +114,7 @@ check_err "unknown parent rejected" \
 # Nether coords are 8:1 compressed -- a radius measured across dimensions is
 # meaningless, so refuse rather than silently produce nonsense.
 check_err "cross-dimension distance rejected" \
-  '{"version":"1.21","conditions":[{"id":"f","structure":"fortress","within":300,"of":"spawn"},{"id":"v","structure":"village","within":500,"of":"f"}]}' \
+  '{"version":"1.21","conditions":[{"id":"f","structure":"fortress","within":300,"of":"origin"},{"id":"v","structure":"village","within":500,"of":"f"}]}' \
   "cross-dimension"
 check_err "bad biome precision rejected" \
   '{"version":"1.21","conditions":[{"id":"j","biome":"jungle","within":300,"precision":"turbo"}]}' \
@@ -122,10 +122,10 @@ check_err "bad biome precision rejected" \
 
 # Biome scan precision must change the plan's cost estimate, not just parse.
 cat > /tmp/sc_test/prec.json <<'EOF'
-{"version":"1.21","conditions":[{"id":"j","biome":"jungle","within":400,"of":"spawn"}]}
+{"version":"1.21","conditions":[{"id":"j","biome":"jungle","within":400,"of":"origin"}]}
 EOF
 cfine=$(./build/find.exe /tmp/sc_test/prec.json 1 1 2>&1 | sed -n 's/.*jungle.*\[fine\] *~\([0-9]*\) ns.*/\1/p' | head -1)
-sed -i 's/"of":"spawn"}/"of":"spawn","precision":"fast"}/' /tmp/sc_test/prec.json
+sed -i 's/"of":"origin"}/"of":"origin","precision":"fast"}/' /tmp/sc_test/prec.json
 cfast=$(./build/find.exe /tmp/sc_test/prec.json 1 1 2>&1 | sed -n 's/.*jungle.*\[fast\] *~\([0-9]*\) ns.*/\1/p' | head -1)
 if [ -n "$cfine" ] && [ -n "$cfast" ] && [ "$cfine" -gt "$cfast" ]; then
   ok "biome precision affects cost model (fine ${cfine}ns > fast ${cfast}ns)"
@@ -138,7 +138,7 @@ fi
 # at distance 0 and multi-instance constellations (quad huts) never filter.
 cat > /tmp/sc_test/dist.json <<'EOF'
 {"version":"1.21","conditions":[
- {"id":"v1","structure":"village","within":400,"of":"spawn"},
+ {"id":"v1","structure":"village","within":400,"of":"origin"},
  {"id":"v2","structure":"village","within":400,"of":"v1"}]}
 EOF
 FIND_TSV=/tmp/sc_test/dist.tsv ./build/find.exe /tmp/sc_test/dist.json 3000000 16 >/dev/null 2>&1
@@ -154,11 +154,51 @@ else
   bad "distinctness query returned nothing"
 fi
 
+# "spawn" must mean the actual world spawn, not the origin. Measured over 400
+# seeds the median spawn is 22 blocks from origin but p90 is 520 -- 47% land
+# further than 35 blocks out, so conflating them yields results that are right
+# on paper and wrong in game.
+section "spawn semantics"
+cat > /tmp/sc_test/spawn.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"p","structure":"ruined_portal","within":35,"of":"spawn"}]}
+EOF
+sp_out=$(FIND_TSV=/tmp/sc_test/spawn.tsv ./build/find.exe /tmp/sc_test/spawn.json 3000000 16 2>&1)
+nsp=$(echo "$sp_out" | grep -c '^SEED')
+if [ "$nsp" -gt 0 ]; then
+  ok "spawn-relative query returns seeds ($nsp)"
+else
+  bad "spawn-relative query found nothing"
+fi
+# Every reported distance must be within the requested radius OF SPAWN.
+# grep -oE, not sed: a greedy .* lets the capture group match empty, and the
+# check then silently passes on nothing.
+worst=$(echo "$sp_out" | grep -oE '[0-9]+ from spawn' | awk '{print $1}' | sort -n | tail -1)
+if [ -n "$worst" ] && [ "$worst" -le 35 ]; then
+  ok "all matches within 35 blocks of true spawn (worst $worst)"
+else
+  bad "spawn distance exceeded radius" "worst='$worst'"
+fi
+
+# Independently: describe.exe is a separate binary, so this does not rest on
+# find.exe agreeing with itself. Uses the TSV, not the aligned human output --
+# "x=%6d" puts spaces inside the field and breaks naive splitting.
+if python tools/checkspawn.py /tmp/sc_test/spawn.tsv 35 1.21 ./build/describe.exe      >/tmp/sc_test/cs.log 2>&1; then
+  ok "independent recheck via describe ($(cat /tmp/sc_test/cs.log))"
+else
+  bad "independent recheck failed" "$(cat /tmp/sc_test/cs.log)"
+fi
+
+# Reported seeds must not be tiny. Trying upper bits from 0 made the first
+# world seed literally equal the structure seed, so a scan from 0 returned
+# "128", "146", ... clustered at thread boundaries.
+big=$(echo "$sp_out" | grep '^SEED' | awk '{print ($2<0?-$2:$2)}' | sort -n | tail -1)
+[ -n "$big" ] && [ "${#big}" -ge 10 ]   && ok "seeds use the full 64-bit range (largest has ${#big} digits)"   || bad "seeds look truncated" "largest magnitude: $big"
+
 # ---------------------------------------------------------------- dimensions
 section "nether / end"
 cat > /tmp/sc_test/nether.json <<'EOF'
 {"version":"1.21","conditions":[
- {"id":"fortress","structure":"fortress","within":300,"of":"spawn"},
+ {"id":"fortress","structure":"fortress","within":300,"of":"origin"},
  {"id":"bastion","structure":"bastion","within":500,"of":"fortress"}]}
 EOF
 ./build/find.exe /tmp/sc_test/nether.json 2000000 16 2>&1 | grep -q '^SEED' \
@@ -166,7 +206,7 @@ EOF
   || bad "nether query found nothing"
 
 cat > /tmp/sc_test/end.json <<'EOF'
-{"version":"1.21","conditions":[{"id":"city","structure":"end_city","within":3000,"of":"spawn"}]}
+{"version":"1.21","conditions":[{"id":"city","structure":"end_city","within":3000,"of":"origin"}]}
 EOF
 endout=$(./build/find.exe /tmp/sc_test/end.json 500000 16 2>&1)
 echo "$endout" | grep -q '^SEED' \

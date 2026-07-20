@@ -360,7 +360,7 @@
       ? (names.includes('mansion') ? 'mansion' : names[0])
       : (names.includes('jungle') ? 'jungle' : names[0]);
     conds.push({ id: kind.slice(0,1) + (nextId++), kind, name: pick,
-                 within: 400, of: 'spawn', precision: 'fine' });
+                 within: 400, of: 'origin', precision: 'fine' });
     render();
   }
   $('#addStruct').onclick = () => addCond('structure');
@@ -404,9 +404,12 @@
 
       const g2 = el('div', 'grid' + (c.kind === 'biome' ? '' : ' full'));
       const of = el('select');
-      const opts = ['spawn', ...conds.filter(o => o.id !== c.id).map(o => o.id)];
+      const opts = ['origin', 'spawn', ...conds.filter(o => o.id !== c.id).map(o => o.id)];
       opts.forEach(o => {
-        const n = el('option', null, o === 'spawn' ? 'from spawn' : 'from ' + o);
+        const label = o === 'origin' ? 'from origin (0,0)'
+                    : o === 'spawn'  ? 'from world spawn (slower)'
+                    : 'from ' + o;
+        const n = el('option', null, label);
         n.value = o; if (o === c.of) n.selected = true; of.append(n);
       });
       of.onchange = e => { c.of = e.target.value; render(); };
@@ -617,11 +620,18 @@
           n.append(num, desc); box.append(n);
           if (s.places.length) {
             const t = el('table');
+            if (s.spawn) {
+              const tr = el('tr');
+              tr.append(el('td','id','(spawn)'),
+                        el('td',null,`x=${s.spawn.x}  z=${s.spawn.z}`),
+                        el('td','d',''));
+              t.append(tr);
+            }
             s.places.forEach(p => {
               const tr = el('tr');
               tr.append(el('td','id', p.id),
                         el('td',null,`x=${p.x}  z=${p.z}`),
-                        el('td','d', p.dist + ' from origin'));
+                        el('td','d', p.dist + ' from ' + (p.ref || 'origin')));
               t.append(tr);
             });
             box.append(t);
@@ -698,7 +708,7 @@
       conds = (d.query.conditions || []).map(c => ({
         id: c.id, kind: c.structure ? 'structure' : 'biome',
         name: c.structure || c.biome, within: c.within ?? 400,
-        of: c.of || 'spawn', precision: c.precision || 'fine'
+        of: c.of || 'origin', precision: c.precision || 'fine'
       }));
       nextId = conds.length + 1;
       render();
@@ -712,7 +722,7 @@
   // ---- start -------------------------------------------------------------
   loadVocab().then(() => {
     conds = [
-      { id:'mansion', kind:'structure', name:'mansion', within:300, of:'spawn' },
+      { id:'mansion', kind:'structure', name:'mansion', within:300, of:'origin' },
       { id:'village', kind:'structure', name:'village', within:400, of:'mansion' },
     ];
     nextId = 3;

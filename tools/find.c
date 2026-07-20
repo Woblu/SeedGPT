@@ -46,7 +46,16 @@ static DWORD WINAPI worker(LPVOID arg)
         if (!queryStage1(j->q, s48, &m)) continue;   // cheap reject
         j->pass1++;
 
-        for (uint64_t up = 0; up < UPPER_SAMPLES; up++) {
+        // Scatter the upper 16 bits. Trying up=0 first made the reported seed
+        // literally equal the structure seed -- so a scan from 0 returned
+        // "128", "146", ... clustered at thread starts. Any upper value is
+        // equally valid, so pick them pseudo-randomly per seed.
+        uint64_t ustate = s48 * 0x9E3779B97F4A7C15ULL + 0xD1B54A32D192ED03ULL;
+        for (uint64_t t = 0; t < UPPER_SAMPLES; t++) {
+            ustate ^= ustate >> 30; ustate *= 0xBF58476D1CE4E5B9ULL;
+            ustate ^= ustate >> 27; ustate *= 0x94D049BB133111EBULL;
+            ustate ^= ustate >> 31;
+            uint64_t up = ustate & 0xFFFF;
             uint64_t ws = (up << 48) | s48;
             j->applies++;
             // queryStage2 applies the seed itself, once per dimension the query
@@ -134,11 +143,21 @@ int main(int argc, char **argv)
         for (int k = 0; k < jobs[i].nhits && shown < MAX_HITS; k++, shown++) {
             Hit *h = &jobs[i].hits[k];
             printf("SEED %" PRId64 "\n", (int64_t)h->ws);
+            if (h->m.haveSpawn)
+                printf("   %-14s x=%6d z=%6d\n", "(spawn)", h->m.spawn.x, h->m.spawn.z);
             for (int c = 0; c < q.n; c++) {
                 if (q.cond[c].type != CT_STRUCTURE) continue;
                 Pos p = h->m.pos[c];
-                printf("   %-14s x=%6d z=%6d   %d from origin\n", q.cond[c].id, p.x, p.z,
-                       (int)sqrt((double)((int64_t)p.x*p.x + (int64_t)p.z*p.z)));
+                // Say which reference the distance is measured from: "spawn"
+                // and "origin" are different places (median 22 blocks apart,
+                // p90 520), and labelling one as the other is how a correct
+                // search still produces results that look wrong in game.
+                int spawnRel = (q.cond[c].parent == PARENT_SPAWN && h->m.haveSpawn);
+                int64_t dx = p.x - (spawnRel ? h->m.spawn.x : 0);
+                int64_t dz = p.z - (spawnRel ? h->m.spawn.z : 0);
+                printf("   %-14s x=%6d z=%6d   %d %s\n", q.cond[c].id, p.x, p.z,
+                       (int)sqrt((double)(dx*dx + dz*dz)),
+                       spawnRel ? "from spawn" : "from origin");
             }
             // machine-readable twin, for piping into verifiers
             if (tsv) {

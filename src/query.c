@@ -17,6 +17,7 @@
 #define NS_STRUCT_POS    9.0
 #define NS_VIABLE     42000.0
 #define NS_BIOME_AT    2300.0
+#define NS_SPAWN    2300000.0   // getSpawn: ~437/s, the most expensive call here
 
 static double geomCost(const Query *q, int i)
 {
@@ -25,14 +26,16 @@ static double geomCost(const Query *q, int i)
     if (!getStructureConfig(c->structType, q->mc, &sc)) return NS_STRUCT_POS;
     // regions we must scan to cover a disc of radius `within`
     double span = sc.regionSize * 16.0;
-    double n = 2.0 * (c->within / span) + 1.0;
+    double reach = c->within + (c->parent == PARENT_SPAWN ? SPAWN_MARGIN : 0);
+    double n = 2.0 * (reach / span) + 1.0;
     return n * n * NS_STRUCT_POS;
 }
 
 static double viabCost(const Query *q, int i)
 {
     const Cond *c = &q->cond[i];
-    if (c->type == CT_STRUCTURE) return NS_VIABLE;
+    if (c->type == CT_STRUCTURE)
+        return NS_VIABLE + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
     // biome scan: samples on a `scanStep` lattice across the disc
     double step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
     double n = 2.0 * (c->within / step) + 1.0;
@@ -113,7 +116,12 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         snprintf(c->id, ID_LEN, "%s", x->valuestring);
 
         x = cJSON_GetObjectItem(e, "of");
-        snprintf(c->ofId, ID_LEN, "%s", (x && cJSON_IsString(x)) ? x->valuestring : "spawn");
+        // Default to the ORIGIN, not the world spawn. Both are supported, but
+        // spawn is 64-bit and biome-derived, so pass 1 cannot filter on it and
+        // has to widen by SPAWN_MARGIN -- turning a 2%-survival query into a
+        // 96%-survival one. Make the cheap, deterministic reference the
+        // default and let "spawn" be an explicit, informed choice.
+        snprintf(c->ofId, ID_LEN, "%s", (x && cJSON_IsString(x)) ? x->valuestring : "origin");
 
         x = cJSON_GetObjectItem(e, "within");
         c->within = (x && cJSON_IsNumber(x)) ? x->valueint : 1000;
@@ -185,7 +193,8 @@ int queryPlan(Query *q, char *err, size_t errlen)
     // resolve parents
     for (int i = 0; i < q->n; i++) {
         Cond *c = &q->cond[i];
-        if (!strcmp(c->ofId, "spawn") || !strcmp(c->ofId, "origin")) { c->parent = -1; continue; }
+        if (!strcmp(c->ofId, "origin")) { c->parent = PARENT_ORIGIN; continue; }
+        if (!strcmp(c->ofId, "spawn"))  { c->parent = PARENT_SPAWN;  continue; }
         c->parent = findId(q, c->ofId);
         if (c->parent < 0) {
             snprintf(err, errlen, "condition \"%s\": unknown parent \"%s\"", c->id, c->ofId);
@@ -243,6 +252,18 @@ int queryPlan(Query *q, char *err, size_t errlen)
                      "cross-dimension distances are not meaningful",
                      q->cond[i].id, dimName(q->cond[i].dim),
                      q->cond[p].id, dimName(q->cond[p].dim));
+            return 1;
+        }
+    }
+
+    // The world spawn is an overworld position. Measuring a nether or end
+    // structure from it is meaningless, so say so instead of quietly using it.
+    for (int i = 0; i < q->n; i++) {
+        if (q->cond[i].parent == PARENT_SPAWN && q->cond[i].dim != DIM_OVERWORLD) {
+            snprintf(err, errlen,
+                     "condition \"%s\" is in the %s, which has no world spawn -- "
+                     "measure it from \"origin\" instead",
+                     q->cond[i].id, dimName(q->cond[i].dim));
             return 1;
         }
     }
@@ -312,17 +333,21 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
     for (int i = 0; i < q->ngeom; i++) {
         int k = q->geom[i];
         const Cond *c = &q->cond[k];
-        Pos centre = (c->parent < 0) ? (Pos){0,0} : m->pos[c->parent];
+        Pos centre = (c->parent >= 0) ? m->pos[c->parent] : (Pos){0,0};
+        // Pass 1 cannot know the world spawn (it is 64-bit and biome-derived),
+        // so a spawn-relative condition is filtered against origin widened by
+        // SPAWN_MARGIN. Over-admits; pass 2 then checks it exactly.
+        int reach = c->within + (c->parent == PARENT_SPAWN ? SPAWN_MARGIN : 0);
 
         StructureConfig sc;
         if (!getStructureConfig(c->structType, q->mc, &sc)) return 0;
         double span = sc.regionSize * 16.0;
-        int r0x = (int)floor((centre.x - c->within) / span);
-        int r1x = (int)floor((centre.x + c->within) / span);
-        int r0z = (int)floor((centre.z - c->within) / span);
-        int r1z = (int)floor((centre.z + c->within) / span);
+        int r0x = (int)floor((centre.x - reach) / span);
+        int r1x = (int)floor((centre.x + reach) / span);
+        int r0z = (int)floor((centre.z - reach) / span);
+        int r1z = (int)floor((centre.z + reach) / span);
 
-        int64_t lim = (int64_t)c->within * c->within;
+        int64_t lim = (int64_t)reach * reach;
         int64_t best = INT64_MAX; Pos bp = {0,0}; int found = 0;
         for (int rx = r0x; rx <= r1x; rx++)
         for (int rz = r0z; rz <= r1z; rz++) {
@@ -349,33 +374,90 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
     return 1;
 }
 
-static int stage2Dim(const Query *q, Generator *g, int dim, const Match *m);
+static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
+                     const Match *m, Match *fixed, int *haveSpawn, Pos *spawn);
 
-int queryStage2(const Query *q, Generator *g, uint64_t worldSeed, const Match *m)
+int queryStage2(const Query *q, Generator *g, uint64_t worldSeed, Match *m)
 {
     // Outer loop over dimensions: applySeed (~25 us) is the dominant per-seed
     // cost, so pay it once per dimension rather than once per condition. A
     // single-dimension query -- the common case -- pays exactly one.
+    Match fixed = *m;
+    int haveSpawn = 0; Pos spawn = {0,0};
     for (int d = 0; d < q->ndims; d++) {
         int dim = q->dims[d];
         applySeed(g, dim, worldSeed);
-        if (!stage2Dim(q, g, dim, m)) return 0;
+        if (!stage2Dim(q, g, dim, worldSeed, m, &fixed, &haveSpawn, &spawn)) return 0;
     }
+    fixed.spawn = spawn; fixed.haveSpawn = haveSpawn;
+    *m = fixed;   // report the positions actually verified
     return 1;
 }
 
-static int stage2Dim(const Query *q, Generator *g, int dim, const Match *m)
+// Re-find a structure match around an arbitrary centre. Used in pass 2 to
+// redo spawn-relative conditions against the true world spawn.
+static int refind(const Query *q, int k, uint64_t s48, Pos centre,
+                  const Match *taken, Pos *out)
 {
+    const Cond *c = &q->cond[k];
+    StructureConfig sc;
+    if (!getStructureConfig(c->structType, q->mc, &sc)) return 0;
+    double span = sc.regionSize * 16.0;
+    int r0x = (int)floor((centre.x - c->within) / span);
+    int r1x = (int)floor((centre.x + c->within) / span);
+    int r0z = (int)floor((centre.z - c->within) / span);
+    int r1z = (int)floor((centre.z + c->within) / span);
+    int64_t lim = (int64_t)c->within * c->within, best = INT64_MAX;
+    int found = 0;
+    for (int rx = r0x; rx <= r1x; rx++)
+    for (int rz = r0z; rz <= r1z; rz++) {
+        Pos p;
+        if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
+        int64_t d = d2(p, centre);
+        if (d > lim || d >= best) continue;
+        // Same distinctness rule pass 1 applies: two conditions of the same
+        // structure type must resolve to two different instances.
+        int clash = 0;
+        for (int j = 0; j < q->n && !clash; j++) {
+            if (j == k || q->cond[j].structType != c->structType) continue;
+            if (q->cond[j].type != CT_STRUCTURE) continue;
+            if (taken->pos[j].x == p.x && taken->pos[j].z == p.z) clash = 1;
+        }
+        if (clash) continue;
+        best = d; *out = p; found = 1;
+    }
+    return found;
+}
+
+static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
+                     const Match *m, Match *fixed, int *haveSpawn, Pos *spawn)
+{
+    uint64_t s48 = worldSeed & ((1ULL << 48) - 1);
     for (int i = 0; i < q->nviab; i++) {
         int k = q->viab[i];
         const Cond *c = &q->cond[k];
         if (c->dim != dim) continue;   // handled in another dimension's pass
 
+        // Spawn-relative: pass 1 only guaranteed this is near the ORIGIN.
+        // Resolve it properly now that the biome generator exists.
+        if (c->parent == PARENT_SPAWN && c->type == CT_STRUCTURE) {
+            if (!*haveSpawn) { *spawn = getSpawn(g); *haveSpawn = 1; }
+            Pos p;
+            if (!refind(q, k, s48, *spawn, fixed, &p)) return 0;
+            fixed->pos[k] = p;
+        }
+
         if (c->type == CT_STRUCTURE) {
-            if (!isViableStructurePos(c->structType, g, m->pos[k].x, m->pos[k].z, 0))
+            Pos p = (c->parent == PARENT_SPAWN) ? fixed->pos[k] : m->pos[k];
+            if (!isViableStructurePos(c->structType, g, p.x, p.z, 0))
                 return 0;
+            fixed->pos[k] = p;
         } else {
-            Pos centre = (c->parent < 0) ? (Pos){0,0} : m->pos[c->parent];
+            Pos centre = c->parent >= 0 ? (q->cond[c->parent].parent == PARENT_SPAWN
+                                            ? fixed->pos[c->parent] : m->pos[c->parent])
+                       : (c->parent == PARENT_SPAWN
+                            ? (*haveSpawn ? *spawn : (*spawn = getSpawn(g), *haveSpawn = 1, *spawn))
+                            : (Pos){0,0});
             int64_t lim = (int64_t)c->within * c->within;
             int step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
             int hit = 0;

@@ -1,7 +1,7 @@
 {
   "version": "1.21",
   "conditions": [
-    { "id": "fortress", "structure": "fortress", "within": 300, "of": "spawn" },
+    { "id": "fortress", "structure": "fortress", "within": 300, "of": "origin" },
     { "id": "bastion",  "structure": "bastion",  "within": 500, "of": "fortress" }
   ]
 }
