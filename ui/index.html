@@ -584,6 +584,7 @@
         range: +$('#range').value, threads: +$('#threads').value });
       const f = d.funnel;
       out.innerHTML = '';
+      out.append(...noteCards(d.notes));   // caveats first: they qualify what follows
 
       out.append(statsCard('Result', [
         ['seeds found', String(d.seeds.length), d.seeds.length ? 'good' : 'warn'],
