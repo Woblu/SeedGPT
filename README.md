@@ -9,7 +9,7 @@ A Minecraft Java Edition **seed finder**: describe the world features you want, 
 ```sh
 ./setup.sh                 # clone + pin the engine (first time only)
 ./build.sh tools/find.c    # library + build/find.exe
-./test.sh                  # 16-check regression suite
+./test.sh                  # 24-check regression suite
 ```
 
 Requires `clang`, `git`, and a JDK (for the verifiers). No `make`/`ninja` needed.
@@ -158,8 +158,11 @@ cd tools && javac XVal.java && java XVal      # independent JDK reference
 
 `tools/XVal.java` reimplements structure placement from the JDK spec using real
 `java.util.Random`, with salts sourced from the Minecraft Wiki (**not** read from
-cubiomes — that would be circular). Current status: **2,940/2,940 positions
-match**, across linear and triangular spread, negative seeds/regions, and MC 26.2.
+cubiomes — that would be circular). Current status: **3,881/3,881 positions
+match**, across all three dimensions, linear and triangular spread, negative
+seeds/regions, and MC 26.2. It also replicates the per-site gates, not just
+positions: bastion's `chunkGenerateRnd` → `nextInt(5) >= 2`, and end city's
+1008-block origin exclusion.
 
 `tools/Verify.java` re-checks individual reported seeds:
 
@@ -172,12 +175,14 @@ done < /tmp/hits.tsv
 
 `tools/biomecheck.c` shows what "viable" actually resolved to for a seed.
 
-`./test.sh` runs the whole thing as a regression suite (16 checks): the
-cross-validation above, planner reordering *and* cost-based ordering, all four
-error paths, a real search whose every seed is re-verified under the JDK
-reference, the loose-query warning, estimator calibration, and `describe`
-round-tripping a found seed. Each assertion has been confirmed to fail when the
-behaviour it checks is broken — a green run means something.
+`./test.sh` runs the whole thing as a regression suite (24 checks, ~11s): the
+cross-validation above, planner reordering *and* cost-based ordering, six error
+paths, same-type distinctness, nether/end queries including the end-city
+exclusion zone, biome-precision plumbing, a real search whose every seed is
+re-verified under the JDK reference, the loose-query warning, estimator
+calibration, and `describe` round-tripping a found seed. Each assertion has been
+confirmed to fail when the behaviour it checks is broken — a green run means
+something.
 
 ## Known limitations
 
