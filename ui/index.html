@@ -193,6 +193,14 @@
     text-align: center; color: var(--ink-faint); font-size: 12px;
   }
 
+  .saved { display: flex; gap: 6px; margin-top: 6px; }
+  .saved button:first-child { text-align: left; }
+  .exportbar { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px; }
+  .exportbar .exl {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+
   /* ---- output panel ---- */
   .card {
     background: var(--stone);
@@ -306,6 +314,7 @@
   <h1>Seed Finder</h1>
   <span class="sub" id="engine">cubiomes · loading…</span>
   <span class="spacer"></span>
+  <button class="tiny" id="share" title="copy a link that rebuilds this query">🔗 share</button>
   <button class="tiny" id="theme">☀ / ☾</button>
 </header>
 
@@ -358,6 +367,16 @@
         <button id="explainBtn">Estimate</button>
         <button class="primary" id="searchBtn">Search</button>
       </div>
+    </section>
+
+    <section>
+      <h2>Saved searches</h2>
+      <div class="btnrow" style="margin-top:0">
+        <input type="text" id="saveName" placeholder="name this search" style="flex:1;min-width:0">
+        <button id="saveBtn">save</button>
+      </div>
+      <div id="savedList"></div>
+      <div class="hint">Saved in this browser. <b>Share</b> (top right) copies a link that rebuilds the query anywhere.</div>
     </section>
   </div>
 
@@ -912,6 +931,7 @@
       } else {
         const c = el('div','card');
         c.append(el('h3', null, `Seeds — click a number to copy`));
+        c.append(exportBar(d.seeds));
         // Result rows carry the condition id (e.g. "s5"); map it back to the
         // structure name so the row shows the right icon, not a generic pin.
         const condName = {};
@@ -1072,13 +1092,123 @@
       }
     } catch (e) { /* graphics are optional — the built-in look stands alone */ }
   }
+  // ---- query state: share links + saved searches -------------------------
+  function currentState() {
+    return { v: $('#version').value, r: +$('#range').value,
+             t: +$('#threads').value, c: conds };
+  }
+  function applyState(s) {
+    if (!s || !Array.isArray(s.c)) return false;
+    if (s.v) $('#version').value = s.v;
+    if (s.r) $('#range').value = s.r;
+    if (s.t) $('#threads').value = s.t;
+    conds = s.c;
+    nextId = conds.reduce((m, c) =>
+      Math.max(m, parseInt(String(c.id).replace(/\D/g, '')) || 0), 0) + 1;
+    return true;
+  }
+  // The URL hash carries the whole builder state (base64url JSON), so a link
+  // rebuilds the query on any local instance -- the server is loopback-only, so
+  // "sharing" means sharing the query, not a hosted page.
+  function encodeState(s) {
+    return btoa(unescape(encodeURIComponent(JSON.stringify(s))))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function decodeState(str) {
+    try {
+      return JSON.parse(decodeURIComponent(escape(
+        atob(str.replace(/-/g, '+').replace(/_/g, '/')))));
+    } catch (e) { return null; }
+  }
+  $('#share').onclick = async () => {
+    const link = location.origin + location.pathname + '#q=' + encodeState(currentState());
+    try { await navigator.clipboard.writeText(link); toast('link copied to clipboard'); }
+    catch (e) { location.hash = 'q=' + encodeState(currentState()); toast('link is in the address bar'); }
+  };
+
+  function getSaved() { try { return JSON.parse(localStorage.getItem('sf-saved') || '[]'); } catch (e) { return []; } }
+  function setSaved(a) { localStorage.setItem('sf-saved', JSON.stringify(a)); renderSaved(); }
+  function renderSaved() {
+    const box = $('#savedList'); box.innerHTML = '';
+    const a = getSaved();
+    if (!a.length) { box.append(el('div', 'hint', 'No saved searches yet.')); return; }
+    a.forEach((it, i) => {
+      const row = el('div', 'saved');
+      const name = el('button', 'tiny', it.name);
+      name.title = 'load this search'; name.style.flex = '1';
+      name.onclick = () => { if (applyState(it.state)) { render(); toast('loaded “' + it.name + '”'); } };
+      const del = el('button', 'tiny x', '×'); del.title = 'delete';
+      del.onclick = () => { const b = getSaved(); b.splice(i, 1); setSaved(b); };
+      row.append(name, del); box.append(row);
+    });
+  }
+  $('#saveBtn').onclick = () => {
+    const name = $('#saveName').value.trim();
+    if (!name) { toast('name the search first'); return; }
+    const a = getSaved();
+    const at = a.findIndex(x => x.name === name);
+    const entry = { name, state: currentState() };
+    if (at >= 0) a[at] = entry; else a.push(entry);
+    setSaved(a); $('#saveName').value = '';
+    toast('saved “' + name + '”');
+  };
+  $('#saveName').addEventListener('keydown', e => { if (e.key === 'Enter') $('#saveBtn').click(); });
+
+  // ---- coordinate export -------------------------------------------------
+  function seedRows(seeds) {
+    const rows = [['seed', 'kind', 'id', 'x', 'z', 'detail']];
+    seeds.forEach(s => {
+      let any = false;
+      const push = (k, id, x, z, d) => { rows.push([s.seed, k, id, x, z, d]); any = true; };
+      if (s.spawn)  push('spawn', 'spawn', s.spawn.x, s.spawn.z, '');
+      if (s.portal) push('portal', 'end_portal', s.portal.x, s.portal.z, s.portal.eyes + '/12 eyes');
+      (s.loot  || []).forEach(l => push('loot', l.id, l.x, l.z, l.count + ' ' + l.item));
+      (s.ore   || []).forEach(o => push('ore', o.material, o.x, o.z, o.count + ' within ' + o.within));
+      (s.places|| []).forEach(p => push('structure', p.id, p.x, p.z, p.dist + ' from ' + (p.ref || 'origin')));
+      if (!any) rows.push([s.seed, 'seed', '', '', '', '']);
+    });
+    return rows;
+  }
+  const toCSV = rows => rows.map(r => r.map(v => {
+    const s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(',')).join('\n');
+  function download(name, text, type) {
+    const a = el('a'); a.href = URL.createObjectURL(new Blob([text], { type }));
+    a.download = name; document.body.append(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+  }
+  function exportBar(seeds) {
+    const bar = el('div', 'exportbar');
+    bar.append(el('span', 'exl', 'export'));
+    const csv = el('button', 'tiny', '⬇ CSV');
+    csv.onclick = () => download('seeds.csv', toCSV(seedRows(seeds)), 'text/csv');
+    const json = el('button', 'tiny', '⬇ JSON');
+    json.onclick = () => download('seeds.json', JSON.stringify(seeds, null, 2), 'application/json');
+    const copy = el('button', 'tiny', 'copy CSV');
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(toCSV(seedRows(seeds)));
+        copy.textContent = 'copied'; setTimeout(() => copy.textContent = 'copy CSV', 900); } catch (e) {}
+    };
+    bar.append(csv, json, copy);
+    return bar;
+  }
+
+  // ---- start -------------------------------------------------------------
   loadAssets();
+  renderSaved();
   loadVocab().then(() => {
-    conds = [
-      { id:'mansion', kind:'structure', name:'mansion', within:300, of:'origin' },
-      { id:'village', kind:'structure', name:'village', within:400, of:'mansion' },
-    ];
-    nextId = 3;
+    // A shared link (#q=...) rebuilds its query; otherwise start from a demo.
+    let restored = false;
+    const h = location.hash.match(/^#q=(.+)$/);
+    if (h) { const s = decodeState(h[1]); if (s && applyState(s)) restored = true; }
+    if (!restored) {
+      conds = [
+        { id:'mansion', kind:'structure', name:'mansion', within:300, of:'origin' },
+        { id:'village', kind:'structure', name:'village', within:400, of:'mansion' },
+      ];
+      nextId = 3;
+    }
     render();
   });
 })();

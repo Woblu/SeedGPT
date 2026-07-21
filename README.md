@@ -43,6 +43,17 @@ drop your own PNGs into [`assets/`](assets/README.md) to replace them (the tool
 bundles no Mojang textures). Nothing is required — the built-in look stands
 alone.
 
+Three conveniences for real use:
+
+- **Share** (top right) copies a link with the whole query encoded in the URL
+  hash. Opening it on any local instance rebuilds the builder exactly — the
+  server is loopback-only, so you share the *query*, not a hosted page.
+- **Saved searches** keeps named queries in your browser's local storage;
+  click one to reload it.
+- **Export** on a result set writes the seeds and every coordinate to **CSV**
+  or **JSON** (or copies CSV to the clipboard) — one flat row per structure,
+  chest, ore count, spawn, and portal.
+
 ### Command line
 
 Describe what you want in English:
