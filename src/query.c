@@ -3,6 +3,7 @@
 #include "cJSON.h"
 #include "features/stronghold.h"
 #include "loot.h"
+#include "ore.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,7 @@
 #define NS_SPAWN    2300000.0   // getSpawn: ~437/s
 #define NS_EYES    10250000.0   // locate stronghold + pieces + loot: ~98/s
 #define NS_LOOT       47000.0   // structure viability + a ~5us loot roll
+#define NS_ORE_CHUNK   4000.0   // per chunk: one biome probe + config scan + gen
 
 static double geomCost(const Query *q, int i)
 {
@@ -40,6 +42,12 @@ static double viabCost(const Query *q, int i)
     const Cond *c = &q->cond[i];
     if (c->type == CT_EYES) return NS_EYES;
     if (c->type == CT_LOOT) return NS_LOOT;
+    if (c->type == CT_ORE) {
+        // A per-chunk cost over the disc's bounding square -- the most expensive
+        // condition, so it sorts last and runs only for earlier survivors.
+        double n = 2.0 * (c->within / 16.0) + 1.0;
+        return n * n * NS_ORE_CHUNK + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+    }
     if (c->type == CT_STRUCTURE)
         return NS_VIABLE + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
     // biome scan: samples on a `scanStep` lattice across the disc
@@ -149,7 +157,33 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         cJSON *jl = cJSON_GetObjectItem(e, "loot");
         cJSON *js = cJSON_GetObjectItem(e, "structure");
         cJSON *jb = cJSON_GetObjectItem(e, "biome");
-        if (jl && cJSON_IsObject(jl)) {
+        cJSON *jore = cJSON_GetObjectItem(e, "ore");
+        if (jore && cJSON_IsString(jore)) {
+            c->type = CT_ORE;
+            const OreMaterial *mat = oreMaterialByName(jore->valuestring);
+            if (!mat) {
+                snprintf(err, errlen, "condition \"%s\": unknown ore \"%s\"",
+                         c->id, jore->valuestring);
+                goto done;
+            }
+            // Find the material's index (stored so query.h needs no ore types).
+            int nm; const OreMaterial *tab = oreMaterials(&nm);
+            c->oreMat = (int)(mat - tab);
+            c->dim = mat->dim;
+            cJSON *oc = cJSON_GetObjectItem(e, "count");
+            c->oreMin = (oc && cJSON_IsNumber(oc)) ? oc->valueint : 1;
+            if (c->oreMin < 1) c->oreMin = 1;
+            // Counting is per-chunk over the whole column, so cost scales with
+            // area. Default modest; cap so it cannot wedge the search.
+            cJSON *ow = cJSON_GetObjectItem(e, "within");
+            c->within = (ow && cJSON_IsNumber(ow)) ? ow->valueint : 64;
+            if (c->within > 256) c->within = 256;
+            if (c->within < 16)  c->within = 16;
+            // Ore is measured from a point; default origin. Spawn only makes
+            // sense in the overworld (guarded later, like every condition).
+            cJSON *of = cJSON_GetObjectItem(e, "of");
+            snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "origin");
+        } else if (jl && cJSON_IsObject(jl)) {
             c->type = CT_LOOT;
             cJSON *ls = cJSON_GetObjectItem(jl, "structure");
             cJSON *li = cJSON_GetObjectItem(jl, "item");
@@ -392,6 +426,12 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
                  struct2str(c->structType), c->lootMin, it);
         return buf;
     }
+    if (c->type == CT_ORE) {
+        int nm; const OreMaterial *tab = oreMaterials(&nm);
+        snprintf(buf, n, ">= %d %s ore within %d of %s",
+                 c->oreMin, tab[c->oreMat].name, c->within, c->ofId);
+        return buf;
+    }
     const char *what = (c->type == CT_STRUCTURE)
         ? struct2str(c->structType) : biome2str(q->mc, c->biomeId);
     const char *prec = c->type != CT_BIOME ? ""
@@ -561,6 +601,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                      const Match *m, Match *fixed, int *haveSpawn, Pos *spawn, LootCache *lc)
 {
     uint64_t s48 = worldSeed & ((1ULL << 48) - 1);
+    SurfaceNoise sn; int haveSN = 0;   // ore counting needs it; init once per dim
     for (int i = 0; i < q->nviab; i++) {
         int k = q->viab[i];
         const Cond *c = &q->cond[k];
@@ -569,6 +610,23 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
         if (c->type == CT_EYES) {
             if (!resolveEyes(q, g, worldSeed, fixed)) return 0;
             if (fixed->eyes < c->eyesMin) return 0;
+            continue;
+        }
+
+        if (c->type == CT_ORE) {
+            Pos centre = c->parent >= 0
+                ? (q->cond[c->parent].parent == PARENT_SPAWN
+                     ? fixed->pos[c->parent] : m->pos[c->parent])
+                : (c->parent == PARENT_SPAWN
+                     ? (*haveSpawn ? *spawn : (*spawn = getSpawn(g), *haveSpawn = 1, *spawn))
+                     : (Pos){0,0});
+            if (!haveSN) { initSurfaceNoise(&sn, dim, worldSeed); haveSN = 1; }
+            int nm; const OreMaterial *tab = oreMaterials(&nm);
+            int cnt = oreCountMaterial(g, &sn, q->mc, &tab[c->oreMat],
+                                       centre.x, centre.z, c->within);
+            if (cnt < c->oreMin) return 0;
+            fixed->pos[k] = centre;
+            fixed->oreCount[k] = cnt;
             continue;
         }
 

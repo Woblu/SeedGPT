@@ -160,6 +160,7 @@
   .cond.biome { border-left-color: var(--emerald); }
   .cond.eyes  { border-left-color: var(--diamond); }
   .cond.loot  { border-left-color: var(--gold); }
+  .cond.ore   { border-left-color: var(--diamond); }
   .cond .top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   .cond .ic { width: 22px; height: 22px; flex: none; }
   .cond .cid {
@@ -324,11 +325,12 @@
     <section>
       <h2>Version</h2>
       <select id="version">
+        <option>26.2</option><option>26.1</option>
         <option>1.21</option><option>1.20</option><option>1.19</option>
         <option>1.18</option><option>1.17</option><option>1.16</option>
-        <option>1.13</option><option>1.12</option>
+        <option>1.15</option><option>1.14</option><option>1.13</option><option>1.12</option>
       </select>
-      <div class="hint">A finder generates for the version you pick — it can't infer one.</div>
+      <div class="hint">A finder generates for the version you pick — it can't infer one. Defaults to the latest (26.2).</div>
     </section>
 
     <section>
@@ -339,6 +341,7 @@
         <button id="addBiome">+ biome</button>
         <button id="addEyes">+ end portal eyes</button>
         <button id="addLoot">+ chest loot</button>
+        <button id="addOre">+ ore</button>
       </div>
     </section>
 
@@ -408,6 +411,8 @@
     trident:'🔱', heart_of_the_sea:'💙', nautilus_shell:'🐚', tnt:'🧨',
     music_disc:'💿', bone:'🦴', arrow:'🏹', bread:'🍞', wheat:'🌾',
     apple:'🍎', obsidian:'⬛', ender_pearl:'🟣', gunpowder:'💥', string:'🧵',
+    redstone:'🔴', lapis:'🔵', copper:'🟠', coal:'⚫', quartz:'⬜',
+    ancient_debris:'🟤', nether_gold:'🟡',
   };
   function biomeEmoji(name) {
     const n = String(name || '');
@@ -520,6 +525,12 @@
     render();
   };
 
+  $('#addOre').onclick = () => {
+    conds.push({ id: 'o' + (nextId++), kind: 'ore', mat: 'diamond',
+                 count: ORE_DEFAULT.diamond, within: 64, of: 'origin' });
+    render();
+  };
+
   // Measured on this machine at ~98 seeds/s (locating a stronghold costs ~10ms).
   const EYE_TIME = {0:'instant',1:'instant',2:'instant',3:'instant',4:'instant',
     5:'~3 s', 6:'~20 s', 7:'~4 min', 8:'~50 min', 9:'~18 hours',
@@ -571,6 +582,40 @@
         const cnt = el('input'); cnt.type='number'; cnt.value=c.count; cnt.min=1; cnt.title='minimum count';
         cnt.onchange = e => c.count = Math.max(1, +e.target.value||1);
         g2.append(it, cnt); d.append(g2);
+        box.append(d);
+        return;
+      }
+      if (c.kind === 'ore') {
+        const top = el('div','top');
+        top.append(mkIcon('item', c.mat), el('span','cid', c.id), el('span','dim','ORE DENSITY'));
+        const x = el('button','tiny x','×');
+        x.onclick = () => { conds.splice(i,1); render(); };
+        top.append(x); d.append(top);
+
+        const g = el('div','grid');
+        const ms = el('select');
+        ORE_MATERIALS.forEach(n => {
+          const o = el('option', null, n.replace(/_/g,' ')); o.value = n;
+          if (n === c.mat) o.selected = true; ms.append(o);
+        });
+        ms.onchange = e => { c.mat = e.target.value; c.count = ORE_DEFAULT[c.mat] || 1; render(); };
+        const w = el('input'); w.type='number'; w.value=c.within; w.min=16; w.max=256; w.step=16;
+        w.title='radius in blocks (all depths)';
+        w.onchange = e => c.within = Math.max(16, Math.min(256, +e.target.value||64));
+        g.append(ms, w); d.append(g);
+
+        const g2 = el('div','grid');
+        const lab = el('div');
+        lab.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+        lab.textContent = 'at least (blocks)';
+        const cnt = el('input'); cnt.type='number'; cnt.value=c.count; cnt.min=1;
+        cnt.title='minimum ore blocks in range';
+        cnt.onchange = e => c.count = Math.max(1, +e.target.value||1);
+        g2.append(lab, cnt); d.append(g2);
+
+        const note = el('div','note');
+        note.textContent = 'Counts every ore block at all depths in the radius — a richness proxy, not what you’d mine. Expensive; pair with a structure to filter first.';
+        d.append(note);
         box.append(d);
         return;
       }
@@ -657,6 +702,15 @@
 
   const isRuinedPortal = n => n === 'ruined_portal' || n === 'ruined_portal_nether';
 
+  // Mirrors the material table in src/ore.c. Overworld first, then nether.
+  const ORE_MATERIALS = ['diamond','iron','gold','emerald','redstone','lapis',
+    'copper','coal','quartz','ancient_debris','nether_gold'];
+  // A sensible starting threshold per material at the default 64-block radius,
+  // so the count field isn't a mystery number. These are rough medians.
+  const ORE_DEFAULT = {diamond:1400, iron:4000, gold:1200, emerald:20,
+    redstone:1900, lapis:1300, copper:4500, coal:5500, quartz:11000,
+    ancient_debris:90, nether_gold:3800};
+
   // ---- build the query ---------------------------------------------------
   function buildQuery() {
     return {
@@ -665,6 +719,8 @@
         if (c.kind === 'eyes') return { id: c.id, eyes: c.eyes };
         if (c.kind === 'loot') return { id: c.id, within: c.within,
           loot: { structure: c.struct, item: c.item, count: c.count } };
+        if (c.kind === 'ore') return { id: c.id, ore: c.mat, count: c.count,
+          within: c.within, of: c.of };
         const o = { id: c.id, within: c.within, of: c.of };
         if (c.kind === 'structure') {
           o.structure = c.name;
@@ -861,7 +917,7 @@
           const desc = el('button','tiny','describe');
           desc.onclick = () => describe(s.seed);
           n.append(num, desc); box.append(n);
-          if (s.places.length || s.spawn || s.portal || s.loot) {
+          if (s.places.length || s.spawn || s.portal || s.loot || s.ore) {
             const t = el('table');
             const idCell = (cat, name, label) => {
               const td = el('td','id');
@@ -887,6 +943,13 @@
               tr.append(idCell('item', l.item, l.id.replace(/_/g,' ')),
                         el('td',null,`x=${l.x}  z=${l.z}`),
                         el('td','d', `${l.count} ${l.item.replace(/_/g,' ')}`));
+              t.append(tr);
+            });
+            (s.ore || []).forEach(o => {
+              const tr = el('tr');
+              tr.append(idCell('item', o.material, o.material.replace(/_/g,' ')),
+                        el('td',null,`x=${o.x}  z=${o.z}`),
+                        el('td','d', `${o.count.toLocaleString()} within ${o.within}`));
               t.append(tr);
             });
             s.places.forEach(p => {

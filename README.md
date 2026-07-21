@@ -253,6 +253,38 @@ specific item rare is the loot table, not the tool: a diamond in a desert
 pyramid is roughly 1 in a few hundred pyramids, which is why the default radius
 is small (a stray large radius rolls loot for thousands of instances per seed).
 
+## Ore density
+
+Find seeds rich in a material near a point:
+
+```json
+{ "id": "dia", "ore": "diamond", "count": 1400, "within": 64, "of": "origin" }
+```
+
+This counts **every ore block of that material at all depths** within the
+radius, deduplicated across the generation features that place it — a richness
+proxy, not the handful you would actually mine. cubiomes reproduces Minecraft's
+ore placement exactly (`getOreConfig` → `generateOres`), and matching on the
+*placed block* rather than a hardcoded feature list means "diamond" captures the
+regular, buried, large, and medium diamond features in whatever version you
+pick. Materials: `diamond`, `iron`, `gold`, `emerald`, `redstone`, `lapis`,
+`copper`, `coal` (overworld); `quartz`, `ancient_debris`, `nether_gold`
+(nether). `of` may be `origin`, `spawn`, or another condition's structure.
+
+It is the **most expensive** condition — a per-chunk cost over the whole search
+disc — so the planner always runs it last, only for seeds that already cleared
+the cheap filters. Radius is capped at 256 and defaults to 64; as the *only*
+condition it will crawl, so pair it with a structure. `tools/checkore` re-counts
+independently, and the test suite confirms every reported count reproduces
+exactly (`find` == `checkore`) and clears the requested threshold.
+
+## Versions
+
+The engine (xpple/cubiomes) generates up to **MC 26.2**, and the UI defaults to
+it — pick any version from 26.2 back to 1.12. A finder generates for exactly the
+version you choose; it cannot infer one, and structure/biome availability and
+ore placement all shift between versions, so the choice is load-bearing.
+
 Every reported count is re-derived independently by `tools/checkloot.c` in the
 suite, so the numbers aren't a plumbing artefact.
 
@@ -424,6 +456,8 @@ tools/confidence.c  measures how much the engine actually verifies each structur
 tools/checkeyes.c   recomputes an end portal's eye count independently
 tools/checkloot.c   recomputes a structure's chest loot independently
 tools/checkportal.c recomputes a ruined portal's buried/surface variant independently
+tools/checkore.c    recounts a material's ore blocks around a point independently
+src/ore.{h,c}       ore-density counting (generateOres), material-by-block matching
 tools/lootitems.c   dumps the items each structure's loot tables can produce
 src/loot.{h,c}      per-thread loot-table cache + item counting
 tools/vocab.c       dumps valid structures/biomes per version (ask.py reads this)

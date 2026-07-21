@@ -7,6 +7,7 @@
 // number that tells you whether the query is selective enough to be fast.
 #include "query.h"
 #include "loot.h"
+#include "ore.h"
 #include "explain.h"
 #include "util.h"
 #include <stdio.h>
@@ -174,6 +175,13 @@ int main(int argc, char **argv)
                     if (!strncmp(it, "minecraft:", 10)) it += 10;
                     printf("   %-14s x=%6d z=%6d   %d %s\n", q.cond[c].id,
                            h->m.pos[c].x, h->m.pos[c].z, h->m.lootCount[c], it);
+                    continue;
+                }
+                if (q.cond[c].type == CT_ORE) {
+                    int nm; const OreMaterial *tab = oreMaterials(&nm);
+                    printf("   %-14s x=%6d z=%6d   %d %s ore within %d\n", q.cond[c].id,
+                           h->m.pos[c].x, h->m.pos[c].z, h->m.oreCount[c],
+                           tab[q.cond[c].oreMat].name, q.cond[c].within);
                     continue;
                 }
                 if (q.cond[c].type != CT_STRUCTURE) continue;

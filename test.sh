@@ -28,7 +28,8 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/vocab.c  >/tmp/sc_test/b2 2>&1 \
 && ./build.sh tools/xval.c   >/tmp/sc_test/b3 2>&1 \
 && ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1 \n&& ./build.sh tools/checkeyes.c >/tmp/sc_test/b7 2>&1 \n&& ./build.sh tools/checkloot.c >/tmp/sc_test/b8 2>&1 && ./build.sh tools/lootitems.c >/tmp/sc_test/b9 2>&1 \
-&& ./build.sh tools/checkportal.c >/tmp/sc_test/b10 2>&1; then
+&& ./build.sh tools/checkportal.c >/tmp/sc_test/b10 2>&1 \
+&& ./build.sh tools/checkore.c >/tmp/sc_test/b11 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -240,6 +241,33 @@ done < <(./build/find.exe /tmp/sc_test/rps.json 300000 16 2>/dev/null | grep -E 
 [ "$ver_cnt" -ge 5 ] && [ "$bad_cnt" -eq 0 ] \
   && ok "surface filter: all $ver_cnt matched portals independently confirmed surface" \
   || bad "surface filter admitted a buried/mismatched portal" "checked=$ver_cnt bad=$bad_cnt"
+
+# Ore density counts Minecraft's ore placement (getOreConfig -> generateOres),
+# deduped across configs. Every reported count must reproduce exactly under an
+# independent re-count (checkore), and every result must clear the threshold.
+section "ore density search"
+check_err "unknown ore rejected" \
+  '{"version":"1.21","conditions":[{"id":"o","ore":"unobtanium","count":1,"within":64}]}' \
+  "unknown ore"
+cat > /tmp/sc_test/ore.json <<'EOF'
+{"version":"1.21","conditions":[
+  {"id":"v","structure":"village","within":600,"of":"origin"},
+  {"id":"dia","ore":"diamond","count":1200,"of":"v","within":64}]}
+EOF
+./build/find.exe /tmp/sc_test/ore.json 300000 16 2>/dev/null > /tmp/sc_test/ore.out
+ore_bad=0; ore_low=0; ore_n=0
+while read -r oseed ox oz ocnt; do
+  chk=$(./build/checkore.exe "$oseed" diamond 1.21 "$ox" "$oz" 64 2>/dev/null | grep -oE 'count=[0-9]+' | cut -d= -f2)
+  ore_n=$((ore_n+1))
+  [ "$ocnt" != "$chk" ] && ore_bad=$((ore_bad+1))
+  [ "$ocnt" -lt 1200 ] && ore_low=$((ore_low+1))
+done < <(awk '/^SEED/{s=$2} /dia /{gsub(/x=|z=/,""); print s, $2, $3, $4}' /tmp/sc_test/ore.out | head -8)
+[ "$ore_n" -ge 5 ] && [ "$ore_bad" -eq 0 ] \
+  && ok "ore counts reproduce exactly under independent re-count ($ore_n checked)" \
+  || bad "ore count disagreed with checkore" "checked=$ore_n mismatch=$ore_bad"
+[ "$ore_low" -eq 0 ] \
+  && ok "every ore result clears the requested threshold" \
+  || bad "ore result below threshold" "under=$ore_low"
 
 
 # ---------------------------------------------------------------- dimensions
