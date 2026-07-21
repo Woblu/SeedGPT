@@ -30,7 +30,8 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1 \n&& ./build.sh tools/checkeyes.c >/tmp/sc_test/b7 2>&1 \n&& ./build.sh tools/checkloot.c >/tmp/sc_test/b8 2>&1 && ./build.sh tools/lootitems.c >/tmp/sc_test/b9 2>&1 \
 && ./build.sh tools/checkportal.c >/tmp/sc_test/b10 2>&1 \
 && ./build.sh tools/checkore.c >/tmp/sc_test/b11 2>&1 \
-&& ./build.sh tools/checkvariant.c >/tmp/sc_test/b12 2>&1; then
+&& ./build.sh tools/checkvariant.c >/tmp/sc_test/b12 2>&1 \
+&& ./build.sh tools/checkrpchest.c >/tmp/sc_test/b13 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -423,6 +424,27 @@ done < /tmp/sc_test/loot.tsv
 
 check_err "unsupported loot structure rejected"   '{"version":"1.21","conditions":[{"id":"c","loot":{"structure":"mansion","item":"diamond"}}]}'   "not supported"
 check_err "loot missing item rejected"   '{"version":"1.21","conditions":[{"id":"c","loot":{"structure":"igloo"}}]}'   "needs"
+
+# Ruined portal chest loot has no getStructurePieces case; it is computed from
+# template data (chest offset transformed like Minecraft, decoration-seed loot
+# seed). Every reported count must reproduce under the independent checkrpchest
+# at the exact matched position -- the same bar as the five above.
+section "ruined portal chest loot"
+cat > /tmp/sc_test/rploot.json <<'EOF'
+{"version":"1.21","conditions":[
+ {"id":"rp","loot":{"structure":"ruined_portal","item":"golden_apple","count":1},"within":3000}]}
+EOF
+FIND_TSV=/tmp/sc_test/rp.tsv ./build/find.exe /tmp/sc_test/rploot.json 400000 16 > /tmp/sc_test/rp.log 2>&1
+rpn=$(grep -c '^SEED' /tmp/sc_test/rp.log)
+[ "$rpn" -gt 0 ]   && ok "ruined portal loot query returns seeds ($rpn)"   || bad "ruined portal loot found nothing" "$(tail -3 /tmp/sc_test/rp.log)"
+rp_bad=0; rp_n=0
+while IFS=$'	' read -r s a x z; do
+  got=$(./build/checkrpchest.exe "$s" 1.21 --at "$x" "$z" golden_apple 2>/dev/null | grep -oE 'golden_apple=[0-9]+' | cut -d= -f2)
+  rp_n=$((rp_n+1)); [ -z "$got" ] || [ "$got" -lt 1 ] && rp_bad=$((rp_bad+1))
+done < /tmp/sc_test/rp.tsv
+[ "$rp_n" -ge 5 ] && [ "$rp_bad" -eq 0 ] \
+  && ok "ruined portal loot reproduces independently at the matched chest ($rp_n)" \
+  || bad "ruined portal loot did not reproduce" "checked=$rp_n bad=$rp_bad"
 
 
 # ---------------------------------------------------------------- ui

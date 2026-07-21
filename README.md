@@ -252,11 +252,11 @@ Search for a structure whose chests hold a rare item:
 ```
 
 Supported structures: `desert_pyramid`, `jungle_temple`, `igloo`, `outpost`,
-`shipwreck` (the ones cubiomes can enumerate chests for). The item list per
-structure is exposed at `/api/lootitems` and in the UI dropdown, so you can
-only ask for something that can actually appear there. `count` aggregates
-across every chest in an instance, and the search scans **all** instances
-within the radius — a farther pyramid with the diamond still counts.
+`shipwreck`, and `ruined_portal`. The item list per structure is exposed at
+`/api/lootitems` and in the UI dropdown, so you can only ask for something that
+can actually appear there. `count` aggregates across every chest in an instance,
+and the search scans **all** instances within the radius — a farther pyramid
+with the diamond still counts.
 
 Rolling a chest is ~5 us, cheap next to the ~42 us structure viability check,
 so a loot search costs about the same as a plain structure search. What makes a
@@ -264,27 +264,46 @@ specific item rare is the loot table, not the tool: a diamond in a desert
 pyramid is roughly 1 in a few hundred pyramids, which is why the default radius
 is small (a stray large radius rolls loot for thousands of instances per seed).
 
-### Why only these five
+### Ruined portals — computed, not enumerated
 
-Loot search needs a chest's exact position and loot seed, which come from
-`getStructurePieces`. Three tempting additions were investigated and each was
-rejected on evidence, not effort:
+The first five come straight from `getStructurePieces`. Ruined portals have **no**
+`getStructurePieces` chest case, so their single chest is computed directly
+([`src/loot.c`](src/loot.c) `rpChest*`), and every step is pinned to an
+independent reference so it earns the same trust:
 
-- **Fortress** — `getFortressPieces` stores its buffer bound (`env.nmax`) but
-  never checks it, so a large fortress writes past the piece array and crashes
-  the search. Unsafe until the engine bounds it.
-- **Bastion** — the engine simulates only some pieces, and the loot the search
-  reported did **not** reproduce under independent verification (`find`
-  over-counted `ancient_debris` versus `checkloot` at the same chest). A result
-  the verifier can't confirm violates this project's core rule, so it is not
-  shipped. The mismatch is exactly what the verification pass exists to catch.
-- **Ruined portal** — has no chest enumeration in the engine at all; producing
-  one would mean reimplementing the portal schematics with no way to verify
-  them independently.
+- **Chest offset** per template (portal_1…10, giant_portal_1…3) from
+  KaptainWutax/FeatureUtils; its template **sizes** match cubiomes' own table
+  12/13 exactly (portal_5 differs only in Y, which doesn't affect the chest's
+  x/z), confirming the variant indexing lines up.
+- **World position** via Minecraft's template transform — verified **identical
+  to MCUtils' `BPos.transform` for all 104** variant/rotation/mirror cases.
+- **Loot seed** = the decoration seed at the chest's chunk, salt **40005** (equal
+  in cubiomes and FeatureUtils), with **no** pre-consumption — ruined portal's
+  `getSpecificCalls()` is null (unlike igloo, which discards a `nextLong`, or
+  desert pyramid, which draws a `nextInt(3)`; both cross-checked here).
 
-So the list is five, and every one of those five has its loot re-derived from
-scratch by `tools/checkloot` in the test suite. Fewer structures, but each one
-you can trust.
+`tools/checkrpchest` re-derives the chest and loot independently, and the suite
+confirms every search result reproduces at the matched chest. (The buried/
+fail-to-generate caveat above still applies to the *portal* — but the chest
+contents, if it generates, are exact. Add `"surface": true` to a structure
+condition to skip the buried ones.)
+
+### Loot generation is single-threaded
+
+cubiomes' loot contexts are **singletons** — `init_*()` returns `&staticContext`,
+so every worker thread shares one context per table and `generate_loot` mutates
+its RNG state and output buffer in place. Concurrent rolls therefore race, which
+silently made loot counts depend on thread timing. `src/loot.c` serialises the
+roll+read with a small spinlock; the ~5 µs roll is a tiny fraction of the
+per-seed cost and the biome/structure work stays parallel, so throughput is
+unaffected in practice. Two structures were investigated and left out for hard
+reasons: **fortress** (`getFortressPieces` never enforces its buffer bound, so a
+large fortress overflows and crashes) and **bastion** (the engine simulates only
+some pieces and its reported loot did not reproduce under verification).
+
+Every supported structure has its loot re-derived from scratch in the test suite
+(`tools/checkloot`, `tools/checkrpchest`) — fewer structures, but each one you
+can trust.
 
 ## Ore density
 
@@ -511,6 +530,7 @@ tools/checkloot.c   recomputes a structure's chest loot independently
 tools/checkportal.c recomputes a ruined portal's buried/surface variant independently
 tools/checkore.c    recounts a material's ore blocks around a point independently
 tools/checkvariant.c re-reads a structure's variant flags (zombie/basement/giant)
+tools/checkrpchest.c re-derives a ruined portal's chest position + loot independently
 src/ore.{h,c}       ore-density counting (generateOres), material-by-block matching
 tools/lootitems.c   dumps the items each structure's loot tables can produce
 src/loot.{h,c}      per-thread loot-table cache + item counting

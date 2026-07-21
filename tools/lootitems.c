@@ -19,6 +19,7 @@ static const char *tablesFor(int type, const char **out)
     case Igloo:          out[0]="igloo_chest"; return NULL;
     case Outpost:        out[0]="pillager_outpost"; return NULL;
     case Shipwreck:      out[0]="shipwreck_treasure"; out[1]="shipwreck_supply"; out[2]="shipwreck_map"; return NULL;
+    case Ruined_Portal:  out[0]="ruined_portal"; return NULL;
     }
     return NULL;
 }
