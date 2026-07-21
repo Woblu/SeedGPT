@@ -36,6 +36,13 @@ hosted page; the server exists to bridge the browser to `build/find.exe`.
 The natural-language box needs an Anthropic key; everything else works without
 one.
 
+The interface is styled as a Minecraft GUI — beveled stone panels, item-slot
+condition cards, and a `☀ / ☾` toggle between a dark **Cave** theme and a
+light **Overworld** one. Structures and items show emoji icons out of the box;
+drop your own PNGs into [`assets/`](assets/README.md) to replace them (the tool
+bundles no Mojang textures). Nothing is required — the built-in look stands
+alone.
+
 ### Command line
 
 Describe what you want in English:
@@ -376,8 +383,9 @@ caps at 1.21 — it cannot generate current worlds), and **not** `cubiomes-viewe
 ## Layout
 
 ```
-serve.py            local web UI server (loopback only)
-ui/index.html       the UI
+serve.py            local web UI server (loopback only) + /assets static route
+ui/index.html       the UI (Minecraft GUI theme, emoji/PNG icon system)
+assets/             optional user-provided structure/item PNGs (see its README)
 ask.py              English -> Claude -> condition JSON -> find
 test.sh             regression suite (16 checks; ./test.sh -v to see commands)
 build.sh            build everything

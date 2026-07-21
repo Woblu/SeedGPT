@@ -5,242 +5,302 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Seed Finder</title>
 <style>
+  /* ---- Minecraft GUI aesthetic -------------------------------------------
+     Beveled stone panels, item-slot cards, pixel-rendered icons. Two themes:
+     "cave" (dark stone, default) and "day" (Overworld). Committed to one
+     cohesive visual world rather than a neutral document look. ---------- */
   :root {
-    --bg:        #F7F8F4;
-    --panel:     #FFFFFF;
-    --panel-2:   #F0F2EC;
-    --ink:       #14180F;
-    --ink-soft:  #4A5142;
-    --ink-faint: #7B8372;
-    --rule:      #DDE0D5;
-    --rule-soft: #EAEDE4;
-    --lapis:     #3A6EA5;
-    --lapis-dim: #E4EDF7;
-    --good:      #2F6B4F;
-    --warn:      #8A6A1C;
-    --bad:       #9B3F32;
-    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    /* cave (dark) */
+    --bg0:      #17181c;
+    --bg1:      #202127;
+    --stone:    #3b3d44;
+    --stone-lt: #55575f;
+    --stone-dk: #2a2b31;
+    --slot:     #1b1c20;
+    --slot-edge:#101014;
+    --ink:      #ECECEC;
+    --ink-soft: #B9BCC4;
+    --ink-faint:#7E828C;
+    --edge-lt:  rgba(255,255,255,.16);
+    --edge-dk:  rgba(0,0,0,.45);
+    --grass:    #6DBE45;   /* XP / grass green */
+    --grass-dk: #4E8F2E;
+    --dirt:     #8A5A3B;
+    --diamond:  #4DD0E1;
+    --gold:     #F5C542;
+    --redstone: #D64545;
+    --emerald:  #17C964;
+    --sky:      #7FB4E6;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg:#0F120D; --panel:#161A13; --panel-2:#1D2219; --ink:#E6E9DE;
-      --ink-soft:#AEB5A3; --ink-faint:#79806E; --rule:#2A2F25; --rule-soft:#20251C;
-      --lapis:#7BA8D9; --lapis-dim:#1B2836; --good:#6FB48D; --warn:#D4AC5A; --bad:#D98A7B;
-    }
-  }
-  :root[data-theme="dark"] {
-    --bg:#0F120D; --panel:#161A13; --panel-2:#1D2219; --ink:#E6E9DE;
-    --ink-soft:#AEB5A3; --ink-faint:#79806E; --rule:#2A2F25; --rule-soft:#20251C;
-    --lapis:#7BA8D9; --lapis-dim:#1B2836; --good:#6FB48D; --warn:#D4AC5A; --bad:#D98A7B;
-  }
-  :root[data-theme="light"] {
-    --bg:#F7F8F4; --panel:#FFFFFF; --panel-2:#F0F2EC; --ink:#14180F;
-    --ink-soft:#4A5142; --ink-faint:#7B8372; --rule:#DDE0D5; --rule-soft:#EAEDE4;
-    --lapis:#3A6EA5; --lapis-dim:#E4EDF7; --good:#2F6B4F; --warn:#8A6A1C; --bad:#9B3F32;
+  :root[data-theme="day"] {
+    --bg0:      #A8C7E8;
+    --bg1:      #cfe0f2;
+    --stone:    #C6B48C;   /* sandstone */
+    --stone-lt: #DECBA0;
+    --stone-dk: #A8946A;
+    --slot:     #efe6cf;
+    --slot-edge:#b8a677;
+    --ink:      #232018;
+    --ink-soft: #4A4636;
+    --ink-faint:#7C755E;
+    --edge-lt:  rgba(255,255,255,.5);
+    --edge-dk:  rgba(0,0,0,.28);
+    --grass:    #4E8F2E;
+    --grass-dk: #3B6E22;
+    --diamond:  #1E88A8;
+    --gold:     #B8860B;
+    --redstone: #B23A3A;
+    --emerald:  #128a45;
+    --sky:      #3A6EA5;
   }
 
   * { box-sizing: border-box; }
+  html { image-rendering: pixelated; }
   body {
-    margin:0; background:var(--bg); color:var(--ink);
-    font-family:var(--sans); font-size:14px; line-height:1.5;
-    -webkit-font-smoothing:antialiased;
+    margin: 0;
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    background:
+      repeating-linear-gradient(0deg,  rgba(0,0,0,.05) 0 2px, transparent 2px 4px),
+      repeating-linear-gradient(90deg, rgba(0,0,0,.05) 0 2px, transparent 2px 4px),
+      var(--bg0);
+    -webkit-font-smoothing: antialiased;
   }
+  b, strong { font-weight: 700; }
 
+  /* the pressable stone button -- the signature MC element */
+  .mcbtn, button {
+    font-family: var(--sans); font-size: 13px; font-weight: 600;
+    color: var(--ink);
+    background: linear-gradient(var(--stone-lt), var(--stone) 55%, var(--stone-dk));
+    border: 2px solid var(--slot-edge);
+    box-shadow: inset 2px 2px 0 var(--edge-lt), inset -2px -2px 0 var(--edge-dk);
+    padding: 8px 12px; cursor: pointer;
+    text-shadow: 1px 1px 0 rgba(0,0,0,.35);
+    transition: filter .08s;
+  }
+  :root[data-theme="day"] button { text-shadow: none; }
+  button:hover:not(:disabled) { filter: brightness(1.12); border-color: var(--grass-dk); }
+  button:active:not(:disabled) {
+    box-shadow: inset -2px -2px 0 var(--edge-lt), inset 2px 2px 0 var(--edge-dk);
+    filter: brightness(.94);
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary {
+    background: linear-gradient(#7ed957, var(--grass) 55%, var(--grass-dk));
+    color: #10240a; text-shadow: 1px 1px 0 rgba(255,255,255,.2);
+  }
+  button.tiny { padding: 4px 8px; font-size: 11px; }
+  .btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+  input, select, textarea {
+    font-family: var(--sans); font-size: 13px; color: var(--ink);
+    background: var(--slot);
+    border: 2px solid;
+    border-color: var(--slot-edge) var(--stone-lt) var(--stone-lt) var(--slot-edge);
+    padding: 7px 9px; width: 100%;
+  }
+  input[type=number] { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  textarea { resize: vertical; min-height: 56px; line-height: 1.45; }
+  select { cursor: pointer; }
+  :focus-visible { outline: 3px solid var(--grass); outline-offset: 1px; }
+
+  /* ---- header ---- */
   header {
-    display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
-    padding:14px 20px; border-bottom:1px solid var(--rule); background:var(--panel);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 12px 18px;
+    background: linear-gradient(var(--stone-lt), var(--stone));
+    border-bottom: 3px solid var(--slot-edge);
+    box-shadow: inset 0 2px 0 var(--edge-lt);
   }
-  header h1 { font-size:15px; font-weight:650; margin:0; letter-spacing:-0.01em; }
-  header .sub { font-family:var(--mono); font-size:11px; color:var(--ink-faint); }
-  header .spacer { flex:1; }
+  header .logo { font-size: 22px; line-height: 1; filter: drop-shadow(1px 2px 0 rgba(0,0,0,.4)); }
+  header h1 {
+    font-family: var(--mono); font-size: 15px; font-weight: 700; margin: 0;
+    letter-spacing: .06em; text-transform: uppercase;
+    text-shadow: 2px 2px 0 rgba(0,0,0,.35);
+  }
+  :root[data-theme="day"] header h1 { text-shadow: 1px 1px 0 rgba(255,255,255,.4); }
+  header .sub { font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); }
+  header .spacer { flex: 1; }
 
-  .wrap { display:grid; grid-template-columns:1fr; gap:0; }
-  @media (min-width:960px) { .wrap { grid-template-columns:400px minmax(0,1fr); } }
-
-  .col { padding:20px; min-width:0; }
-  .col.left { border-right:1px solid var(--rule); }
-  @media (max-width:959px) { .col.left { border-right:none; border-bottom:1px solid var(--rule); } }
+  /* ---- layout ---- */
+  .wrap { display: grid; grid-template-columns: 1fr; gap: 0; }
+  @media (min-width: 980px) { .wrap { grid-template-columns: 420px minmax(0,1fr); } }
+  .col { padding: 18px; min-width: 0; }
+  .col.left {
+    background: var(--bg1);
+    border-right: 3px solid var(--slot-edge);
+  }
+  @media (max-width: 979px) { .col.left { border-right: none; border-bottom: 3px solid var(--slot-edge); } }
 
   h2 {
-    font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.1em;
-    color:var(--ink-faint); margin:0 0 10px;
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .1em;
+    color: var(--grass); margin: 0 0 9px;
+    display: flex; align-items: center; gap: 7px;
   }
-  section + section { margin-top:26px; }
+  h2::before { content: ""; width: 8px; height: 8px; background: var(--grass);
+               box-shadow: 2px 2px 0 var(--grass-dk); }
+  section + section { margin-top: 22px; }
+  label { display: block; font-size: 11px; color: var(--ink-soft); margin-bottom: 4px; }
+  .hint { font-size: 11px; color: var(--ink-faint); margin-top: 6px; }
 
-  label { display:block; font-size:11px; color:var(--ink-soft); margin-bottom:4px; }
-  input, select, textarea, button {
-    font-family:inherit; font-size:13px; color:var(--ink);
-    background:var(--panel); border:1px solid var(--rule); border-radius:5px;
-    padding:7px 9px; width:100%;
-  }
-  input[type=number] { font-family:var(--mono); font-variant-numeric:tabular-nums; }
-  textarea { resize:vertical; min-height:58px; line-height:1.45; }
-  select { cursor:pointer; }
-  :focus-visible { outline:2px solid var(--lapis); outline-offset:1px; }
-
-  button {
-    cursor:pointer; font-weight:550; width:auto;
-    background:var(--panel-2); transition:background .12s, border-color .12s;
-  }
-  button:hover:not(:disabled) { border-color:var(--lapis); }
-  button:disabled { opacity:.45; cursor:not-allowed; }
-  button.primary { background:var(--lapis); border-color:var(--lapis); color:#fff; }
-  @media (prefers-color-scheme: dark) { button.primary { color:#0F120D; } }
-  :root[data-theme="dark"] button.primary { color:#0F120D; }
-  :root[data-theme="light"] button.primary { color:#fff; }
-  button.tiny { padding:3px 7px; font-size:11px; }
-  .btnrow { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
-
-  /* ---- conditions ---- */
+  /* ---- condition cards = item slots ---- */
   .cond {
-    border:1px solid var(--rule); border-left:3px solid var(--lapis);
-    border-radius:5px; padding:10px; margin-bottom:9px; background:var(--panel);
+    display: block; margin-bottom: 9px; padding: 10px;
+    background: var(--stone-dk);
+    border: 2px solid;
+    border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
+    border-left: 4px solid var(--grass);
   }
-  .cond.biome { border-left-color:var(--good); }
-  .cond .top { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .cond.biome { border-left-color: var(--emerald); }
+  .cond.eyes  { border-left-color: var(--diamond); }
+  .cond.loot  { border-left-color: var(--gold); }
+  .cond .top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .cond .ic { width: 22px; height: 22px; flex: none; }
   .cond .cid {
-    font-family:var(--mono); font-size:11px; font-weight:600;
-    background:var(--panel-2); border:1px solid var(--rule-soft);
-    border-radius:3px; padding:2px 6px;
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    background: var(--slot); border: 1px solid var(--slot-edge);
+    padding: 2px 6px; color: var(--ink);
   }
   .cond .dim {
-    font-family:var(--mono); font-size:9.5px; letter-spacing:.07em; text-transform:uppercase;
-    color:var(--ink-faint);
+    font-family: var(--mono); font-size: 9px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-faint);
   }
-  .cond .grid { display:grid; grid-template-columns:1fr 78px; gap:7px; }
-  .cond .grid.full { grid-template-columns:1fr; }
-  .cond .x { margin-left:auto; }
+  .cond .grid { display: grid; grid-template-columns: 1fr 76px; gap: 7px; }
+  .cond .grid.full { grid-template-columns: 1fr; }
+  .cond .x { margin-left: auto; }
+
+  .ic {
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 17px; line-height: 1; image-rendering: pixelated;
+    filter: drop-shadow(1px 1px 0 rgba(0,0,0,.4));
+  }
+  .ic img { width: 100%; height: 100%; image-rendering: pixelated; }
 
   .empty {
-    border:1px dashed var(--rule); border-radius:5px; padding:16px;
-    text-align:center; color:var(--ink-faint); font-size:12px;
+    border: 2px dashed var(--stone-lt); padding: 16px;
+    text-align: center; color: var(--ink-faint); font-size: 12px;
   }
 
-  /* ---- output ---- */
+  /* ---- output panel ---- */
   .card {
-    background:var(--panel); border:1px solid var(--rule);
-    border-radius:6px; padding:14px 16px; margin-bottom:14px;
+    background: var(--stone);
+    border: 2px solid;
+    border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
+    box-shadow: inset 1px 1px 0 var(--edge-lt);
+    padding: 14px 16px; margin-bottom: 14px;
   }
   .card h3 {
-    font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.1em;
-    color:var(--ink-faint); margin:0 0 12px;
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .09em;
+    color: var(--ink-soft); margin: 0 0 12px;
   }
+  .card p { margin: 0 0 10px; font-size: 13px; color: var(--ink-soft); }
+  .card p:last-child { margin-bottom: 0; }
 
-  .pass { margin-bottom:14px; }
-  .pass:last-child { margin-bottom:0; }
-  .pass .hd {
-    font-family:var(--mono); font-size:10.5px; color:var(--ink-faint);
-    margin-bottom:7px; display:flex; justify-content:space-between; gap:10px;
-  }
-  .step { display:flex; align-items:center; gap:9px; margin-bottom:5px; }
-  .step .n {
-    font-family:var(--mono); font-size:10px; color:var(--ink-faint);
-    width:14px; flex:none; text-align:right;
-  }
-  .step .d { font-size:12.5px; flex:1; min-width:0; }
-  .step .bar { flex:none; width:110px; height:5px; background:var(--rule-soft); border-radius:2px; overflow:hidden; }
-  .step .bar i { display:block; height:100%; background:var(--lapis); }
-  .step .bar i.slow { background:var(--warn); }
-  .step .c {
-    font-family:var(--mono); font-size:10.5px; color:var(--ink-faint);
-    width:74px; flex:none; text-align:right; font-variant-numeric:tabular-nums;
-  }
+  .pass { margin-bottom: 14px; }
+  .pass:last-child { margin-bottom: 0; }
+  .pass .hd { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); margin-bottom: 7px; }
+  .step { display: flex; align-items: center; gap: 9px; margin-bottom: 5px; }
+  .step .n { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); width: 14px; flex: none; text-align: right; }
+  .step .d { font-size: 12.5px; flex: 1; min-width: 0; }
+  .step .bar { flex: none; width: 108px; height: 8px; background: var(--slot); border: 1px solid var(--slot-edge); overflow: hidden; }
+  .step .bar i { display: block; height: 100%; background: var(--grass); }
+  .step .bar i.slow { background: var(--redstone); }
+  .step .c { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); width: 72px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
 
   .note {
-    font-size:12px; color:var(--ink-soft); background:var(--lapis-dim);
-    border-radius:5px; padding:9px 11px; margin-top:10px;
+    font-size: 12px; color: var(--ink-soft);
+    background: var(--stone-dk); border-left: 3px solid var(--grass);
+    padding: 9px 11px; margin-top: 10px;
   }
-  .note.warn { background:color-mix(in srgb, var(--warn) 14%, transparent); }
-  .note.bad  { background:color-mix(in srgb, var(--bad) 14%, transparent); }
+  .note.warn { border-left-color: var(--gold); }
+  .note.bad  { border-left-color: var(--redstone); }
 
-  .stats { display:flex; flex-wrap:wrap; gap:20px; }
-  .stat .k {
-    font-family:var(--mono); font-size:9.5px; letter-spacing:.09em;
-    text-transform:uppercase; color:var(--ink-faint);
-  }
-  .stat .v {
-    font-family:var(--mono); font-size:17px; font-variant-numeric:tabular-nums;
-    margin-top:1px;
-  }
-  .stat .v.good { color:var(--good); }
-  .stat .v.warn { color:var(--warn); }
-  .stat .v.bad  { color:var(--bad); }
+  .stats { display: flex; flex-wrap: wrap; gap: 18px; }
+  .stat .k { font-family: var(--mono); font-size: 9px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); }
+  .stat .v { font-family: var(--mono); font-size: 18px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .stat .v.good { color: var(--grass); }
+  .stat .v.warn { color: var(--gold); }
+  .stat .v.bad  { color: var(--redstone); }
 
-  .funnel { height:7px; background:var(--rule-soft); border-radius:3px; overflow:hidden; margin:12px 0 4px; }
-  .funnel i { display:block; height:100%; background:var(--lapis); }
-  .funnel-l { font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); }
+  .funnel { height: 9px; background: var(--slot); border: 1px solid var(--slot-edge); overflow: hidden; margin: 12px 0 4px; }
+  .funnel i { display: block; height: 100%; background: var(--grass); }
+  .funnel-l { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
 
+  /* ---- seed = item entry ---- */
   .seed {
-    border:1px solid var(--rule); border-radius:5px; padding:10px 12px;
-    margin-bottom:8px; background:var(--panel);
+    display: block; margin-bottom: 8px; padding: 10px 12px;
+    background: var(--stone-dk);
+    border: 2px solid;
+    border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
   }
-  .seed .n {
-    display:flex; align-items:center; gap:9px; margin-bottom:6px;
-  }
+  .seed .n { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
   .seed .num {
-    font-family:var(--mono); font-size:14px; font-weight:600;
-    cursor:pointer; border-bottom:1px dashed var(--rule);
+    font-family: var(--mono); font-size: 14px; font-weight: 700;
+    cursor: pointer; color: var(--diamond); border-bottom: 1px dashed var(--stone-lt);
   }
-  .seed .num:hover { color:var(--lapis); border-bottom-color:var(--lapis); }
-  .seed table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:11.5px; }
-  .seed td { padding:1.5px 0; color:var(--ink-soft); font-variant-numeric:tabular-nums; }
-  .seed td.id { color:var(--ink); width:112px; }
-  .seed td.d { text-align:right; color:var(--ink-faint); }
-
-  .map { margin-bottom:12px; }
-  .map img {
-    display:block; width:100%; max-width:560px; height:auto;
-    border:1px solid var(--rule); border-radius:5px; image-rendering:pixelated;
-  }
-  .legend {
-    display:flex; flex-wrap:wrap; gap:5px 14px; margin-top:9px;
-    font-family:var(--mono); font-size:10.5px; color:var(--ink-faint);
-  }
-  .legend span { display:flex; align-items:center; gap:5px; }
-  .legend i { width:9px; height:9px; border-radius:2px; border:1px solid rgba(0,0,0,.4); }
-  .mapctl { display:flex; align-items:center; gap:8px; margin-bottom:9px; }
-  .mapctl label { margin:0; font-size:11px; }
-  .mapctl select { width:auto; padding:4px 7px; font-size:12px; }
+  .seed .num:hover { filter: brightness(1.2); border-bottom-color: var(--diamond); }
+  .seed table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11.5px; }
+  .seed td { padding: 2px 0; color: var(--ink-soft); font-variant-numeric: tabular-nums; vertical-align: middle; }
+  .seed td.id { color: var(--ink); width: 128px; }
+  .seed td.id .ic { width: 15px; height: 15px; font-size: 12px; margin-right: 5px; vertical-align: -2px; }
+  .seed td.d { text-align: right; color: var(--ink-faint); }
 
   pre {
-    font-family:var(--mono); font-size:11px; line-height:1.55;
-    background:var(--panel-2); border:1px solid var(--rule-soft); border-radius:5px;
-    padding:11px; overflow-x:auto; margin:0; white-space:pre;
+    font-family: var(--mono); font-size: 11px; line-height: 1.55;
+    background: var(--slot); border: 1px solid var(--slot-edge);
+    padding: 11px; overflow-x: auto; margin: 0; white-space: pre; color: var(--ink-soft);
   }
-  details { margin-top:10px; }
-  summary {
-    cursor:pointer; font-size:11px; color:var(--ink-faint);
-    font-family:var(--mono); user-select:none;
-  }
-  summary:hover { color:var(--lapis); }
-  details[open] summary { margin-bottom:8px; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; font-size: 11px; color: var(--ink-faint); font-family: var(--mono); user-select: none; }
+  summary:hover { color: var(--grass); }
+  details[open] summary { margin-bottom: 8px; }
 
-  .busy { color:var(--ink-faint); font-size:12.5px; display:flex; align-items:center; gap:8px; }
+  .busy { color: var(--ink-soft); font-size: 12.5px; display: flex; align-items: center; gap: 9px; }
   .busy::before {
-    content:""; width:11px; height:11px; border-radius:50%;
-    border:2px solid var(--rule); border-top-color:var(--lapis);
-    animation:spin .7s linear infinite;
+    content: ""; width: 14px; height: 14px;
+    background: var(--grass);
+    box-shadow: 4px 0 0 var(--stone-dk), 0 4px 0 var(--stone-dk);
+    animation: mcspin .6s steps(4) infinite;
   }
-  @keyframes spin { to { transform:rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .busy::before { animation:none; } }
+  @keyframes mcspin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .busy::before { animation: none; } }
 
   .err {
-    border:1px solid var(--bad); border-radius:5px; padding:10px 12px;
-    font-size:12.5px; background:color-mix(in srgb, var(--bad) 10%, transparent);
+    border: 2px solid var(--redstone); padding: 10px 12px;
+    font-size: 12.5px; background: var(--stone-dk);
   }
-  .err b { display:block; font-family:var(--mono); font-size:10px; letter-spacing:.08em;
-           text-transform:uppercase; color:var(--bad); margin-bottom:3px; }
-  .hint { font-size:11.5px; color:var(--ink-faint); margin-top:6px; }
+  .err b { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--redstone); margin-bottom: 3px; }
+
+  /* ---- map ---- */
+  .map { margin-bottom: 12px; }
+  .map img {
+    display: block; width: 100%; max-width: 560px; height: auto;
+    border: 3px solid var(--slot-edge); image-rendering: pixelated;
+    box-shadow: inset 0 0 0 1px var(--stone-lt);
+  }
+  .legend { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 9px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
+  .legend span { display: flex; align-items: center; gap: 5px; }
+  .legend i { width: 10px; height: 10px; border: 1px solid rgba(0,0,0,.5); }
+  .mapctl { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  .mapctl label { margin: 0; font-size: 11px; }
+  .mapctl select { width: auto; padding: 4px 7px; font-size: 12px; }
 </style>
 </head>
 <body>
 
 <header>
+  <span class="logo">⛏️</span>
   <h1>Seed Finder</h1>
   <span class="sub" id="engine">cubiomes · loading…</span>
   <span class="spacer"></span>
-  <button class="tiny" id="theme">theme</button>
+  <button class="tiny" id="theme">☀ / ☾</button>
 </header>
 
 <div class="wrap">
@@ -318,15 +378,81 @@
   const esc = s => String(s).replace(/[&<>"]/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+  // ---- icons -------------------------------------------------------------
+  // Emoji give instant character with zero downloads; if the user drops a PNG
+  // into assets/structures/<id>.png or assets/items/<id>.png it upgrades in
+  // place. `assets` records which files actually exist so we never point an
+  // <img> at a 404 (which flickers a broken-image glyph).
+  let assets = { structures: [], items: [], backdrop: false };
+
+  const STRUCT_EMOJI = {
+    mansion:'🏰', woodland_mansion:'🏰', village:'🏘️', monument:'🔱',
+    ocean_monument:'🔱', ancient_city:'🏛️', outpost:'🏴', pillager_outpost:'🏴',
+    desert_pyramid:'🏜️', jungle_temple:'🛕', jungle_pyramid:'🛕', swamp_hut:'🧙',
+    witch_hut:'🧙', igloo:'🧊', ruined_portal:'🌀', ruined_portal_nether:'🌀',
+    shipwreck:'⛵', ocean_ruin:'🌊', treasure:'💰', buried_treasure:'💰',
+    fortress:'🔥', nether_fortress:'🔥', bastion:'🐷', bastion_remnant:'🐷',
+    end_city:'🌃', trail_ruins:'🪨', trial_chambers:'⚔️', mineshaft:'⛏️',
+    stronghold:'📕', geode:'💜', fossil:'🦴', desert_well:'🪣', end_gateway:'🌌',
+  };
+  const ITEM_EMOJI = {
+    diamond:'💎', diamond_ore:'💎', emerald:'💚', emerald_ore:'💚',
+    gold_ingot:'🟡', gold_nugget:'🟡', golden_apple:'🍎',
+    enchanted_golden_apple:'🍏', iron_ingot:'⬜', iron_nugget:'⬜',
+    saddle:'🪮', name_tag:'🏷️', bell:'🔔', book:'📖', enchanted_book:'📚',
+    trident:'🔱', heart_of_the_sea:'💙', nautilus_shell:'🐚', tnt:'🧨',
+    music_disc:'💿', bone:'🦴', arrow:'🏹', bread:'🍞', wheat:'🌾',
+    apple:'🍎', obsidian:'⬛', ender_pearl:'🟣', gunpowder:'💥', string:'🧵',
+  };
+  function biomeEmoji(name) {
+    const n = String(name || '');
+    const rules = [['mushroom','🍄'],['desert','🏜️'],['badlands','🧱'],
+      ['mesa','🧱'],['jungle','🌴'],['bamboo','🎋'],['swamp','🐸'],
+      ['mangrove','🌿'],['ocean','🌊'],['beach','🏖️'],['river','💧'],
+      ['ice','❄️'],['frozen','❄️'],['snow','⛄'],['taiga','🌲'],
+      ['spruce','🌲'],['savanna','🦁'],['cherry','🌸'],['flower','🌷'],
+      ['sunflower','🌻'],['dark_forest','🌳'],['forest','🌳'],['birch','🪵'],
+      ['plains','🌾'],['meadow','🌼'],['mountain','⛰️'],['peak','🏔️'],
+      ['hills','⛰️'],['grove','🌲'],['cave','🕳️'],['nether','🔥'],
+      ['basalt','🌋'],['soul','💀'],['crimson','🍄'],['warped','🌀'],
+      ['end','🌌'],['void','⬛'],['mangrove','🌿']];
+    for (const [k, e] of rules) if (n.includes(k)) return e;
+    return '🌱';
+  }
+  function emojiFor(cat, name) {
+    if (cat === 'eyes')   return '👁️';
+    if (cat === 'spawn')  return '🧭';
+    if (cat === 'biome')  return biomeEmoji(name);
+    if (cat === 'item')   return ITEM_EMOJI[name] || '📦';
+    return STRUCT_EMOJI[name] || '📍';   // structure / place
+  }
+  function mkIcon(cat, name) {
+    const s = el('span', 'ic');
+    if (cat === 'structure' && assets.structures.includes(name)) {
+      const im = el('img'); im.src = '/assets/structures/' + name + '.png';
+      im.alt = ''; s.append(im); return s;
+    }
+    if (cat === 'item' && assets.items.includes(name)) {
+      const im = el('img'); im.src = '/assets/items/' + name + '.png';
+      im.alt = ''; s.append(im); return s;
+    }
+    s.textContent = emojiFor(cat, name);
+    return s;
+  }
+
   let vocab = { structures:{}, biomes:{} }, lootVocab = { structures:{} };
   let conds = [], nextId = 1;
 
   // ---- theme -------------------------------------------------------------
+  // Default is "cave" (dark stone) — Minecraft's own GUI world. "day" is the
+  // Overworld/sandstone variant. Persisted so a reload keeps your choice.
   const root = document.documentElement;
+  const savedTheme = localStorage.getItem('sf-theme');
+  if (savedTheme === 'day') root.setAttribute('data-theme', 'day');
   $('#theme').onclick = () => {
-    const cur = root.getAttribute('data-theme')
-      || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+    const day = root.getAttribute('data-theme') === 'day';
+    if (day) { root.removeAttribute('data-theme'); localStorage.setItem('sf-theme','cave'); }
+    else     { root.setAttribute('data-theme','day'); localStorage.setItem('sf-theme','day'); }
   };
 
   // ---- vocabulary --------------------------------------------------------
@@ -408,7 +534,7 @@
       const d = el('div', 'cond ' + c.kind);
       if (c.kind === 'loot') {
         const top = el('div','top');
-        top.append(el('span','cid', c.id), el('span','dim','CHEST LOOT'));
+        top.append(mkIcon('item', c.item), el('span','cid', c.id), el('span','dim','CHEST LOOT'));
         const x = el('button','tiny x','×');
         x.onclick = () => { conds.splice(i,1); render(); };
         top.append(x); d.append(top);
@@ -436,7 +562,7 @@
           const o = el('option', null, n.replace(/_/g,' ')); o.value = n;
           if (n === c.item) o.selected = true; it.append(o);
         });
-        it.onchange = e => c.item = e.target.value;
+        it.onchange = e => { c.item = e.target.value; render(); };
         const cnt = el('input'); cnt.type='number'; cnt.value=c.count; cnt.min=1; cnt.title='minimum count';
         cnt.onchange = e => c.count = Math.max(1, +e.target.value||1);
         g2.append(it, cnt); d.append(g2);
@@ -445,7 +571,7 @@
       }
       if (c.kind === 'eyes') {
         const top = el('div','top');
-        top.append(el('span','cid', c.id), el('span','dim','END PORTAL'));
+        top.append(mkIcon('eyes'), el('span','cid', c.id), el('span','dim','END PORTAL'));
         const x = el('button','tiny x','×');
         x.onclick = () => { conds.splice(i,1); render(); };
         top.append(x); d.append(top);
@@ -465,7 +591,7 @@
       }
 
       const top = el('div', 'top');
-      top.append(el('span', 'cid', c.id));
+      top.append(mkIcon(c.kind, c.name), el('span', 'cid', c.id));
       const dim = dimOf(c);
       if (dim) top.append(el('span', 'dim', dim));
       const x = el('button', 'tiny x', '×');
@@ -686,7 +812,7 @@
         c.append(el('h3', null, 'Funnel'));
         const bar = el('div','funnel'), i = el('i');
         i.style.width = Math.max(1.5, Math.min(100, f.pass1_pct)) + '%';
-        if (f.pass1_pct > 50) i.style.background = 'var(--warn)';
+        if (f.pass1_pct > 50) i.style.background = 'var(--gold)';
         bar.append(i); c.append(bar);
         c.append(el('div','funnel-l',
           `pass 1 kept ${f.pass1_pct}% (${(f.pass1||0).toLocaleString()}) · pass 2 confirmed ${(f.pass2||0).toLocaleString()}`));
@@ -701,6 +827,10 @@
       } else {
         const c = el('div','card');
         c.append(el('h3', null, `Seeds — click a number to copy`));
+        // Result rows carry the condition id (e.g. "s5"); map it back to the
+        // structure name so the row shows the right icon, not a generic pin.
+        const condName = {};
+        conds.forEach(x => { if (x.kind === 'structure') condName[x.id] = x.name; });
         d.seeds.forEach(s => {
           const box = el('div','seed');
           const n = el('div','n');
@@ -713,30 +843,35 @@
           n.append(num, desc); box.append(n);
           if (s.places.length || s.spawn || s.portal || s.loot) {
             const t = el('table');
+            const idCell = (cat, name, label) => {
+              const td = el('td','id');
+              td.append(mkIcon(cat, name), document.createTextNode(label));
+              return td;
+            };
             if (s.spawn) {
               const tr = el('tr');
-              tr.append(el('td','id','(spawn)'),
+              tr.append(idCell('spawn','','spawn'),
                         el('td',null,`x=${s.spawn.x}  z=${s.spawn.z}`),
                         el('td','d',''));
               t.append(tr);
             }
             if (s.portal) {
               const tr = el('tr');
-              tr.append(el('td','id','(end portal)'),
+              tr.append(idCell('eyes','','end portal'),
                         el('td',null,`x=${s.portal.x}  z=${s.portal.z}`),
                         el('td','d', s.portal.eyes + '/12 eyes'));
               t.append(tr);
             }
             (s.loot || []).forEach(l => {
               const tr = el('tr');
-              tr.append(el('td','id', l.id),
+              tr.append(idCell('item', l.item, l.id.replace(/_/g,' ')),
                         el('td',null,`x=${l.x}  z=${l.z}`),
-                        el('td','d', `${l.count} ${l.item}`));
+                        el('td','d', `${l.count} ${l.item.replace(/_/g,' ')}`));
               t.append(tr);
             });
             s.places.forEach(p => {
               const tr = el('tr');
-              tr.append(el('td','id', p.id),
+              tr.append(idCell('structure', condName[p.id] || p.id, p.id),
                         el('td',null,`x=${p.x}  z=${p.z}`),
                         el('td','d', p.dist + ' from ' + (p.ref || 'origin')));
               t.append(tr);
@@ -827,6 +962,18 @@
   };
 
   // ---- start -------------------------------------------------------------
+  async function loadAssets() {
+    try {
+      const r = await fetch('/api/assets');
+      if (r.ok) assets = await r.json();
+      if (assets.backdrop) {
+        document.body.style.backgroundImage =
+          "linear-gradient(rgba(15,16,20,.82),rgba(15,16,20,.82)), url('/assets/backdrop.png')";
+        document.body.style.backgroundSize = '64px, 512px';
+      }
+    } catch (e) { /* graphics are optional — the built-in look stands alone */ }
+  }
+  loadAssets();
   loadVocab().then(() => {
     conds = [
       { id:'mansion', kind:'structure', name:'mansion', within:300, of:'origin' },

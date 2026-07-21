@@ -14,6 +14,8 @@ Endpoints (all POST bodies are JSON):
     POST /api/search      -> the real search
     POST /api/describe    -> what is actually in a given seed
     GET  /api/map?...     -> biome map PNG for a seed
+    GET  /api/assets      -> lists which structure/item icons the user has added
+    GET  /assets/<path>   -> static image files (user-provided graphics)
     POST /api/ask         -> natural language -> query JSON (needs ANTHROPIC_API_KEY)
 """
 
@@ -29,6 +31,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 ROOT = Path(__file__).parent
+ASSETS = ROOT / "assets"
 BUILD = ROOT / "build"
 UI = ROOT / "ui" / "index.html"
 PORT = int(os.environ.get("SEED_UI_PORT", "8777"))
@@ -210,6 +213,18 @@ def api_vocab(qs) -> dict:
     return json.loads(out)
 
 
+def api_assets() -> dict:
+    """Report which optional graphics the user has dropped in, so the UI only
+    references images that exist (a missing <img> flickers a broken icon)."""
+    def names(sub):
+        d = ASSETS / sub
+        if not d.is_dir():
+            return []
+        return sorted(f.stem for f in d.glob("*.png"))
+    return {"structures": names("structures"), "items": names("items"),
+            "backdrop": (ASSETS / "backdrop.png").is_file()}
+
+
 def api_lootitems(qs) -> dict:
     v = check_version((qs.get("v") or ["1.21"])[0])
     rc, out, err = run([tool("lootitems"), v], TIMEOUTS["plan"])
@@ -329,6 +344,20 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _serve_asset(self, rel):
+        # Resolve and confine to ASSETS; reject any traversal.
+        try:
+            target = (ASSETS / rel).resolve()
+            target.relative_to(ASSETS.resolve())
+        except (ValueError, OSError):
+            self._send(404, {"error": "not found"}); return
+        if not target.is_file():
+            self._send(404, {"error": "not found"}); return
+        ct = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+              "gif": "image/gif", "webp": "image/webp"}.get(
+              target.suffix.lstrip(".").lower(), "application/octet-stream")
+        self._send(200, target.read_bytes(), ct)
+
     def do_GET(self):
         u = urlparse(self.path)
         try:
@@ -342,6 +371,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, api_map(parse_qs(u.query)), "image/png")
             elif u.path == "/api/lootitems":
                 self._send(200, api_lootitems(parse_qs(u.query)))
+            elif u.path == "/api/assets":
+                self._send(200, api_assets())
+            elif u.path.startswith("/assets/"):
+                self._serve_asset(u.path[len("/assets/"):])
             else:
                 self._send(404, {"error": "not found"})
         except Failure as e:
