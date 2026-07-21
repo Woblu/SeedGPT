@@ -221,8 +221,10 @@ def api_assets() -> dict:
         if not d.is_dir():
             return []
         return sorted(f.stem for f in d.glob("*.png"))
+    logo = next((f.name for f in (ASSETS.glob("logo.*") if ASSETS.is_dir() else [])
+                 if f.suffix.lower() in (".png", ".webp", ".gif", ".jpg", ".jpeg")), None)
     return {"structures": names("structures"), "items": names("items"),
-            "backdrop": (ASSETS / "backdrop.png").is_file()}
+            "backdrop": (ASSETS / "backdrop.png").is_file(), "logo": logo}
 
 
 def api_lootitems(qs) -> dict:

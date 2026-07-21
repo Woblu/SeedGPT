@@ -174,6 +174,11 @@
   .cond .grid { display: grid; grid-template-columns: 1fr 76px; gap: 7px; }
   .cond .grid.full { grid-template-columns: 1fr; }
   .cond .x { margin-left: auto; }
+  .cond .chk {
+    display: flex; align-items: center; gap: 7px; margin-top: 9px;
+    font-size: 12px; color: var(--ink-soft); cursor: pointer;
+  }
+  .cond .chk input { width: auto; margin: 0; accent-color: var(--grass); }
 
   .ic {
     display: inline-flex; align-items: center; justify-content: center;
@@ -636,9 +641,21 @@
         g2.append(p);
       }
       d.append(g2);
+
+      // Ruined portals generate buried ~50% of the time in plains/mountains.
+      // Only offer the surface-only filter where it means something.
+      if (c.kind === 'structure' && isRuinedPortal(c.name)) {
+        const row = el('label','chk');
+        const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!c.surface;
+        cb.onchange = e => { c.surface = e.target.checked; };
+        row.append(cb, document.createTextNode(' surface only (skip buried portals)'));
+        d.append(row);
+      }
       box.append(d);
     });
   }
+
+  const isRuinedPortal = n => n === 'ruined_portal' || n === 'ruined_portal_nether';
 
   // ---- build the query ---------------------------------------------------
   function buildQuery() {
@@ -649,7 +666,10 @@
         if (c.kind === 'loot') return { id: c.id, within: c.within,
           loot: { structure: c.struct, item: c.item, count: c.count } };
         const o = { id: c.id, within: c.within, of: c.of };
-        if (c.kind === 'structure') o.structure = c.name;
+        if (c.kind === 'structure') {
+          o.structure = c.name;
+          if (c.surface && isRuinedPortal(c.name)) o.surface = true;
+        }
         else { o.biome = c.name; o.precision = c.precision; }
         return o;
       })
@@ -970,6 +990,13 @@
         document.body.style.backgroundImage =
           "linear-gradient(rgba(15,16,20,.82),rgba(15,16,20,.82)), url('/assets/backdrop.png')";
         document.body.style.backgroundSize = '64px, 512px';
+      }
+      if (assets.logo) {
+        const logo = $('.logo');
+        logo.textContent = '';
+        const im = el('img'); im.src = '/assets/' + assets.logo; im.alt = '';
+        im.style.cssText = 'width:26px;height:26px;image-rendering:pixelated;display:block';
+        logo.append(im);
       }
     } catch (e) { /* graphics are optional — the built-in look stands alone */ }
   }
