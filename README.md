@@ -253,6 +253,28 @@ specific item rare is the loot table, not the tool: a diamond in a desert
 pyramid is roughly 1 in a few hundred pyramids, which is why the default radius
 is small (a stray large radius rolls loot for thousands of instances per seed).
 
+### Why only these five
+
+Loot search needs a chest's exact position and loot seed, which come from
+`getStructurePieces`. Three tempting additions were investigated and each was
+rejected on evidence, not effort:
+
+- **Fortress** — `getFortressPieces` stores its buffer bound (`env.nmax`) but
+  never checks it, so a large fortress writes past the piece array and crashes
+  the search. Unsafe until the engine bounds it.
+- **Bastion** — the engine simulates only some pieces, and the loot the search
+  reported did **not** reproduce under independent verification (`find`
+  over-counted `ancient_debris` versus `checkloot` at the same chest). A result
+  the verifier can't confirm violates this project's core rule, so it is not
+  shipped. The mismatch is exactly what the verification pass exists to catch.
+- **Ruined portal** — has no chest enumeration in the engine at all; producing
+  one would mean reimplementing the portal schematics with no way to verify
+  them independently.
+
+So the list is five, and every one of those five has its loot re-derived from
+scratch by `tools/checkloot` in the test suite. Fewer structures, but each one
+you can trust.
+
 ## Ore density
 
 Find seeds rich in a material near a point:

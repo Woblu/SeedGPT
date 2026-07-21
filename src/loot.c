@@ -61,6 +61,15 @@ int lootStructureSupported(int structType)
     case Outpost:
     case Shipwreck:
         return 1;
+    // The nether structures are deliberately excluded, each for a hard reason:
+    //   - Fortress: getFortressPieces stores its buffer bound (env.nmax) but
+    //     never enforces it, so a large fortress overflows the piece array and
+    //     crashes the search.
+    //   - Bastion: getStructurePieces only simulates some pieces, and the loot
+    //     the search reports did NOT reproduce under independent verification
+    //     (find over-counted vs checkloot). A result we cannot confirm violates
+    //     the project's core rule, so it is not offered.
+    // Ruined portals have no chest enumeration at all. See README "Chest loot".
     default:
         return 0;
     }

@@ -27,11 +27,17 @@ int main(int argc, char **argv)
     struct { const char *n; int t; } tbl[] = {
         {"desert_pyramid",Desert_Pyramid},{"jungle_temple",Jungle_Pyramid},
         {"igloo",Igloo},{"outpost",Outpost},{"shipwreck",Shipwreck}};
-    for (int i = 0; i < 5; i++) if (!strcmp(tbl[i].n, sname)) type = tbl[i].t;
+    for (int i = 0; i < (int)(sizeof(tbl)/sizeof(tbl[0])); i++)
+        if (!strcmp(tbl[i].n, sname)) type = tbl[i].t;
     if (type < 0) { fprintf(stderr, "unsupported structure %s\n", sname); return 2; }
 
+    // Apply the seed for the structure's own dimension -- bastion and fortress
+    // are in the nether, and sampling an overworld biome for them would pick the
+    // wrong variant/salt.
+    StructureConfig scfg;
+    int dim = getStructureConfig(type, mc, &scfg) ? scfg.dim : DIM_OVERWORLD;
     Generator g; setupGenerator(&g, mc, 0);
-    applySeed(&g, DIM_OVERWORLD, seed);
+    applySeed(&g, dim, seed);
 
     StructureVariant sv;
     int biome = getBiomeAt(&g, 0, (bx>>4)*4+2, 319>>2, (bz>>4)*4+2);
