@@ -687,20 +687,29 @@
       }
       d.append(g2);
 
-      // Ruined portals generate buried ~50% of the time in plains/mountains.
-      // Only offer the surface-only filter where it means something.
-      if (c.kind === 'structure' && isRuinedPortal(c.name)) {
-        const row = el('label','chk');
-        const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!c.surface;
-        cb.onchange = e => { c.surface = e.target.checked; };
-        row.append(cb, document.createTextNode(' surface only (skip buried portals)'));
-        d.append(row);
+      // Variant filters, each offered only on the structure that has it.
+      if (c.kind === 'structure') {
+        VARIANTS.filter(v => v.applies(c.name)).forEach(v => {
+          const row = el('label','chk');
+          const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!c[v.key];
+          cb.onchange = e => { c[v.key] = e.target.checked; };
+          row.append(cb, document.createTextNode(' ' + v.label));
+          d.append(row);
+        });
       }
       box.append(d);
     });
   }
 
   const isRuinedPortal = n => n === 'ruined_portal' || n === 'ruined_portal_nether';
+
+  // Structure variant filters (getVariant flags), each shown only where it applies.
+  const VARIANTS = [
+    { key:'surface',   label:'surface only (skip buried portals)', applies: isRuinedPortal },
+    { key:'giant',     label:'giant portal only',                  applies: isRuinedPortal },
+    { key:'abandoned', label:'zombie village only',                applies: n => n === 'village' },
+    { key:'basement',  label:'basement only',                      applies: n => n === 'igloo' },
+  ];
 
   // Mirrors the material table in src/ore.c. Overworld first, then nether.
   const ORE_MATERIALS = ['diamond','iron','gold','emerald','redstone','lapis',
@@ -724,7 +733,7 @@
         const o = { id: c.id, within: c.within, of: c.of };
         if (c.kind === 'structure') {
           o.structure = c.name;
-          if (c.surface && isRuinedPortal(c.name)) o.surface = true;
+          VARIANTS.forEach(v => { if (c[v.key] && v.applies(c.name)) o[v.key] = true; });
         }
         else { o.biome = c.name; o.precision = c.precision; }
         return o;

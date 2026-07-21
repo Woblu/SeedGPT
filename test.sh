@@ -29,7 +29,8 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/xval.c   >/tmp/sc_test/b3 2>&1 \
 && ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1 \n&& ./build.sh tools/checkeyes.c >/tmp/sc_test/b7 2>&1 \n&& ./build.sh tools/checkloot.c >/tmp/sc_test/b8 2>&1 && ./build.sh tools/lootitems.c >/tmp/sc_test/b9 2>&1 \
 && ./build.sh tools/checkportal.c >/tmp/sc_test/b10 2>&1 \
-&& ./build.sh tools/checkore.c >/tmp/sc_test/b11 2>&1; then
+&& ./build.sh tools/checkore.c >/tmp/sc_test/b11 2>&1 \
+&& ./build.sh tools/checkvariant.c >/tmp/sc_test/b12 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -268,6 +269,30 @@ done < <(awk '/^SEED/{s=$2} /dia /{gsub(/x=|z=/,""); print s, $2, $3, $4}' /tmp/
 [ "$ore_low" -eq 0 ] \
   && ok "every ore result clears the requested threshold" \
   || bad "ore result below threshold" "under=$ore_low"
+
+# Structure variant filters (zombie village, igloo basement, giant portal) are
+# exact -- getVariant reads the same draw the game does. Each filtered result
+# must carry the flag under an independent re-read, and each flag is gated to
+# the one structure that has it.
+section "structure variant filters"
+check_err "abandoned rejected off village" \
+  '{"version":"1.21","conditions":[{"id":"x","structure":"igloo","within":500,"of":"origin","abandoned":true}]}' \
+  "only applies to village"
+check_err "basement rejected off igloo" \
+  '{"version":"1.21","conditions":[{"id":"x","structure":"village","within":500,"of":"origin","basement":true}]}' \
+  "only applies to igloo"
+cat > /tmp/sc_test/zv.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"zv","structure":"village","within":2000,"of":"origin","abandoned":true}]}
+EOF
+zv_bad=0; zv_n=0
+while read -r vseed vx vz; do
+  f=$(./build/checkvariant.exe "$vseed" village 1.21 --at "$vx" "$vz" 2>/dev/null)
+  zv_n=$((zv_n+1)); echo "$f" | grep -q "abandoned=1" || zv_bad=$((zv_bad+1))
+done < <(./build/find.exe /tmp/sc_test/zv.json 200000 16 2>/dev/null | grep -E "^SEED|zv " | \
+         awk '/^SEED/{s=$2} /zv /{gsub(/x=|z=/,""); print s, $2, $3}' | head -6)
+[ "$zv_n" -ge 4 ] && [ "$zv_bad" -eq 0 ] \
+  && ok "zombie-village filter: all $zv_n results independently confirmed abandoned" \
+  || bad "a zombie-village result was not abandoned" "checked=$zv_n bad=$zv_bad"
 
 
 # ---------------------------------------------------------------- dimensions

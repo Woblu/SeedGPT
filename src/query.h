@@ -75,6 +75,9 @@ typedef struct {
     char     lootItem[48];  // CT_LOOT: item id, e.g. "minecraft:diamond"
     int      surfaceOnly;   // CT_STRUCTURE: reject the buried variant (ruined
                             // portals only) -- see getVariant().underground
+    int      reqAbandoned;  // CT_STRUCTURE: require zombie village
+    int      reqBasement;   // CT_STRUCTURE: require an igloo with a basement
+    int      reqGiant;      // CT_STRUCTURE: require the giant ruined portal
     int      oreMat;        // CT_ORE: index into the ore material table
     int      oreMin;        // CT_ORE: minimum ore-block count in range
 } Cond;

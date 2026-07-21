@@ -369,6 +369,26 @@ results you can reliably walk to today, `surface: true` removes the ~50% that
 are buried by design; for maximum certainty prefer a biome-checked structure
 (see the table below).
 
+## Structure variants
+
+Some structures generate in distinct variants, and the engine can identify which
+one a given instance is — exactly, because `getVariant` reads the same RNG draw
+the game does. Require a variant by adding a flag to its condition:
+
+```json
+{ "id": "zv", "structure": "village",       "abandoned": true }   // zombie village
+{ "id": "ig", "structure": "igloo",         "basement": true  }   // has the lab/basement
+{ "id": "gp", "structure": "ruined_portal", "giant": true     }   // giant portal
+{ "id": "rp", "structure": "ruined_portal", "surface": true   }   // not buried (above)
+```
+
+Each flag is gated to the structure that has it (asking for a `basement` village
+is an error, not a silent no-op), and each is checked in pass 2 on the exact
+matched instance. `tools/checkvariant` re-reads the flags independently, and the
+test suite confirms every zombie-village result really is abandoned. (Geodes
+aren't in this engine's structure list, so its `cracked`/`size` variant fields
+aren't exposed.)
+
 ## Not every structure is verified
 
 A structure position comes from two things: a generation **attempt** (exact
@@ -457,6 +477,7 @@ tools/checkeyes.c   recomputes an end portal's eye count independently
 tools/checkloot.c   recomputes a structure's chest loot independently
 tools/checkportal.c recomputes a ruined portal's buried/surface variant independently
 tools/checkore.c    recounts a material's ore blocks around a point independently
+tools/checkvariant.c re-reads a structure's variant flags (zombie/basement/giant)
 src/ore.{h,c}       ore-density counting (generateOres), material-by-block matching
 tools/lootitems.c   dumps the items each structure's loot tables can produce
 src/loot.{h,c}      per-thread loot-table cache + item counting

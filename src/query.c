@@ -261,6 +261,36 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 }
                 c->surfaceOnly = 1;
             }
+            // Variant requirements. Each is exact (getVariant reads the same RNG
+            // the game does) and each is gated to the structure that has it, so
+            // a misplaced flag is an error rather than a silent no-op.
+            cJSON *jab = cJSON_GetObjectItem(e, "abandoned");
+            if (jab && cJSON_IsTrue(jab)) {
+                if (c->structType != Village) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"abandoned\" (zombie village) only applies to village", c->id);
+                    goto done;
+                }
+                c->reqAbandoned = 1;
+            }
+            cJSON *jbase = cJSON_GetObjectItem(e, "basement");
+            if (jbase && cJSON_IsTrue(jbase)) {
+                if (c->structType != Igloo) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"basement\" only applies to igloo", c->id);
+                    goto done;
+                }
+                c->reqBasement = 1;
+            }
+            cJSON *jgi = cJSON_GetObjectItem(e, "giant");
+            if (jgi && cJSON_IsTrue(jgi)) {
+                if (c->structType != Ruined_Portal && c->structType != Ruined_Portal_N) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"giant\" only applies to ruined_portal", c->id);
+                    goto done;
+                }
+                c->reqGiant = 1;
+            }
         } else if (jb && cJSON_IsString(jb)) {
             c->type = CT_BIOME;
             c->biomeId = str2biome_(q->mc, jb->valuestring);
@@ -682,15 +712,18 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             Pos p = (c->parent == PARENT_SPAWN) ? fixed->pos[k] : m->pos[k];
             if (!isViableStructurePos(c->structType, g, p.x, p.z, 0))
                 return 0;
-            if (c->surfaceOnly) {
-                // A ruined portal in a plains/mountain biome is a 50/50 coin
-                // flip on the buried "underground" schematic. getVariant reads
-                // that exact RNG decision, so rejecting it here is not an
-                // approximation -- it is the same choice the game makes.
+            if (c->surfaceOnly || c->reqAbandoned || c->reqBasement || c->reqGiant) {
+                // Variant checks. Each reads the exact RNG decision the game
+                // makes (getVariant), so these are exact filters, not guesses:
+                // a buried portal is a 50/50 coin flip; a zombie village, an
+                // igloo basement, and a giant portal are likewise fixed draws.
                 StructureVariant sv;
                 int biome = getBiomeAt(g, 0, (p.x>>4)*4+2, 319>>2, (p.z>>4)*4+2);
                 getVariant(&sv, c->structType, q->mc, s48, p.x, p.z, biome);
-                if (sv.underground) return 0;
+                if (c->surfaceOnly  && sv.underground) return 0;
+                if (c->reqAbandoned && !sv.abandoned)  return 0;
+                if (c->reqBasement  && !sv.basement)   return 0;
+                if (c->reqGiant     && !sv.giant)      return 0;
             }
             fixed->pos[k] = p;
         } else {
