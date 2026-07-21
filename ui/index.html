@@ -405,6 +405,12 @@
   const esc = s => String(s).replace(/[&<>"]/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+  // Display-only prettifier: drop the minecraft: prefix and underscores, then
+  // Title Case. The raw id is always kept as the <option> value / query field;
+  // only the visible text is cleaned up.
+  const pretty = s => String(s).replace(/^minecraft:/, '')
+    .replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
   // ---- icons -------------------------------------------------------------
   // Emoji give instant character with zero downloads; if the user drops a PNG
   // into assets/structures/<id>.png or assets/items/<id>.png it upgrades in
@@ -577,7 +583,7 @@
         const g = el('div','grid');
         const ss = el('select');
         Object.keys(lootVocab.structures).forEach(n => {
-          const o = el('option', null, n.replace(/_/g,' ')); o.value = n;
+          const o = el('option', null, pretty(n)); o.value = n;
           if (n === c.struct) o.selected = true; ss.append(o);
         });
         ss.onchange = e => {
@@ -594,7 +600,7 @@
         const g2 = el('div','grid');
         const it = el('select');
         (lootVocab.structures[c.struct] || []).sort().forEach(n => {
-          const o = el('option', null, n.replace(/_/g,' ')); o.value = n;
+          const o = el('option', null, pretty(n)); o.value = n;
           if (n === c.item) o.selected = true; it.append(o);
         });
         it.onchange = e => { c.item = e.target.value; render(); };
@@ -614,7 +620,7 @@
         const g = el('div','grid');
         const ms = el('select');
         ORE_MATERIALS.forEach(n => {
-          const o = el('option', null, n.replace(/_/g,' ')); o.value = n;
+          const o = el('option', null, pretty(n)); o.value = n;
           if (n === c.mat) o.selected = true; ms.append(o);
         });
         ms.onchange = e => { c.mat = e.target.value; c.count = ORE_DEFAULT[c.mat] || 1; render(); };
@@ -672,7 +678,7 @@
       const sel = el('select');
       const names = Object.keys(c.kind === 'structure' ? vocab.structures : vocab.biomes);
       names.sort().forEach(n => {
-        const o = el('option', null, n); o.value = n;
+        const o = el('option', null, pretty(n)); o.value = n;
         if (n === c.name) o.selected = true; sel.append(o);
       });
       sel.onchange = e => { c.name = e.target.value; render(); };
@@ -955,35 +961,35 @@
             };
             if (s.spawn) {
               const tr = el('tr');
-              tr.append(idCell('spawn','','spawn'),
+              tr.append(idCell('spawn','','Spawn'),
                         el('td',null,`x=${s.spawn.x}  z=${s.spawn.z}`),
                         el('td','d',''));
               t.append(tr);
             }
             if (s.portal) {
               const tr = el('tr');
-              tr.append(idCell('eyes','','end portal'),
+              tr.append(idCell('eyes','','End Portal'),
                         el('td',null,`x=${s.portal.x}  z=${s.portal.z}`),
                         el('td','d', s.portal.eyes + '/12 eyes'));
               t.append(tr);
             }
             (s.loot || []).forEach(l => {
               const tr = el('tr');
-              tr.append(idCell('item', l.item, l.id.replace(/_/g,' ')),
+              tr.append(idCell('item', l.item, pretty(l.id)),
                         el('td',null,`x=${l.x}  z=${l.z}`),
-                        el('td','d', `${l.count} ${l.item.replace(/_/g,' ')}`));
+                        el('td','d', `${l.count} ${pretty(l.item)}`));
               t.append(tr);
             });
             (s.ore || []).forEach(o => {
               const tr = el('tr');
-              tr.append(idCell('item', o.material, o.material.replace(/_/g,' ')),
+              tr.append(idCell('item', o.material, pretty(o.material)),
                         el('td',null,`x=${o.x}  z=${o.z}`),
                         el('td','d', `${o.count.toLocaleString()} within ${o.within}`));
               t.append(tr);
             });
             s.places.forEach(p => {
               const tr = el('tr');
-              tr.append(idCell('structure', condName[p.id] || p.id, p.id),
+              tr.append(idCell('structure', condName[p.id] || p.id, pretty(condName[p.id] || p.id)),
                         el('td',null,`x=${p.x}  z=${p.z}`),
                         el('td','d', p.dist + ' from ' + (p.ref || 'origin')));
               t.append(tr);
@@ -1038,7 +1044,7 @@
       const lg = el('div','legend');
       MARKERS.forEach(([n, col]) => {
         const sp = el('span'); const sw = el('i');
-        sw.style.background = col; sp.append(sw, document.createTextNode(n)); lg.append(sp);
+        sw.style.background = col; sp.append(sw, document.createTextNode(pretty(n))); lg.append(sp);
       });
       const sp = el('span'); sp.append(document.createTextNode('✛ world spawn'));
       lg.append(sp);
