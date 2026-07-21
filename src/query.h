@@ -72,6 +72,8 @@ typedef struct {
     int      eyesMin;       // CT_EYES: minimum filled frames required
     int      lootMin;       // CT_LOOT: minimum item count
     char     lootItem[48];  // CT_LOOT: item id, e.g. "minecraft:diamond"
+    int      surfaceOnly;   // CT_STRUCTURE: reject the buried variant (ruined
+                            // portals only) -- see getVariant().underground
 } Cond;
 
 // Biome scan precision. A biome condition samples points across the disc; the

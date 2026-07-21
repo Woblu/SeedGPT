@@ -213,6 +213,20 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 goto done;
             }
             c->dim = sc.dim;   // authoritative: the engine's own config
+            // "surface": reject the buried variant. Only ruined portals have a
+            // buried variant the engine can identify exactly (getVariant's
+            // underground flag), so refuse the flag elsewhere rather than
+            // silently ignore it.
+            cJSON *jsurf = cJSON_GetObjectItem(e, "surface");
+            if (jsurf && cJSON_IsTrue(jsurf)) {
+                if (c->structType != Ruined_Portal && c->structType != Ruined_Portal_N) {
+                    snprintf(err, errlen,
+                             "condition \"%s\": \"surface\" only applies to ruined_portal",
+                             c->id);
+                    goto done;
+                }
+                c->surfaceOnly = 1;
+            }
         } else if (jb && cJSON_IsString(jb)) {
             c->type = CT_BIOME;
             c->biomeId = str2biome_(q->mc, jb->valuestring);
@@ -610,6 +624,16 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             Pos p = (c->parent == PARENT_SPAWN) ? fixed->pos[k] : m->pos[k];
             if (!isViableStructurePos(c->structType, g, p.x, p.z, 0))
                 return 0;
+            if (c->surfaceOnly) {
+                // A ruined portal in a plains/mountain biome is a 50/50 coin
+                // flip on the buried "underground" schematic. getVariant reads
+                // that exact RNG decision, so rejecting it here is not an
+                // approximation -- it is the same choice the game makes.
+                StructureVariant sv;
+                int biome = getBiomeAt(g, 0, (p.x>>4)*4+2, 319>>2, (p.z>>4)*4+2);
+                getVariant(&sv, c->structType, q->mc, s48, p.x, p.z, biome);
+                if (sv.underground) return 0;
+            }
             fixed->pos[k] = p;
         } else {
             Pos centre = c->parent >= 0 ? (q->cond[c->parent].parent == PARENT_SPAWN

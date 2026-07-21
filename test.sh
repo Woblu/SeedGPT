@@ -27,7 +27,8 @@ section "build"
 if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/vocab.c  >/tmp/sc_test/b2 2>&1 \
 && ./build.sh tools/xval.c   >/tmp/sc_test/b3 2>&1 \
-&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1 \n&& ./build.sh tools/checkeyes.c >/tmp/sc_test/b7 2>&1 \n&& ./build.sh tools/checkloot.c >/tmp/sc_test/b8 2>&1 && ./build.sh tools/lootitems.c >/tmp/sc_test/b9 2>&1; then
+&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1 \n&& ./build.sh tools/checkeyes.c >/tmp/sc_test/b7 2>&1 \n&& ./build.sh tools/checkloot.c >/tmp/sc_test/b8 2>&1 && ./build.sh tools/lootitems.c >/tmp/sc_test/b9 2>&1 \
+&& ./build.sh tools/checkportal.c >/tmp/sc_test/b10 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -209,6 +210,36 @@ EOF
 ./build/confidence.exe 1.21 20 > /tmp/sc_test/conf.log 2>&1
 grep -q "ruined_portal.*NONE" /tmp/sc_test/conf.log   && ok "ruined_portal still measures as unverified"   || bad "confidence measurement changed" "$(grep ruined_portal /tmp/sc_test/conf.log)"
 grep -q "village.*biome-checked" /tmp/sc_test/conf.log   && ok "village still measures as biome-checked"   || bad "village verification changed"
+
+# The "surface" filter drops the buried variant. It is an EXACT filter, not an
+# approximation: getVariant reads the same nextFloat<0.5 the game uses. Prove it
+# by re-deriving every matched portal independently -- none may be underground,
+# and getVariant must agree with the from-scratch recomputation (checkportal).
+section "ruined portal surface filter"
+cat > /tmp/sc_test/rps.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"rp","structure":"ruined_portal","within":800,"of":"origin","surface":true}]}
+EOF
+# Reject the flag where it has no meaning.
+check_err "surface flag rejected off ruined_portal" \
+  '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":400,"of":"origin","surface":true}]}' \
+  "only applies to ruined_portal"
+# Verify every matched portal is a surface portal, independently.
+bad_cnt=0; ver_cnt=0; rseed=""
+while read -r line; do
+  if [ "${line%% *}" = "SEED" ]; then
+    rseed=$(echo "$line" | awk '{print $2}')
+  else
+    rx=$(echo "$line" | grep -oE 'x=[[:space:]]*-?[0-9]+' | grep -oE '\-?[0-9]+$')
+    rz=$(echo "$line" | grep -oE 'z=[[:space:]]*-?[0-9]+' | grep -oE '\-?[0-9]+$')
+    v=$(./build/checkportal.exe "$rseed" 1.21 --at "$rx" "$rz" 2>/dev/null)
+    ver_cnt=$((ver_cnt+1))
+    echo "$v" | grep -Eq "underground=1|MISMATCH" && bad_cnt=$((bad_cnt+1))
+  fi
+done < <(./build/find.exe /tmp/sc_test/rps.json 300000 16 2>/dev/null | grep -E "^SEED|rp " | \
+         awk '/^SEED/{s=$2} /rp /{print "SEED "s"\n"$0}')
+[ "$ver_cnt" -ge 5 ] && [ "$bad_cnt" -eq 0 ] \
+  && ok "surface filter: all $ver_cnt matched portals independently confirmed surface" \
+  || bad "surface filter admitted a buried/mismatched portal" "checked=$ver_cnt bad=$bad_cnt"
 
 
 # ---------------------------------------------------------------- dimensions

@@ -310,7 +310,31 @@ ruined_portal   x=   144 z=     0    144 away   savanna    BURIED, air pocket
 ruined_portal   x=   304 z=   288    192 away   forest     surface
 ```
 
-If you want results you can reliably walk to, prefer a biome-checked structure
+### Filtering out buried portals
+
+You can require a **surface** portal and drop the buried ones as candidates.
+Add `"surface": true` to a ruined-portal condition (or tick *surface only* in the
+UI):
+
+```json
+{"id": "rp", "structure": "ruined_portal", "within": 800, "of": "origin", "surface": true}
+```
+
+This is an **exact** filter, not an approximation. Minecraft decides burial with
+a single coin flip — `nextFloat() < 0.5` on the chunk RNG, only for
+plains/mountain-category portals — and `getVariant` reads that exact draw. The
+independent verifier `checkportal` re-derives the same bit from scratch and the
+test suite confirms every surface-filtered result really is a surface portal:
+
+```sh
+./build/checkportal.exe <seed> 1.21 --at <x> <z>
+#  -> ... underground=0 airpocket=0 giant=0 (reref=0 AGREE)
+```
+
+It does **not** yet catch the rarer "sunk into low terrain" case — that needs
+the approximate surface height (`mapApproxHeight`), a planned follow-up. For
+results you can reliably walk to today, `surface: true` removes the ~50% that
+are buried by design; for maximum certainty prefer a biome-checked structure
 (see the table below).
 
 ## Not every structure is verified
@@ -399,6 +423,7 @@ tools/checkspawn.py re-verifies spawn-relative hits against describe.exe
 tools/confidence.c  measures how much the engine actually verifies each structure
 tools/checkeyes.c   recomputes an end portal's eye count independently
 tools/checkloot.c   recomputes a structure's chest loot independently
+tools/checkportal.c recomputes a ruined portal's buried/surface variant independently
 tools/lootitems.c   dumps the items each structure's loot tables can produce
 src/loot.{h,c}      per-thread loot-table cache + item counting
 tools/vocab.c       dumps valid structures/biomes per version (ask.py reads this)
