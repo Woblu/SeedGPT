@@ -97,6 +97,21 @@
   button.tiny { padding: 4px 8px; font-size: 11px; }
   .btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 
+  .presets {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px; margin-top: 12px;
+  }
+  .preset {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+    text-align: left; padding: 9px 11px; height: auto; line-height: 1.25;
+  }
+  .preset .pt { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 12.5px; }
+  .preset .pt .ic { font-size: 15px; filter: none; }
+  .preset .pd {
+    font-size: 10.5px; color: var(--ink-soft); font-weight: 400;
+    text-shadow: none; letter-spacing: 0;
+  }
+
   input, select, textarea {
     font-family: var(--sans); font-size: 13px; color: var(--ink);
     background: var(--slot);
@@ -348,6 +363,12 @@
         <option>1.15</option><option>1.14</option><option>1.13</option><option>1.12</option>
       </select>
       <div class="hint">A finder generates for the version you pick — it can't infer one. Defaults to the latest (26.2).</div>
+    </section>
+
+    <section>
+      <h2>Presets</h2>
+      <div class="hint">One click loads a ready-made search. It replaces your current conditions — tweak the radius or counts afterwards.</div>
+      <div id="presets" class="presets"></div>
     </section>
 
     <section>
@@ -621,6 +642,70 @@
                  within: 800, of: 'origin', precision: 'fine' });
     render();
   };
+
+  // ---- presets -----------------------------------------------------------
+  // Curated one-click searches. Each build() returns raw conditions; a
+  // condition may set ofRef:<index> to depend on an earlier one in the same
+  // preset (resolved to its generated id at apply time). Names not present in
+  // the chosen version are trimmed, so a preset degrades rather than errors.
+  const PRESETS = [
+    { name: 'Mushroom Paradise', emoji: '🍄', desc: 'A huge mushroom island at spawn',
+      build: () => [{ kind: 'area', name: 'mushroom_fields', pct: 50, within: 800, of: 'spawn' }] },
+    { name: 'Slime Farmer', emoji: '🟢', desc: 'A dense slime-chunk cluster near spawn',
+      build: () => [{ kind: 'slime', count: 8, within: 128, of: 'spawn' }] },
+    { name: 'Diamond Base', emoji: '💎', desc: 'A village sitting on a diamond-rich patch',
+      build: () => [{ kind: 'structure', name: 'village', within: 600, of: 'spawn' },
+                    { kind: 'ore', mat: 'diamond', count: ORE_DEFAULT.diamond, within: 64, ofRef: 0 }] },
+    { name: 'Mansion Start', emoji: '🏰', desc: 'Woodland mansion near spawn, village beside it',
+      build: () => [{ kind: 'structure', name: 'mansion', within: 1500, of: 'spawn' },
+                    { kind: 'structure', name: 'village', within: 600, ofRef: 0 }] },
+    { name: 'Monument Bay', emoji: '🌊', desc: 'An ocean monument close to spawn',
+      build: () => [{ kind: 'structure', name: 'monument', within: 800, of: 'spawn' }] },
+    { name: 'Zombie Village', emoji: '🧟', desc: 'A rare abandoned (zombie) village',
+      build: () => [{ kind: 'structure', name: 'village', within: 1200, of: 'spawn', abandoned: true }] },
+    { name: 'Igloo Lab', emoji: '🧊', desc: 'An igloo with the hidden basement',
+      build: () => [{ kind: 'structure', name: 'igloo', within: 1000, of: 'spawn', basement: true }] },
+    { name: 'Pyramid Treasure', emoji: '🏜️', desc: '3+ diamonds in a desert pyramid',
+      build: () => [{ kind: 'loot', struct: 'desert_pyramid', item: 'diamond', count: 3, within: 3000 }] },
+    { name: 'Badlands Mine', emoji: '🧱', desc: 'A sprawling mesa (gold at every depth)',
+      build: () => [{ kind: 'area', name: 'badlands', pct: 40, within: 1000, of: 'spawn' }] },
+    { name: 'Stronghold Sprint', emoji: '👁️', desc: 'A start with 6+ eyes already in the portal',
+      build: () => [{ kind: 'eyes', eyes: 6 }] },
+  ];
+
+  function applyPreset(p) {
+    const raw = p.build();
+    raw.forEach(c => {
+      c.id = (c.kind === 'eyes' ? 'portal' : c.kind.slice(0, 1) + (nextId++));
+      if (['structure', 'biome', 'area'].includes(c.kind) && !c.precision) c.precision = 'fine';
+    });
+    raw.forEach(c => { if (typeof c.ofRef === 'number') { c.of = raw[c.ofRef].id; delete c.ofRef; } });
+    // Trim anything this version can't express (same rule as a version switch).
+    const ls = lootVocab.structures || {};
+    const ok = raw.filter(c =>
+      c.kind === 'structure'                  ? c.name in vocab.structures :
+      (c.kind === 'biome' || c.kind === 'area') ? c.name in vocab.biomes :
+      c.kind === 'loot'                        ? (c.struct in ls && (ls[c.struct] || []).includes(c.item)) :
+      true);
+    if (!ok.length) { toast(`“${p.name}” needs features not in MC ${$('#version').value}`); return; }
+    // A survivor that pointed at a trimmed condition falls back to spawn.
+    const ids = new Set(ok.map(c => c.id));
+    ok.forEach(c => { if (c.of && c.of !== 'spawn' && c.of !== 'origin' && !ids.has(c.of)) c.of = 'spawn'; });
+    conds = ok; render();
+    if (ok.length !== raw.length) toast(`Some parts of “${p.name}” aren’t in MC ${$('#version').value} — trimmed`);
+  }
+
+  function renderPresets() {
+    const box = $('#presets'); box.innerHTML = '';
+    PRESETS.forEach(p => {
+      const b = el('button', 'preset');
+      const t = el('div', 'pt'); t.append(el('span', 'ic', p.emoji), document.createTextNode(p.name));
+      b.append(t, el('div', 'pd', p.desc));
+      b.onclick = () => applyPreset(p);
+      box.append(b);
+    });
+  }
+  renderPresets();
 
   // Measured on this machine at ~98 seeds/s (locating a stronghold costs ~10ms).
   const EYE_TIME = {0:'instant',1:'instant',2:'instant',3:'instant',4:'instant',

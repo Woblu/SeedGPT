@@ -43,8 +43,12 @@ drop your own PNGs into [`assets/`](assets/README.md) to replace them (the tool
 bundles no Mojang textures). Nothing is required — the built-in look stands
 alone.
 
-Three conveniences for real use:
+Conveniences for real use:
 
+- **Presets** are one-click curated searches (Mushroom Paradise, Slime Farmer,
+  Diamond Base, Zombie Village, Pyramid Treasure, …). Each loads a ready-made
+  query built from the condition types below; parts a chosen version can't
+  express are trimmed rather than erroring.
 - **Share** (top right) copies a link with the whole query encoded in the URL
   hash. Opening it on any local instance rebuilds the builder exactly — the
   server is loopback-only, so you share the *query*, not a hosted page.
