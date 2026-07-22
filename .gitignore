@@ -20,3 +20,11 @@ queries/_*.json
 
 # scratch renders
 build/tmp/
+
+# Real-worldgen tier-2 backend (Fabric Loom / Minecraft dev env)
+tools/gradle-dist/
+tier2/.gradle/
+tier2/build/
+tier2/out/
+tier2/cp.txt
+build/fu/

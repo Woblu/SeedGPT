@@ -1,0 +1,26 @@
+plugins {
+    id 'fabric-loom' version '1.5.7'
+    id 'java'
+}
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+repositories {
+    mavenCentral()
+    maven { url = 'https://libraries.minecraft.net/' }
+}
+dependencies {
+    minecraft "com.mojang:minecraft:1.16.5"
+    mappings loom.officialMojangMappings()
+}
+// Run a plain worldgen main against the deobfuscated Minecraft classpath.
+tasks.register('worldgen', JavaExec) {
+    dependsOn 'classes'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'VillageWorldgen'
+    if (project.hasProperty('appArgs')) { args(project.getProperty('appArgs').split(',')) }
+}
+tasks.register('printcp') {
+    doLast { sourceSets.main.runtimeClasspath.each { println "CP:" + it } }
+}
