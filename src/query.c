@@ -24,6 +24,7 @@
 #define NS_EYES    10250000.0   // locate stronghold + pieces + loot: ~98/s
 #define NS_LOOT       47000.0   // structure viability + a ~5us loot roll
 #define NS_ORE_CHUNK   4000.0   // per chunk: one biome probe + config scan + gen
+#define NS_SLIME_CHUNK    6.0   // per chunk: one Java-RNG isSlimeChunk call
 
 static double geomCost(const Query *q, int i)
 {
@@ -47,6 +48,10 @@ static double viabCost(const Query *q, int i)
         // condition, so it sorts last and runs only for earlier survivors.
         double n = 2.0 * (c->within / 16.0) + 1.0;
         return n * n * NS_ORE_CHUNK + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+    }
+    if (c->type == CT_SLIME) {
+        double n = 2.0 * (c->within / 16.0) + 1.0;   // one RNG call per chunk
+        return n * n * NS_SLIME_CHUNK + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
     }
     if (c->type == CT_STRUCTURE)
         return NS_VIABLE + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
@@ -158,7 +163,21 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         cJSON *js = cJSON_GetObjectItem(e, "structure");
         cJSON *jb = cJSON_GetObjectItem(e, "biome");
         cJSON *jore = cJSON_GetObjectItem(e, "ore");
-        if (jore && cJSON_IsString(jore)) {
+        cJSON *jslime = cJSON_GetObjectItem(e, "slime");
+        if (jslime && cJSON_IsNumber(jslime)) {
+            c->type = CT_SLIME;
+            c->dim = DIM_OVERWORLD;              // slime chunks are overworld
+            c->slimeMin = jslime->valueint;
+            if (c->slimeMin < 1) c->slimeMin = 1;
+            // A cluster query: count slime chunks in a small disc. Default small
+            // (a dense cluster near the point is the useful, rare thing).
+            cJSON *sw = cJSON_GetObjectItem(e, "within");
+            c->within = (sw && cJSON_IsNumber(sw)) ? sw->valueint : 128;
+            if (c->within > 2048) c->within = 2048;
+            if (c->within < 16)   c->within = 16;
+            cJSON *of = cJSON_GetObjectItem(e, "of");
+            snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "origin");
+        } else if (jore && cJSON_IsString(jore)) {
             c->type = CT_ORE;
             const OreMaterial *mat = oreMaterialByName(jore->valuestring);
             if (!mat) {
@@ -462,6 +481,11 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
                  c->oreMin, tab[c->oreMat].name, c->within, c->ofId);
         return buf;
     }
+    if (c->type == CT_SLIME) {
+        snprintf(buf, n, ">= %d slime chunks within %d of %s",
+                 c->slimeMin, c->within, c->ofId);
+        return buf;
+    }
     const char *what = (c->type == CT_STRUCTURE)
         ? struct2str(c->structType) : biome2str(q->mc, c->biomeId);
     const char *prec = c->type != CT_BIOME ? ""
@@ -657,6 +681,31 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             if (cnt < c->oreMin) return 0;
             fixed->pos[k] = centre;
             fixed->oreCount[k] = cnt;
+            continue;
+        }
+
+        if (c->type == CT_SLIME) {
+            Pos centre = c->parent >= 0
+                ? (q->cond[c->parent].parent == PARENT_SPAWN
+                     ? fixed->pos[c->parent] : m->pos[c->parent])
+                : (c->parent == PARENT_SPAWN
+                     ? (*haveSpawn ? *spawn : (*spawn = getSpawn(g), *haveSpawn = 1, *spawn))
+                     : (Pos){0,0});
+            // Count slime chunks in the disc. isSlimeChunk uses the full world
+            // seed (a per-chunk Java-RNG check), so this is a cheap pass-2 test.
+            int64_t lim = (int64_t)c->within * c->within;
+            int c0x = (centre.x - c->within) >> 4, c1x = (centre.x + c->within) >> 4;
+            int c0z = (centre.z - c->within) >> 4, c1z = (centre.z + c->within) >> 4;
+            int cnt = 0;
+            for (int chx = c0x; chx <= c1x; chx++)
+            for (int chz = c0z; chz <= c1z; chz++) {
+                int bx = (chx << 4) + 8 - centre.x, bz = (chz << 4) + 8 - centre.z;
+                if ((int64_t)bx*bx + (int64_t)bz*bz > lim) continue;
+                if (isSlimeChunk(worldSeed, chx, chz)) cnt++;
+            }
+            if (cnt < c->slimeMin) return 0;
+            fixed->pos[k] = centre;
+            fixed->slimeCount[k] = cnt;
             continue;
         }
 

@@ -161,6 +161,7 @@
   .cond.eyes  { border-left-color: var(--diamond); }
   .cond.loot  { border-left-color: var(--gold); }
   .cond.ore   { border-left-color: var(--diamond); }
+  .cond.slime { border-left-color: var(--grass); }
   .cond .top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   .cond .ic { width: 22px; height: 22px; flex: none; }
   .cond .cid {
@@ -357,6 +358,7 @@
         <button id="addEyes">+ end portal eyes</button>
         <button id="addLoot">+ chest loot</button>
         <button id="addOre">+ ore</button>
+        <button id="addSlime">+ slime chunks</button>
       </div>
     </section>
 
@@ -499,6 +501,7 @@
   }
   function emojiFor(cat, name) {
     if (cat === 'eyes')   return '👁️';
+    if (cat === 'slime')  return '🟢';
     if (cat === 'spawn')  return '🧭';
     if (cat === 'biome')  return biomeEmoji(name);
     if (cat === 'item')   return ITEM_EMOJI[name] || '📦';
@@ -548,9 +551,12 @@
       $('#engine').textContent =
         `cubiomes · MC ${d.version} · ${Object.keys(d.structures).length} structures · ${Object.keys(d.biomes).length} biomes`;
       // Drop conditions this version can't express, rather than failing later.
+      // Only structure/biome names are version-scoped; ore, eyes, loot and slime
+      // (slime placement is version-independent) carry across any version.
       const before = conds.length;
-      conds = conds.filter(c => c.kind === 'structure'
-        ? c.name in vocab.structures : c.name in vocab.biomes);
+      conds = conds.filter(c =>
+        c.kind === 'structure' ? c.name in vocab.structures :
+        c.kind === 'biome'     ? c.name in vocab.biomes : true);
       render();
       if (conds.length !== before) toast(`${before - conds.length} condition(s) not in MC ${d.version} — removed`);
     } catch (e) { $('#engine').textContent = 'vocab failed: ' + e.message; }
@@ -596,6 +602,11 @@
   $('#addOre').onclick = () => {
     conds.push({ id: 'o' + (nextId++), kind: 'ore', mat: 'diamond',
                  count: ORE_DEFAULT.diamond, within: 64, of: 'origin' });
+    render();
+  };
+
+  $('#addSlime').onclick = () => {
+    conds.push({ id: 's' + (nextId++), kind: 'slime', count: 6, within: 128, of: 'origin' });
     render();
   };
 
@@ -683,6 +694,37 @@
 
         const note = el('div','note');
         note.textContent = 'Counts every ore block at all depths in the radius — a richness proxy, not what you’d mine. Expensive; pair with a structure to filter first.';
+        d.append(note);
+        box.append(d);
+        return;
+      }
+      if (c.kind === 'slime') {
+        const top = el('div','top');
+        top.append(mkIcon('slime'), el('span','cid', c.id), el('span','dim','SLIME CHUNKS'));
+        const x = el('button','tiny x','×');
+        x.onclick = () => { conds.splice(i,1); render(); };
+        top.append(x); d.append(top);
+
+        const g = el('div','grid');
+        const lab = el('div');
+        lab.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+        lab.textContent = 'at least (chunks)';
+        const cnt = el('input'); cnt.type='number'; cnt.value=c.count; cnt.min=1;
+        cnt.title='minimum slime chunks in range';
+        cnt.onchange = e => c.count = Math.max(1, +e.target.value||1);
+        g.append(lab, cnt); d.append(g);
+
+        const g2 = el('div','grid');
+        const wl = el('div');
+        wl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+        wl.textContent = 'within (blocks)';
+        const w = el('input'); w.type='number'; w.value=c.within; w.min=16; w.max=2048; w.step=16;
+        w.title='radius in blocks';
+        w.onchange = e => c.within = Math.max(16, Math.min(2048, +e.target.value||128));
+        g2.append(wl, w); d.append(g2);
+
+        const note = el('div','note');
+        note.textContent = 'Slime chunks are a per-chunk RNG check on the world seed — version-independent, so this works for any MC version. A radius-128 disc holds ~200 chunks (~20 slime on average); ask for a dense cluster for a slime-farm site.';
         d.append(note);
         box.append(d);
         return;
@@ -797,6 +839,8 @@
         if (c.kind === 'loot') return { id: c.id, within: c.within,
           loot: { structure: c.struct, item: c.item, count: c.count } };
         if (c.kind === 'ore') return { id: c.id, ore: c.mat, count: c.count,
+          within: c.within, of: c.of };
+        if (c.kind === 'slime') return { id: c.id, slime: c.count,
           within: c.within, of: c.of };
         const o = { id: c.id, within: c.within, of: c.of };
         if (c.kind === 'structure') {
@@ -995,7 +1039,7 @@
           const desc = el('button','tiny','describe');
           desc.onclick = () => describe(s.seed);
           n.append(num, desc); box.append(n);
-          if (s.places.length || s.spawn || s.portal || s.loot || s.ore) {
+          if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime) {
             const t = el('table');
             const idCell = (cat, name, label) => {
               const td = el('td','id');
@@ -1026,6 +1070,13 @@
             (s.ore || []).forEach(o => {
               const tr = el('tr');
               tr.append(idCell('item', o.material, pretty(o.material)),
+                        el('td',null,`x=${o.x}  z=${o.z}`),
+                        el('td','d', `${o.count.toLocaleString()} within ${o.within}`));
+              t.append(tr);
+            });
+            (s.slime || []).forEach(o => {
+              const tr = el('tr');
+              tr.append(idCell('slime', '', 'Slime Chunks'),
                         el('td',null,`x=${o.x}  z=${o.z}`),
                         el('td','d', `${o.count.toLocaleString()} within ${o.within}`));
               t.append(tr);
@@ -1264,6 +1315,7 @@
       if (s.portal) push('portal', 'end_portal', s.portal.x, s.portal.z, s.portal.eyes + '/12 eyes');
       (s.loot  || []).forEach(l => push('loot', l.id, l.x, l.z, l.count + ' ' + l.item));
       (s.ore   || []).forEach(o => push('ore', o.material, o.x, o.z, o.count + ' within ' + o.within));
+      (s.slime || []).forEach(o => push('slime', o.id, o.x, o.z, o.count + ' within ' + o.within));
       (s.places|| []).forEach(p => push('structure', p.id, p.x, p.z, p.dist + ' from ' + (p.ref || 'origin')));
       if (!any) rows.push([s.seed, 'seed', '', '', '', '']);
     });

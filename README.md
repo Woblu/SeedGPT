@@ -52,7 +52,7 @@ Three conveniences for real use:
   click one to reload it.
 - **Export** on a result set writes the seeds and every coordinate to **CSV**
   or **JSON** (or copies CSV to the clipboard) — one flat row per structure,
-  chest, ore count, spawn, and portal.
+  chest, ore count, slime cluster, spawn, and portal.
 
 ### Command line
 
@@ -329,6 +329,29 @@ the cheap filters. Radius is capped at 256 and defaults to 64; as the *only*
 condition it will crawl, so pair it with a structure. `tools/checkore` re-counts
 independently, and the test suite confirms every reported count reproduces
 exactly (`find` == `checkore`) and clears the requested threshold.
+
+## Slime chunks
+
+Find a dense cluster of slime chunks near a point — the site for a slime farm:
+
+```json
+{ "id": "cl", "slime": 8, "within": 128, "of": "origin" }
+```
+
+This counts the slime chunks whose centre falls inside the disc and keeps the
+seed if that count is `>= slime`. A slime chunk is a **per-chunk RNG check on the
+world seed** (`isSlimeChunk`: mix the chunk coords into the seed → `setSeed` →
+`nextInt(10) == 0`), so the mechanic is **version-independent** — the condition
+carries across every MC version unchanged, and switching versions in the UI never
+drops it. `of` may be `origin`, `spawn`, or another condition's structure.
+
+A radius-128 disc holds ~200 chunks and averages ~20 slime, so ask for a tight
+cluster to find a farm-worthy spot. Radius is capped at 2048 and defaults to 128.
+It is a cheap pass-2 check (no biome generator needed), but as the *only*
+condition it still scans every seed, so pairing it with a structure narrows the
+field first. `tools/checkslime` re-derives the count from scratch, and the test
+suite confirms every reported count reproduces exactly (`find` == `checkslime`,
+origin- and spawn-relative) and clears the requested threshold.
 
 ## Versions
 

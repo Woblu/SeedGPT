@@ -31,7 +31,8 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkportal.c >/tmp/sc_test/b10 2>&1 \
 && ./build.sh tools/checkore.c >/tmp/sc_test/b11 2>&1 \
 && ./build.sh tools/checkvariant.c >/tmp/sc_test/b12 2>&1 \
-&& ./build.sh tools/checkrpchest.c >/tmp/sc_test/b13 2>&1; then
+&& ./build.sh tools/checkrpchest.c >/tmp/sc_test/b13 2>&1 \
+&& ./build.sh tools/checkslime.c >/tmp/sc_test/b14 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -270,6 +271,29 @@ done < <(awk '/^SEED/{s=$2} /dia /{gsub(/x=|z=/,""); print s, $2, $3, $4}' /tmp/
 [ "$ore_low" -eq 0 ] \
   && ok "every ore result clears the requested threshold" \
   || bad "ore result below threshold" "under=$ore_low"
+
+# Slime chunks are a per-chunk Java-RNG check on the world seed (isSlimeChunk),
+# version-independent. Every reported cluster count must reproduce exactly under
+# an independent re-count (checkslime), and every result must clear the
+# threshold. Origin- and spawn-relative both exercised.
+section "slime chunk cluster search"
+cat > /tmp/sc_test/slime.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"cl","slime":18,"within":128,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/slime.json 200000 16 2>/dev/null > /tmp/sc_test/slime.out
+sl_bad=0; sl_low=0; sl_n=0
+while read -r sseed sx sz scnt; do
+  chk=$(./build/checkslime.exe "$sseed" "$sx" "$sz" 128 2>/dev/null | grep -oE 'count=[0-9]+' | cut -d= -f2)
+  sl_n=$((sl_n+1))
+  [ "$scnt" != "$chk" ] && sl_bad=$((sl_bad+1))
+  [ "$scnt" -lt 18 ] && sl_low=$((sl_low+1))
+done < <(awk '/^SEED/{s=$2} /cl /{gsub(/x=|z=/,""); print s, $2, $3, $4}' /tmp/sc_test/slime.out | head -8)
+[ "$sl_n" -ge 5 ] && [ "$sl_bad" -eq 0 ] \
+  && ok "slime counts reproduce exactly under independent re-count ($sl_n checked)" \
+  || bad "slime count disagreed with checkslime" "checked=$sl_n mismatch=$sl_bad"
+[ "$sl_low" -eq 0 ] \
+  && ok "every slime result clears the requested threshold" \
+  || bad "slime result below threshold" "under=$sl_low"
 
 # Structure variant filters (zombie village, igloo basement, giant portal) are
 # exact -- getVariant reads the same draw the game does. Each filtered result

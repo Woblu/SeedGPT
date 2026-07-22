@@ -171,6 +171,12 @@ def parse_seeds(out: str) -> list:
                 {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
                  "count": int(m.group(4)), "material": m.group(5), "within": int(m.group(6))})
             continue
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) slime chunks within (\d+)", line)
+        if m and cur:
+            cur.setdefault("slime", []).append(
+                {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
+                 "count": int(m.group(4)), "within": int(m.group(5))})
+            continue
         m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) (\w+)$", line)
         if m and cur and m.group(5) not in ("from",):
             cur.setdefault("loot", []).append(

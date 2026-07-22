@@ -41,6 +41,7 @@ typedef enum {
     CT_EYES,        // the first stronghold's end portal has >= N eyes
     CT_LOOT,        // a structure's chests hold >= N of an item
     CT_ORE,         // >= N ore blocks of a material within `within` (all depths)
+    CT_SLIME,       // >= N slime chunks within `within` blocks of parent
 } CondType;
 
 // End portal frames: 12, each independently 10% likely to hold an eye. That
@@ -80,6 +81,7 @@ typedef struct {
     int      reqGiant;      // CT_STRUCTURE: require the giant ruined portal
     int      oreMat;        // CT_ORE: index into the ore material table
     int      oreMin;        // CT_ORE: minimum ore-block count in range
+    int      slimeMin;      // CT_SLIME: minimum slime chunks in range
 } Cond;
 
 // Biome scan precision. A biome condition samples points across the disc; the
@@ -138,6 +140,7 @@ typedef struct {
     int haveEyes;
     int lootCount[MAX_COND];  // CT_LOOT: item count found at the winning chest
     int oreCount[MAX_COND];   // CT_ORE: ore-block count found in range
+    int slimeCount[MAX_COND]; // CT_SLIME: slime-chunk count found in range
 } Match;
 
 // Pass 1: geometry only. No Generator required. Returns 1 if all geometry

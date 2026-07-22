@@ -184,6 +184,12 @@ int main(int argc, char **argv)
                            tab[q.cond[c].oreMat].name, q.cond[c].within);
                     continue;
                 }
+                if (q.cond[c].type == CT_SLIME) {
+                    printf("   %-14s x=%6d z=%6d   %d slime chunks within %d\n", q.cond[c].id,
+                           h->m.pos[c].x, h->m.pos[c].z, h->m.slimeCount[c],
+                           q.cond[c].within);
+                    continue;
+                }
                 if (q.cond[c].type != CT_STRUCTURE) continue;
                 Pos p = h->m.pos[c];
                 // Say which reference the distance is measured from: "spawn"
