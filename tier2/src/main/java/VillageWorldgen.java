@@ -33,13 +33,16 @@ import java.util.*;
 // point using the REAL generator (terrain + jigsaw) and count building types.
 public class VillageWorldgen {
 
-    public static void main(String[] args) throws Exception {
-        long seed = args.length > 0 ? Long.parseLong(args[0]) : 42L;
-        int radius = args.length > 1 ? Integer.parseInt(args[1]) : 2000;
-        int threshold = args.length > 2 ? Integer.parseInt(args[2]) : 1;
+    // One-time worldgen setup shared across seeds (the expensive part).
+    static net.minecraft.core.RegistryAccess registries;
+    static StructureManager structureManager;
+    static NoiseGeneratorSettings overworld;
+    static StructureFeatureConfiguration villageCfg;
+    static Registry<ConfiguredStructureFeature<?, ?>> confReg;
 
+    public static void main(String[] args) throws Exception {
         Bootstrap.bootStrap();
-        net.minecraft.core.RegistryAccess registries = net.minecraft.core.RegistryAccess.builtin();
+        registries = net.minecraft.core.RegistryAccess.builtin();
 
         // Vanilla data pack -> resource manager -> StructureManager (loads templates).
         PackRepository packRepo = new PackRepository(Pack::new, new ServerPacksSource());
@@ -51,17 +54,42 @@ public class VillageWorldgen {
         net.minecraft.world.level.storage.LevelStorageSource lss =
             net.minecraft.world.level.storage.LevelStorageSource.createDefault(tmp);
         net.minecraft.world.level.storage.LevelStorageSource.LevelStorageAccess lsa = lss.createAccess("w");
-        StructureManager structureManager = new StructureManager(rm, lsa, DataFixers.getDataFixer());
+        structureManager = new StructureManager(rm, lsa, DataFixers.getDataFixer());
+        overworld = BuiltinRegistries.NOISE_GENERATOR_SETTINGS.getOrThrow(NoiseGeneratorSettings.OVERWORLD);
+        villageCfg = overworld.structureSettings().getConfig(StructureFeature.VILLAGE);
+        confReg = BuiltinRegistries.CONFIGURED_STRUCTURE_FEATURE;
 
-        Registry<NoiseGeneratorSettings> noiseReg = BuiltinRegistries.NOISE_GENERATOR_SETTINGS;
-        NoiseGeneratorSettings overworld = noiseReg.getOrThrow(NoiseGeneratorSettings.OVERWORLD);
-        StructureFeatureConfiguration villageCfg = overworld.structureSettings().getConfig(StructureFeature.VILLAGE);
+        if (args.length > 0 && args[0].equals("server")) {
+            // Persistent worker: read "seed radius threshold" lines from stdin,
+            // emit matching villages, then a "seed DONE" line. Amortises setup.
+            Bootstrap.STDOUT.println("READY");
+            Bootstrap.STDOUT.flush();
+            java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(System.in));
+            String line;
+            while ((line = in.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                if (line.equals("quit")) break;
+                String[] t = line.split("\\s+");
+                long seed = Long.parseLong(t[0]);
+                int radius = t.length > 1 ? Integer.parseInt(t[1]) : 1200;
+                int threshold = t.length > 2 ? Integer.parseInt(t[2]) : 1;
+                processSeed(seed, radius, threshold);
+                Bootstrap.STDOUT.println(seed + "\tDONE");
+                Bootstrap.STDOUT.flush();
+            }
+            return;
+        }
 
+        long seed = args.length > 0 ? Long.parseLong(args[0]) : 42L;
+        int radius = args.length > 1 ? Integer.parseInt(args[1]) : 2000;
+        int threshold = args.length > 2 ? Integer.parseInt(args[2]) : 1;
+        processSeed(seed, radius, threshold);
+    }
+
+    static void processSeed(long seed, int radius, int threshold) {
         OverworldBiomeSource biomeSource = new OverworldBiomeSource(seed, false, false, BuiltinRegistries.BIOME);
         NoiseBasedChunkGenerator chunkGen = new NoiseBasedChunkGenerator(biomeSource, seed, () -> overworld);
-
-        Registry<ConfiguredStructureFeature<?, ?>> confReg = BuiltinRegistries.CONFIGURED_STRUCTURE_FEATURE;
-
         int rChunks = radius / 16;
         WorldgenRandom rand = new WorldgenRandom();
         for (int cx = -rChunks; cx <= rChunks; cx++) {
@@ -72,7 +100,10 @@ public class VillageWorldgen {
                 Biome biome = biomeSource.getNoiseBiome(bx >> 2, 0, bz >> 2);
                 ConfiguredStructureFeature<?, ?> conf = pickVillage(confReg, biome);
                 if (conf == null) continue;
-                StructureStart<?> start = conf.generate(registries, chunkGen, biomeSource, structureManager, seed, potential, biome, 0, villageCfg);
+                StructureStart<?> start;
+                try {
+                    start = conf.generate(registries, chunkGen, biomeSource, structureManager, seed, potential, biome, 0, villageCfg);
+                } catch (Throwable t) { continue; }
                 if (start == null || !start.isValid()) continue;
                 Map<String, Integer> smiths = new TreeMap<>();
                 int total = 0;
@@ -81,8 +112,6 @@ public class VillageWorldgen {
                     String name = templateName(((PoolElementStructurePiece) piece).getElement());
                     if (name == null) continue;
                     String s = shortName(name);
-                    // smith buildings across village types: *_tool_smith, *_weapon_smith,
-                    // *_weaponsmith, *_armorer_house, *_armorer
                     if (s.contains("tool_smith") || s.contains("toolsmith")
                         || s.contains("weapon_smith") || s.contains("weaponsmith")
                         || s.contains("armorer")) {
@@ -92,8 +121,9 @@ public class VillageWorldgen {
                 }
                 if (total >= threshold) {
                     int wx = cx * 16 + 8, wz = cz * 16 + 8;
-                    System.out.println(seed + "\tx=" + wx + "\tz=" + wz + "\tbiome=" + biomeName(biome)
-                        + "\tsmiths=" + total + "\t" + smiths);
+                    Bootstrap.STDOUT.println("HIT\t" + seed + "\t" + wx + "\t" + wz + "\t" + biomeName(biome)
+                        + "\t" + total + "\t" + smiths);
+                    Bootstrap.STDOUT.flush();
                 }
             }
         }

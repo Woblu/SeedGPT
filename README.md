@@ -340,6 +340,36 @@ ore placement all shift between versions, so the choice is load-bearing.
 Every reported count is re-derived independently by `tools/checkloot.c` in the
 suite, so the numbers aren't a plumbing artefact.
 
+## Village buildings — real Minecraft worldgen (tier 2)
+
+cubiomes stops at *where* a structure is; it has no block-level terrain, so it
+cannot see *inside* a 1.14+ jigsaw village. Neither can any seedfinding library —
+FeatureUtils and its `mc_feature` fork both ship an **unfinished** village
+generator (the jigsaw assembler was never completed). The only correct way to
+count a village's buildings is to run Minecraft's **actual** world generator.
+
+So there's a second, heavier engine in [`tier2/`](tier2/README.md): a headless
+Minecraft (via Fabric Loom, which downloads a deobfuscated jar — nothing Mojang
+is committed) that boots the registries, builds the overworld generator for a
+seed, runs the real jigsaw assembler, and counts smith buildings by their
+template names. The UI's **Village buildings** panel drives it: pick a smith
+count and how many seeds to scan, and it returns seeds whose village holds that
+many toolsmith/weaponsmith/armorer buildings.
+
+```
+seed 21  x=1128 z=-488  taiga  smiths=6  {taiga_armorer=2, taiga_weaponsmith=4}
+seed 29  x=-440 z=-856  snowy  smiths=5  {snowy_armorer_house=2, snowy_tool_smith=2, snowy_weapon_smith=1}
+```
+
+Architecture: a persistent Java worker bootstraps Minecraft **once** (~5 s) then
+streams seeds over stdin; [`tier2/village_search.py`](tier2/village_search.py)
+fans out across several workers and `serve.py` exposes `/api/villagesmiths`.
+Caveats: it is **slow** (real jigsaw generation, seconds per seed — a tier-2
+search, not a brute force), targets **MC 1.16.5** (1.16.1 predates data-driven
+worldgen; village *composition* is identical across 1.16.x but *positions*
+differ), and requires the backend to be built (`tier2/README.md`). Village
+*composition* here is the game's own output — as authoritative as it gets.
+
 ## End portal eyes
 
 An end portal has 12 frames, each independently 10% likely to already hold an

@@ -37,7 +37,8 @@ UI = ROOT / "ui" / "index.html"
 PORT = int(os.environ.get("SEED_UI_PORT", "8777"))
 
 # Guard against a stray query pinning all cores for minutes.
-TIMEOUTS = {"plan": 15, "explain": 90, "search": 180, "describe": 30, "map": 60}
+TIMEOUTS = {"plan": 15, "explain": 90, "search": 180, "describe": 30, "map": 60,
+            "villagesmiths": 900}
 VERSION_RE = re.compile(r"^[0-9][0-9A-Za-z._-]{0,15}$")
 
 
@@ -333,9 +334,43 @@ def api_ask(body) -> dict:
             "notes": notes.group(1).strip() if notes else ""}
 
 
+def api_villagesmiths(body) -> dict:
+    """Tier-2 search: run the real-Minecraft worldgen backend to find seeds with
+    a village holding >= N smith buildings. Slow (real jigsaw generation), and
+    MC 1.16.5 only -- a different engine from the cubiomes finder above."""
+    tier2 = ROOT / "tier2"
+    if not (tier2 / "out" / "VillageWorldgen.class").exists() or not (tier2 / "cp.txt").exists():
+        raise Failure("village worldgen backend not built -- see tier2/README.md "
+                      "(gradle printcp -> cp.txt, then javac the worker)")
+    mn = max(1, min(12, int(body.get("min", 5))))
+    radius = max(200, min(4000, int(body.get("radius", 1200))))
+    seeds = max(1, min(3000, int(body.get("seeds", 200))))
+    workers = max(1, min(8, int(body.get("workers", 4))))
+    limit = max(1, min(100, int(body.get("limit", 20))))
+    start = int(body.get("start", 1))
+    args = [sys.executable, str(tier2 / "village_search.py"),
+            "--min", str(mn), "--radius", str(radius), "--seeds", str(seeds),
+            "--start", str(start), "--workers", str(workers), "--limit", str(limit)]
+    rc, out, err = run(args, TIMEOUTS["villagesmiths"])
+    hits, summary = [], {}
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if obj.get("summary"):
+            summary = obj
+        else:
+            hits.append(obj)
+    return {"hits": hits, "summary": summary}
+
+
 ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/search": api_search, "/api/describe": api_describe,
-          "/api/ask": api_ask}
+          "/api/ask": api_ask, "/api/villagesmiths": api_villagesmiths}
 
 
 class Handler(BaseHTTPRequestHandler):

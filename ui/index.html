@@ -193,6 +193,12 @@
     text-align: center; color: var(--ink-faint); font-size: 12px;
   }
 
+  .tag-exp {
+    font-family: var(--mono); font-size: 8.5px; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--diamond);
+    border: 1px solid var(--diamond); padding: 1px 5px; margin-left: 6px;
+    vertical-align: middle;
+  }
   .saved { display: flex; gap: 6px; margin-top: 6px; }
   .saved button:first-child { text-align: left; }
   .exportbar { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px; }
@@ -377,6 +383,24 @@
       </div>
       <div id="savedList"></div>
       <div class="hint">Saved in this browser. <b>Share</b> (top right) copies a link that rebuilds the query anywhere.</div>
+    </section>
+
+    <section>
+      <h2>Village buildings <span class="tag-exp">real worldgen</span></h2>
+      <div class="hint" style="margin-top:0;margin-bottom:9px">
+        Finds seeds with a village holding <b>N&nbsp;smiths</b> (tool/weapon/armorer) —
+        by running Minecraft&#39;s <b>actual</b> generator, the only way to see inside a
+        jigsaw village. Separate engine (<b>MC&nbsp;1.16.5</b>), and <b>slow</b>.
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+        <div><label for="vsMin">min smiths</label>
+          <input type="number" id="vsMin" value="5" min="1" max="12"></div>
+        <div><label for="vsSeeds">seeds to scan</label>
+          <input type="number" id="vsSeeds" value="200" min="1" max="3000" step="50"></div>
+      </div>
+      <div class="btnrow">
+        <button class="primary" id="vsBtn">Search villages</button>
+      </div>
     </section>
   </div>
 
@@ -1077,6 +1101,55 @@
     } catch (e) {
       $('#askOut').innerHTML = `<div class="err"><b>error</b>${esc(e.message)}</div>`;
     }
+  };
+
+  // ---- village smith search (real worldgen, tier-2 backend) --------------
+  function prettyBuildings(s) {
+    return String(s).replace(/[{}]/g, '').split(', ').filter(Boolean).map(x => {
+      const [k, v] = x.split('=');
+      const name = k.replace(/^(taiga|plains|desert|savanna|snowy)_/, '').replace(/_house$/, '');
+      return pretty(name) + ' ×' + v;
+    }).join(', ');
+  }
+  $('#vsBtn').onclick = async () => {
+    const mn = Math.max(1, Math.min(12, +$('#vsMin').value || 5));
+    const seeds = Math.max(1, Math.min(3000, +$('#vsSeeds').value || 200));
+    busy(`running Minecraft's real world generator — scanning ${seeds.toLocaleString()} seeds for a village with ${mn}+ smiths. This is slow.`);
+    try {
+      const d = await post('/api/villagesmiths', { min: mn, seeds, radius: 1200, workers: 4, limit: 20 });
+      out.innerHTML = '';
+      out.append(statsCard('Village smith search · real MC 1.16.5 worldgen', [
+        ['seeds scanned', (d.summary?.seeds_scanned ?? seeds).toLocaleString()],
+        ['villages found', String(d.hits.length), d.hits.length ? 'good' : 'warn'],
+        ['min smiths', String(mn)],
+      ]));
+      if (!d.hits.length) {
+        out.append(el('div', 'note warn',
+          `No village with ${mn}+ smiths in the first ${seeds.toLocaleString()} seeds — lower the threshold or scan more.`));
+      } else {
+        const c = el('div', 'card');
+        c.append(el('h3', null, 'Villages — click a seed to copy'));
+        d.hits.forEach(h => {
+          const box = el('div', 'seed');
+          const n = el('div', 'n');
+          const num = el('span', 'num', String(h.seed));
+          num.title = 'copy';
+          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
+            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          n.append(num, el('span', 'dim', h.smiths + ' smiths')); box.append(n);
+          const t = el('table');
+          const tr = el('tr');
+          tr.append(idCell('structure', 'village', 'Village'),
+                    el('td', null, `x=${h.x}  z=${h.z}`), el('td', 'd', pretty(h.biome)));
+          t.append(tr);
+          const tr2 = el('tr');
+          tr2.append(el('td', 'id', ''), el('td', null, prettyBuildings(h.buildings)), el('td', 'd', ''));
+          t.append(tr2);
+          box.append(t); c.append(box);
+        });
+        out.append(c);
+      }
+    } catch (e) { fail(e.message); }
   };
 
   // ---- start -------------------------------------------------------------
