@@ -32,7 +32,8 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkore.c >/tmp/sc_test/b11 2>&1 \
 && ./build.sh tools/checkvariant.c >/tmp/sc_test/b12 2>&1 \
 && ./build.sh tools/checkrpchest.c >/tmp/sc_test/b13 2>&1 \
-&& ./build.sh tools/checkslime.c >/tmp/sc_test/b14 2>&1; then
+&& ./build.sh tools/checkslime.c >/tmp/sc_test/b14 2>&1 \
+&& ./build.sh tools/checkbiomearea.c >/tmp/sc_test/b15 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -294,6 +295,32 @@ done < <(awk '/^SEED/{s=$2} /cl /{gsub(/x=|z=/,""); print s, $2, $3, $4}' /tmp/s
 [ "$sl_low" -eq 0 ] \
   && ok "every slime result clears the requested threshold" \
   || bad "slime result below threshold" "under=$sl_low"
+
+# Biome-area finds seeds where a biome covers >= N% of a disc (a size filter for
+# huge mushroom islands / mesas). The reported percentage must reproduce exactly
+# under an identical independent re-sample (checkbiomearea), and every result
+# must clear the threshold. Sampled, so a coarse scan only ever misses seeds.
+section "biome area search"
+check_err "unknown biome_area rejected" \
+  '{"version":"1.21","conditions":[{"id":"a","biome_area":"nonexistent_biome","pct":40,"within":400}]}' \
+  "unknown biome"
+cat > /tmp/sc_test/area.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"sh","biome_area":"mushroom_fields","pct":40,"within":400,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/area.json 400000 16 2>/dev/null > /tmp/sc_test/area.out
+ar_bad=0; ar_low=0; ar_n=0
+while read -r aseed ax az apct; do
+  chk=$(./build/checkbiomearea.exe "$aseed" mushroom_fields 1.21 "$ax" "$az" 400 fine 2>/dev/null | grep -oE 'pct=[0-9]+' | cut -d= -f2)
+  ar_n=$((ar_n+1))
+  [ "$apct" != "$chk" ] && ar_bad=$((ar_bad+1))
+  [ "$apct" -lt 40 ] && ar_low=$((ar_low+1))
+done < <(awk '/^SEED/{s=$2} /sh /{gsub(/x=|z=|%/,""); print s, $2, $3, $4}' /tmp/sc_test/area.out | head -8)
+[ "$ar_n" -ge 5 ] && [ "$ar_bad" -eq 0 ] \
+  && ok "biome-area percentages reproduce exactly under independent re-sample ($ar_n checked)" \
+  || bad "biome-area percentage disagreed with checkbiomearea" "checked=$ar_n mismatch=$ar_bad"
+[ "$ar_low" -eq 0 ] \
+  && ok "every biome-area result clears the requested threshold" \
+  || bad "biome-area result below threshold" "under=$ar_low"
 
 # Structure variant filters (zombie village, igloo basement, giant portal) are
 # exact -- getVariant reads the same draw the game does. Each filtered result

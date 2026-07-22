@@ -162,6 +162,7 @@
   .cond.loot  { border-left-color: var(--gold); }
   .cond.ore   { border-left-color: var(--diamond); }
   .cond.slime { border-left-color: var(--grass); }
+  .cond.area  { border-left-color: var(--emerald); }
   .cond .top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   .cond .ic { width: 22px; height: 22px; flex: none; }
   .cond .cid {
@@ -359,6 +360,7 @@
         <button id="addLoot">+ chest loot</button>
         <button id="addOre">+ ore</button>
         <button id="addSlime">+ slime chunks</button>
+        <button id="addArea">+ biome area</button>
       </div>
     </section>
 
@@ -555,8 +557,8 @@
       // (slime placement is version-independent) carry across any version.
       const before = conds.length;
       conds = conds.filter(c =>
-        c.kind === 'structure' ? c.name in vocab.structures :
-        c.kind === 'biome'     ? c.name in vocab.biomes : true);
+        c.kind === 'structure'            ? c.name in vocab.structures :
+        c.kind === 'biome' || c.kind === 'area' ? c.name in vocab.biomes : true);
       render();
       if (conds.length !== before) toast(`${before - conds.length} condition(s) not in MC ${d.version} — removed`);
     } catch (e) { $('#engine').textContent = 'vocab failed: ' + e.message; }
@@ -607,6 +609,16 @@
 
   $('#addSlime').onclick = () => {
     conds.push({ id: 's' + (nextId++), kind: 'slime', count: 6, within: 128, of: 'origin' });
+    render();
+  };
+
+  $('#addArea').onclick = () => {
+    const names = Object.keys(vocab.biomes || {});
+    if (!names.length) { toast('vocabulary not loaded yet'); return; }
+    const pick = names.includes('mushroom_fields') ? 'mushroom_fields'
+               : names.includes('badlands') ? 'badlands' : names[0];
+    conds.push({ id: 'a' + (nextId++), kind: 'area', name: pick, pct: 50,
+                 within: 800, of: 'origin', precision: 'fine' });
     render();
   };
 
@@ -729,6 +741,40 @@
         box.append(d);
         return;
       }
+      if (c.kind === 'area') {
+        const top = el('div','top');
+        top.append(mkIcon('biome', c.name), el('span','cid', c.id), el('span','dim','BIOME AREA'));
+        const x = el('button','tiny x','×');
+        x.onclick = () => { conds.splice(i,1); render(); };
+        top.append(x); d.append(top);
+
+        const g = el('div','grid');
+        const sel = el('select');
+        Object.keys(vocab.biomes).sort().forEach(nm => {
+          const o = el('option', null, pretty(nm)); o.value = nm;
+          if (nm === c.name) o.selected = true; sel.append(o);
+        });
+        sel.onchange = e => { c.name = e.target.value; render(); };
+        const w = el('input'); w.type='number'; w.value=c.within; w.min=64; w.max=4000; w.step=100;
+        w.title='radius in blocks';
+        w.onchange = e => c.within = Math.max(64, Math.min(4000, +e.target.value||800));
+        g.append(sel, w); d.append(g);
+
+        const g2 = el('div','grid');
+        const lab = el('div');
+        lab.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+        lab.textContent = 'covers at least (%)';
+        const pc = el('input'); pc.type='number'; pc.value=c.pct; pc.min=1; pc.max=100;
+        pc.title='minimum % of the disc that is this biome';
+        pc.onchange = e => c.pct = Math.max(1, Math.min(100, +e.target.value||50));
+        g2.append(lab, pc); d.append(g2);
+
+        const note = el('div','note');
+        note.textContent = 'Keeps seeds where this biome fills at least the given share of the disc — how you find a genuinely large biome (a huge mushroom island, a sprawling mesa). Big radius + high % = a big biome. Sampled at the chosen precision, so a coarse scan only ever misses seeds, never invents them.';
+        d.append(note);
+        box.append(d);
+        return;
+      }
       if (c.kind === 'eyes') {
         const top = el('div','top');
         top.append(mkIcon('eyes'), el('span','cid', c.id), el('span','dim','END PORTAL'));
@@ -842,6 +888,8 @@
           within: c.within, of: c.of };
         if (c.kind === 'slime') return { id: c.id, slime: c.count,
           within: c.within, of: c.of };
+        if (c.kind === 'area') return { id: c.id, biome_area: c.name, pct: c.pct,
+          within: c.within, of: c.of, precision: c.precision };
         const o = { id: c.id, within: c.within, of: c.of };
         if (c.kind === 'structure') {
           o.structure = c.name;
@@ -1039,7 +1087,7 @@
           const desc = el('button','tiny','describe');
           desc.onclick = () => describe(s.seed);
           n.append(num, desc); box.append(n);
-          if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime) {
+          if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime || s.area) {
             const t = el('table');
             const idCell = (cat, name, label) => {
               const td = el('td','id');
@@ -1079,6 +1127,13 @@
               tr.append(idCell('slime', '', 'Slime Chunks'),
                         el('td',null,`x=${o.x}  z=${o.z}`),
                         el('td','d', `${o.count.toLocaleString()} within ${o.within}`));
+              t.append(tr);
+            });
+            (s.area || []).forEach(o => {
+              const tr = el('tr');
+              tr.append(idCell('biome', o.biome, pretty(o.biome)),
+                        el('td',null,`x=${o.x}  z=${o.z}`),
+                        el('td','d', `${o.pct}% within ${o.within}`));
               t.append(tr);
             });
             s.places.forEach(p => {
@@ -1316,6 +1371,7 @@
       (s.loot  || []).forEach(l => push('loot', l.id, l.x, l.z, l.count + ' ' + l.item));
       (s.ore   || []).forEach(o => push('ore', o.material, o.x, o.z, o.count + ' within ' + o.within));
       (s.slime || []).forEach(o => push('slime', o.id, o.x, o.z, o.count + ' within ' + o.within));
+      (s.area  || []).forEach(o => push('biome_area', o.biome, o.x, o.z, o.pct + '% within ' + o.within));
       (s.places|| []).forEach(p => push('structure', p.id, p.x, p.z, p.dist + ' from ' + (p.ref || 'origin')));
       if (!any) rows.push([s.seed, 'seed', '', '', '', '']);
     });

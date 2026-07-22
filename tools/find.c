@@ -190,6 +190,14 @@ int main(int argc, char **argv)
                            q.cond[c].within);
                     continue;
                 }
+                if (q.cond[c].type == CT_BIOME_AREA) {
+                    int tot = h->m.areaTotal[c], mat = h->m.areaCells[c];
+                    int pct = tot > 0 ? (int)((int64_t)mat * 100 / tot) : 0;
+                    printf("   %-14s x=%6d z=%6d   %d%% %s within %d\n", q.cond[c].id,
+                           h->m.pos[c].x, h->m.pos[c].z, pct,
+                           biome2str(q.mc, q.cond[c].biomeId), q.cond[c].within);
+                    continue;
+                }
                 if (q.cond[c].type != CT_STRUCTURE) continue;
                 Pos p = h->m.pos[c];
                 // Say which reference the distance is measured from: "spawn"

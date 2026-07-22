@@ -164,6 +164,7 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         cJSON *jb = cJSON_GetObjectItem(e, "biome");
         cJSON *jore = cJSON_GetObjectItem(e, "ore");
         cJSON *jslime = cJSON_GetObjectItem(e, "slime");
+        cJSON *jarea = cJSON_GetObjectItem(e, "biome_area");
         if (jslime && cJSON_IsNumber(jslime)) {
             c->type = CT_SLIME;
             c->dim = DIM_OVERWORLD;              // slime chunks are overworld
@@ -335,6 +336,43 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                     goto done;
                 }
             }
+        } else if (jarea && cJSON_IsString(jarea)) {
+            c->type = CT_BIOME_AREA;
+            c->biomeId = str2biome_(q->mc, jarea->valuestring);
+            if (c->biomeId < 0) {
+                snprintf(err, errlen, "condition \"%s\": unknown biome \"%s\"", c->id, jarea->valuestring);
+                goto done;
+            }
+            c->dim = getDimension(c->biomeId);
+            // Fraction of the disc, as a percentage, that must be this biome.
+            // A size filter: a big radius + high pct finds a genuinely large
+            // biome (huge mushroom island, sprawling mesa) around the point.
+            cJSON *jpct = cJSON_GetObjectItem(e, "pct");
+            c->areaPct = (jpct && cJSON_IsNumber(jpct)) ? jpct->valueint : 50;
+            if (c->areaPct < 1)   c->areaPct = 1;
+            if (c->areaPct > 100) c->areaPct = 100;
+            // Radius bounds the sampled region; default a modest disc, cap so a
+            // stray radius can't wedge the search (area scans every cell).
+            cJSON *aw = cJSON_GetObjectItem(e, "within");
+            c->within = (aw && cJSON_IsNumber(aw)) ? aw->valueint : 800;
+            if (c->within > 4000) c->within = 4000;
+            if (c->within < 64)   c->within = 64;
+            cJSON *of = cJSON_GetObjectItem(e, "of");
+            snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "origin");
+            // Same recall/cost tradeoff as a plain biome scan (see query.h).
+            c->scanStep = SCAN_FINE;
+            cJSON *jp = cJSON_GetObjectItem(e, "precision");
+            if (jp && cJSON_IsString(jp)) {
+                if      (!strcmp(jp->valuestring, "fast"))  c->scanStep = SCAN_FAST;
+                else if (!strcmp(jp->valuestring, "fine"))  c->scanStep = SCAN_FINE;
+                else if (!strcmp(jp->valuestring, "exact")) c->scanStep = SCAN_EXACT;
+                else {
+                    snprintf(err, errlen,
+                             "condition \"%s\": precision must be fast|fine|exact, got \"%s\"",
+                             c->id, jp->valuestring);
+                    goto done;
+                }
+            }
         } else {
             snprintf(err, errlen, "condition \"%s\": need \"structure\" or \"biome\"", c->id);
             goto done;
@@ -484,6 +522,11 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
     if (c->type == CT_SLIME) {
         snprintf(buf, n, ">= %d slime chunks within %d of %s",
                  c->slimeMin, c->within, c->ofId);
+        return buf;
+    }
+    if (c->type == CT_BIOME_AREA) {
+        snprintf(buf, n, "%s covers >= %d%% within %d of %s",
+                 biome2str(q->mc, c->biomeId), c->areaPct, c->within, c->ofId);
         return buf;
     }
     const char *what = (c->type == CT_STRUCTURE)
@@ -706,6 +749,36 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             if (cnt < c->slimeMin) return 0;
             fixed->pos[k] = centre;
             fixed->slimeCount[k] = cnt;
+            continue;
+        }
+
+        if (c->type == CT_BIOME_AREA) {
+            Pos centre = c->parent >= 0
+                ? (q->cond[c->parent].parent == PARENT_SPAWN
+                     ? fixed->pos[c->parent] : m->pos[c->parent])
+                : (c->parent == PARENT_SPAWN
+                     ? (*haveSpawn ? *spawn : (*spawn = getSpawn(g), *haveSpawn = 1, *spawn))
+                     : (Pos){0,0});
+            // Sample the disc on a scanStep lattice and take the fraction of
+            // sample points that are the target biome. Same surface probe as a
+            // plain biome check (y=319>>2 -- a y=63 probe lands in cave biomes).
+            int64_t lim = (int64_t)c->within * c->within;
+            int step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
+            int total = 0, match = 0;
+            for (int dx = -c->within; dx <= c->within; dx += step)
+            for (int dz = -c->within; dz <= c->within; dz += step) {
+                if ((int64_t)dx*dx + (int64_t)dz*dz > lim) continue;
+                int bx = centre.x + dx, bz = centre.z + dz;
+                total++;
+                int id = getBiomeAt(g, 0, (bx>>4)*4 + 2, 319 >> 2, (bz>>4)*4 + 2);
+                if (id == c->biomeId) match++;
+            }
+            // Integer test without floating point: match/total >= pct/100.
+            if (total <= 0 || (int64_t)match * 100 < (int64_t)c->areaPct * total)
+                return 0;
+            fixed->pos[k] = centre;
+            fixed->areaCells[k] = match;
+            fixed->areaTotal[k] = total;
             continue;
         }
 

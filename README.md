@@ -52,7 +52,7 @@ Three conveniences for real use:
   click one to reload it.
 - **Export** on a result set writes the seeds and every coordinate to **CSV**
   or **JSON** (or copies CSV to the clipboard) — one flat row per structure,
-  chest, ore count, slime cluster, spawn, and portal.
+  chest, ore count, slime cluster, biome area, spawn, and portal.
 
 ### Command line
 
@@ -352,6 +352,26 @@ condition it still scans every seed, so pairing it with a structure narrows the
 field first. `tools/checkslime` re-derives the count from scratch, and the test
 suite confirms every reported count reproduces exactly (`find` == `checkslime`,
 origin- and spawn-relative) and clears the requested threshold.
+
+## Biome area
+
+Find seeds where a biome is genuinely *large* near a point — a huge mushroom
+island, a sprawling mesa, a jungle big enough to build in:
+
+```json
+{ "id": "sh", "biome_area": "mushroom_fields", "pct": 50, "within": 800, "of": "spawn" }
+```
+
+This keeps the seed if the biome fills at least `pct` percent of the disc. It
+samples the disc on the same lattice a plain biome check uses and takes the
+fraction of sample points that are the target biome, so a big radius plus a high
+percentage means a big biome. `precision` (`fast`/`fine`/`exact`, default `fine`)
+is the same recall/cost knob as a biome condition — a coarser scan only ever
+*misses* qualifying seeds, it never invents one, so a reported percentage is a
+floor. Radius caps at 4000 and defaults to 800; `of` may be `origin`, `spawn`,
+or another condition. `tools/checkbiomearea` re-samples identically, and the test
+suite confirms every reported percentage reproduces exactly (`find` ==
+`checkbiomearea`) and clears the threshold.
 
 ## Versions
 
