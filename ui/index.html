@@ -392,12 +392,31 @@
         by running Minecraft&#39;s <b>actual</b> generator, the only way to see inside a
         jigsaw village. Separate engine (<b>MC&nbsp;1.16.5</b>), and <b>slow</b>.
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
-        <div><label for="vsMin">min smiths</label>
+      <div style="display:grid;grid-template-columns:1fr 76px;gap:9px">
+        <div><label for="vsBuilding">building</label>
+          <select id="vsBuilding">
+            <option value="smith">any smith (tool/weapon/armorer)</option>
+            <option value="toolsmith">toolsmith</option>
+            <option value="weaponsmith">weaponsmith</option>
+            <option value="armorer">armorer</option>
+            <option value="library">library</option>
+            <option value="cartographer">cartographer</option>
+            <option value="mason">mason</option>
+            <option value="fletcher">fletcher</option>
+            <option value="butcher">butcher</option>
+            <option value="shepherd">shepherd</option>
+            <option value="fisher">fisher</option>
+            <option value="tannery">tannery</option>
+            <option value="temple">temple</option>
+            <option value="farm">farm</option>
+            <option value="animal_pen">animal pen</option>
+            <option value="stable">stable</option>
+          </select></div>
+        <div><label for="vsMin">at least</label>
           <input type="number" id="vsMin" value="5" min="1" max="12"></div>
-        <div><label for="vsSeeds">seeds to scan</label>
-          <input type="number" id="vsSeeds" value="200" min="1" max="3000" step="50"></div>
       </div>
+      <div style="margin-top:9px"><label for="vsSeeds">seeds to scan</label>
+        <input type="number" id="vsSeeds" value="200" min="1" max="3000" step="50"></div>
       <div class="btnrow">
         <button class="primary" id="vsBtn">Search villages</button>
       </div>
@@ -1114,18 +1133,20 @@
   $('#vsBtn').onclick = async () => {
     const mn = Math.max(1, Math.min(12, +$('#vsMin').value || 5));
     const seeds = Math.max(1, Math.min(3000, +$('#vsSeeds').value || 200));
-    busy(`running Minecraft's real world generator — scanning ${seeds.toLocaleString()} seeds for a village with ${mn}+ smiths. This is slow.`);
+    const building = $('#vsBuilding').value;
+    const label = building === 'smith' ? 'smiths' : pretty(building) + 's';
+    busy(`running Minecraft's real world generator — scanning ${seeds.toLocaleString()} seeds for a village with ${mn}+ ${label}. This is slow.`);
     try {
-      const d = await post('/api/villagesmiths', { min: mn, seeds, radius: 1200, workers: 4, limit: 20 });
+      const d = await post('/api/villagesmiths', { min: mn, building, seeds, radius: 1200, workers: 4, limit: 20 });
       out.innerHTML = '';
-      out.append(statsCard('Village smith search · real MC 1.16.5 worldgen', [
+      out.append(statsCard('Village building search · real MC 1.16.5 worldgen', [
         ['seeds scanned', (d.summary?.seeds_scanned ?? seeds).toLocaleString()],
         ['villages found', String(d.hits.length), d.hits.length ? 'good' : 'warn'],
-        ['min smiths', String(mn)],
+        [label, '≥ ' + mn],
       ]));
       if (!d.hits.length) {
         out.append(el('div', 'note warn',
-          `No village with ${mn}+ smiths in the first ${seeds.toLocaleString()} seeds — lower the threshold or scan more.`));
+          `No village with ${mn}+ ${label} in the first ${seeds.toLocaleString()} seeds — lower the threshold or scan more.`));
       } else {
         const c = el('div', 'card');
         c.append(el('h3', null, 'Villages — click a seed to copy'));
@@ -1136,7 +1157,7 @@
           num.title = 'copy';
           num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
             num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
-          n.append(num, el('span', 'dim', h.smiths + ' smiths')); box.append(n);
+          n.append(num, el('span', 'dim', h.smiths + ' ' + label)); box.append(n);
           const t = el('table');
           const tr = el('tr');
           tr.append(idCell('structure', 'village', 'Village'),

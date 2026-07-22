@@ -351,10 +351,12 @@ count a village's buildings is to run Minecraft's **actual** world generator.
 So there's a second, heavier engine in [`tier2/`](tier2/README.md): a headless
 Minecraft (via Fabric Loom, which downloads a deobfuscated jar — nothing Mojang
 is committed) that boots the registries, builds the overworld generator for a
-seed, runs the real jigsaw assembler, and counts smith buildings by their
-template names. The UI's **Village buildings** panel drives it: pick a smith
-count and how many seeds to scan, and it returns seeds whose village holds that
-many toolsmith/weaponsmith/armorer buildings.
+seed, runs the real jigsaw assembler, and counts buildings by their template names.
+The UI's **Village buildings** panel drives it: pick a **building type**
+(any smith, or a specific one — toolsmith/weaponsmith/armorer/library/
+cartographer/mason/fletcher/butcher/shepherd/fisher/tannery/temple/farm/…), a
+count, and how many seeds to scan; it returns seeds whose village holds that
+many.
 
 ```
 seed 21  x=1128 z=-488  taiga  smiths=6  {taiga_armorer=2, taiga_weaponsmith=4}

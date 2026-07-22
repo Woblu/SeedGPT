@@ -74,7 +74,8 @@ public class VillageWorldgen {
                 long seed = Long.parseLong(t[0]);
                 int radius = t.length > 1 ? Integer.parseInt(t[1]) : 1200;
                 int threshold = t.length > 2 ? Integer.parseInt(t[2]) : 1;
-                processSeed(seed, radius, threshold);
+                String key = t.length > 3 ? t[3] : "smith";
+                processSeed(seed, radius, threshold, key);
                 Bootstrap.STDOUT.println(seed + "\tDONE");
                 Bootstrap.STDOUT.flush();
             }
@@ -84,10 +85,34 @@ public class VillageWorldgen {
         long seed = args.length > 0 ? Long.parseLong(args[0]) : 42L;
         int radius = args.length > 1 ? Integer.parseInt(args[1]) : 2000;
         int threshold = args.length > 2 ? Integer.parseInt(args[2]) : 1;
-        processSeed(seed, radius, threshold);
+        String key = args.length > 3 ? args[3] : "smith";
+        processSeed(seed, radius, threshold, key);
     }
 
-    static void processSeed(long seed, int radius, int threshold) {
+    // Normalise a piece template name to a canonical BUILDING type, or null for
+    // streets/decorations/mobs/small houses we don't count as "buildings".
+    // Names vary by village type (taiga_weaponsmith vs snowy_weapon_smith), so
+    // match on substrings.
+    static String canon(String s) {
+        if (s.contains("tool_smith") || s.contains("toolsmith")) return "toolsmith";
+        if (s.contains("weapon_smith") || s.contains("weaponsmith")) return "weaponsmith";
+        if (s.contains("armorer")) return "armorer";
+        if (s.contains("library")) return "library";
+        if (s.contains("cartographer")) return "cartographer";
+        if (s.contains("mason")) return "mason";
+        if (s.contains("fletcher")) return "fletcher";
+        if (s.contains("butcher")) return "butcher";
+        if (s.contains("shepherd")) return "shepherd";
+        if (s.contains("fisher")) return "fisher";
+        if (s.contains("tannery")) return "tannery";
+        if (s.contains("temple")) return "temple";
+        if (s.contains("stable")) return "stable";
+        if (s.contains("farm")) return "farm";
+        if (s.contains("animal_pen")) return "animal_pen";
+        return null;
+    }
+
+    static void processSeed(long seed, int radius, int threshold, String key) {
         OverworldBiomeSource biomeSource = new OverworldBiomeSource(seed, false, false, BuiltinRegistries.BIOME);
         NoiseBasedChunkGenerator chunkGen = new NoiseBasedChunkGenerator(biomeSource, seed, () -> overworld);
         int rChunks = radius / 16;
@@ -105,24 +130,24 @@ public class VillageWorldgen {
                     start = conf.generate(registries, chunkGen, biomeSource, structureManager, seed, potential, biome, 0, villageCfg);
                 } catch (Throwable t) { continue; }
                 if (start == null || !start.isValid()) continue;
-                Map<String, Integer> smiths = new TreeMap<>();
-                int total = 0;
+                Map<String, Integer> buildings = new TreeMap<>();
                 for (StructurePiece piece : start.getPieces()) {
                     if (!(piece instanceof PoolElementStructurePiece)) continue;
                     String name = templateName(((PoolElementStructurePiece) piece).getElement());
                     if (name == null) continue;
-                    String s = shortName(name);
-                    if (s.contains("tool_smith") || s.contains("toolsmith")
-                        || s.contains("weapon_smith") || s.contains("weaponsmith")
-                        || s.contains("armorer")) {
-                        smiths.merge(s, 1, Integer::sum);
-                        total++;
-                    }
+                    String c = canon(shortName(name));
+                    if (c != null) buildings.merge(c, 1, Integer::sum);
                 }
-                if (total >= threshold) {
+                // match count for the requested key ("smith" = the three smiths)
+                int match = key.equals("smith")
+                    ? buildings.getOrDefault("toolsmith", 0)
+                        + buildings.getOrDefault("weaponsmith", 0)
+                        + buildings.getOrDefault("armorer", 0)
+                    : buildings.getOrDefault(key, 0);
+                if (match >= threshold) {
                     int wx = cx * 16 + 8, wz = cz * 16 + 8;
                     Bootstrap.STDOUT.println("HIT\t" + seed + "\t" + wx + "\t" + wz + "\t" + biomeName(biome)
-                        + "\t" + total + "\t" + smiths);
+                        + "\t" + match + "\t" + buildings);
                     Bootstrap.STDOUT.flush();
                 }
             }

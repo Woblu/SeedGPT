@@ -9,7 +9,7 @@
 #
 # Usage:  python village_search.py --min 5 --radius 1200 --seeds 300 --workers 4
 # Output: one JSON object per matching village on stdout, then a summary line.
-import argparse, json, os, queue, subprocess, sys, threading
+import argparse, json, os, queue, re, subprocess, sys, threading
 
 TIER2 = os.path.dirname(os.path.abspath(__file__))
 CP_FILE = os.path.join(TIER2, "cp.txt")
@@ -22,7 +22,7 @@ def classpath():
     return os.path.join(TIER2, "out") + os.pathsep + cp
 
 
-def worker(cp, seeds, radius, threshold, emit, done_evt, stop_evt):
+def worker(cp, seeds, radius, threshold, building, emit, done_evt, stop_evt):
     p = subprocess.Popen(
         ["java", "-cp", cp, "VillageWorldgen", "server"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -38,7 +38,7 @@ def worker(cp, seeds, radius, threshold, emit, done_evt, stop_evt):
                 seed = seeds.get_nowait()
             except queue.Empty:
                 break
-            p.stdin.write(f"{seed} {radius} {threshold}\n")
+            p.stdin.write(f"{seed} {radius} {threshold} {building}\n")
             p.stdin.flush()
             for line in p.stdout:
                 line = line.rstrip("\n")
@@ -59,7 +59,10 @@ def worker(cp, seeds, radius, threshold, emit, done_evt, stop_evt):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--min", type=int, default=5, help="minimum smith buildings in one village")
+    ap.add_argument("--min", type=int, default=5, help="minimum matching buildings in one village")
+    ap.add_argument("--building", default="smith",
+                    help="building type: smith (group) | toolsmith weaponsmith armorer library "
+                         "cartographer mason fletcher butcher shepherd fisher tannery temple farm animal_pen stable")
     ap.add_argument("--radius", type=int, default=1200, help="search radius per seed (blocks)")
     ap.add_argument("--seeds", type=int, default=300, help="how many world seeds to scan")
     ap.add_argument("--start", type=int, default=1, help="first seed")
@@ -92,12 +95,14 @@ def main():
             if remaining[0] == 0:
                 all_done.set()
 
-    threads = [threading.Thread(target=worker, args=(cp, seeds, args.radius, args.min, emit, done, stop_evt), daemon=True)
+    building = re.sub(r"[^a-z_]", "", args.building.lower()) or "smith"
+    threads = [threading.Thread(target=worker, args=(cp, seeds, args.radius, args.min, building, emit, done, stop_evt), daemon=True)
                for _ in range(args.workers)]
     for t in threads:
         t.start()
     all_done.wait()
-    print(json.dumps({"summary": True, "hits": hits[0], "seeds_scanned": args.seeds, "min_smiths": args.min}), flush=True)
+    print(json.dumps({"summary": True, "hits": hits[0], "seeds_scanned": args.seeds,
+                      "min": args.min, "building": building}), flush=True)
 
 
 if __name__ == "__main__":

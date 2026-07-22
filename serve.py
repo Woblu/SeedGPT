@@ -348,9 +348,11 @@ def api_villagesmiths(body) -> dict:
     workers = max(1, min(8, int(body.get("workers", 4))))
     limit = max(1, min(100, int(body.get("limit", 20))))
     start = int(body.get("start", 1))
+    building = re.sub(r"[^a-z_]", "", str(body.get("building", "smith")).lower()) or "smith"
     args = [sys.executable, str(tier2 / "village_search.py"),
             "--min", str(mn), "--radius", str(radius), "--seeds", str(seeds),
-            "--start", str(start), "--workers", str(workers), "--limit", str(limit)]
+            "--start", str(start), "--workers", str(workers), "--limit", str(limit),
+            "--building", building]
     rc, out, err = run(args, TIMEOUTS["villagesmiths"])
     hits, summary = [], {}
     for line in out.splitlines():
