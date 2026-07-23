@@ -35,7 +35,8 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkslime.c >/tmp/sc_test/b14 2>&1 \
 && ./build.sh tools/checkbiomearea.c >/tmp/sc_test/b15 2>&1 \
 && ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1 \
-&& ./build.sh tools/checkcluster.c >/tmp/sc_test/b17 2>&1; then
+&& ./build.sh tools/checkcluster.c >/tmp/sc_test/b17 2>&1 \
+&& ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -323,6 +324,29 @@ done < <(awk '/^SEED/{s=$2} /sh /{gsub(/x=|z=|%/,""); print s, $2, $3, $4}' /tmp
 [ "$ar_low" -eq 0 ] \
   && ok "every biome-area result clears the requested threshold" \
   || bad "biome-area result below threshold" "under=$ar_low"
+
+# Terrain height (APPROXIMATE). The finder's reported peak must reproduce under
+# an identical independent re-sample (checkheight, same mapApproxHeight lattice)
+# and clear the threshold. This confirms the plumbing -- the height is cubiomes'
+# estimate, deliberately not claimed to be exact game height.
+section "terrain height search"
+cat > /tmp/sc_test/height.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"peak","height":150,"within":300,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/height.json 200000 16 2>/dev/null > /tmp/sc_test/height.out
+ht_bad=0; ht_low=0; ht_n=0
+while read -r hseed hpk; do
+  chk=$(./build/checkheight.exe "$hseed" 1.21 0 0 300 fine 2>/dev/null | grep -oE 'peak=-?[0-9]+' | cut -d= -f2)
+  ht_n=$((ht_n+1))
+  [ "$hpk" != "$chk" ] && ht_bad=$((ht_bad+1))
+  [ "$hpk" -lt 150 ] && ht_low=$((ht_low+1))
+done < <(awk '/^SEED/{s=$2} /peak within/{gsub(/x=|z=|~/,""); print s, $4}' /tmp/sc_test/height.out | head -8)
+[ "$ht_n" -ge 5 ] && [ "$ht_bad" -eq 0 ] \
+  && ok "terrain-height peaks reproduce exactly under independent re-sample ($ht_n checked)" \
+  || bad "terrain-height peak disagreed with checkheight" "checked=$ht_n mismatch=$ht_bad"
+[ "$ht_low" -eq 0 ] \
+  && ok "every terrain-height result clears the requested peak" \
+  || bad "terrain-height result below threshold" "under=$ht_low"
 
 # Structure clusters: "count": N asks for >= N viable instances of a structure
 # within the radius (triple village near spawn, huts near spawn). Every reported

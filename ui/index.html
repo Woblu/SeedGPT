@@ -163,6 +163,7 @@
   .cond.ore   { border-left-color: var(--diamond); }
   .cond.slime { border-left-color: var(--grass); }
   .cond.area  { border-left-color: var(--emerald); }
+  .cond.height{ border-left-color: var(--stone-lt); }
   .cond .top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   .cond .ic { width: 22px; height: 22px; flex: none; }
   .cond .cid {
@@ -361,6 +362,7 @@
         <button id="addOre">+ ore</button>
         <button id="addSlime">+ slime chunks</button>
         <button id="addArea">+ biome area</button>
+        <button id="addHeight">+ terrain height</button>
       </div>
     </section>
 
@@ -504,6 +506,7 @@
   function emojiFor(cat, name) {
     if (cat === 'eyes')   return '👁️';
     if (cat === 'slime')  return '🟢';
+    if (cat === 'height') return '⛰️';
     if (cat === 'spawn')  return '🧭';
     if (cat === 'biome')  return biomeEmoji(name);
     if (cat === 'item')   return ITEM_EMOJI[name] || '📦';
@@ -619,6 +622,12 @@
                : names.includes('badlands') ? 'badlands' : names[0];
     conds.push({ id: 'a' + (nextId++), kind: 'area', name: pick, pct: 50,
                  within: 800, of: 'origin', precision: 'fine' });
+    render();
+  };
+
+  $('#addHeight').onclick = () => {
+    conds.push({ id: 'h' + (nextId++), kind: 'height', height: 150,
+                 within: 300, of: 'origin', precision: 'fine' });
     render();
   };
 
@@ -775,6 +784,37 @@
         box.append(d);
         return;
       }
+      if (c.kind === 'height') {
+        const top = el('div','top');
+        top.append(mkIcon('height'), el('span','cid', c.id), el('span','dim','TERRAIN HEIGHT'));
+        const x = el('button','tiny x','×');
+        x.onclick = () => { conds.splice(i,1); render(); };
+        top.append(x); d.append(top);
+
+        const g = el('div','grid');
+        const lab = el('div');
+        lab.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+        lab.textContent = 'peak at least (Y)';
+        const hy = el('input'); hy.type='number'; hy.value=c.height; hy.min=-64; hy.max=320;
+        hy.title='minimum approximate surface height in the disc';
+        hy.onchange = e => c.height = Math.max(-64, Math.min(320, +e.target.value||150));
+        g.append(lab, hy); d.append(g);
+
+        const g2 = el('div','grid');
+        const wl = el('div');
+        wl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+        wl.textContent = 'within (blocks)';
+        const w = el('input'); w.type='number'; w.value=c.within; w.min=4; w.max=2048; w.step=32;
+        w.title='radius in blocks (use a small radius + of: a structure for "tall structure")';
+        w.onchange = e => c.within = Math.max(4, Math.min(2048, +e.target.value||300));
+        g2.append(wl, w); d.append(g2);
+
+        const note = el('div','note warn');
+        note.textContent = '⚠ Approximate. Terrain height is cubiomes’ estimate (as used for spawn finding), not exact game height — it can be off by a few blocks, so leave headroom. Overworld only; most accurate on 1.18+. Pair with a structure (of: outpost, small radius) for a "tall structure" search.';
+        d.append(note);
+        box.append(d);
+        return;
+      }
       if (c.kind === 'eyes') {
         const top = el('div','top');
         top.append(mkIcon('eyes'), el('span','cid', c.id), el('span','dim','END PORTAL'));
@@ -916,6 +956,8 @@
         if (c.kind === 'slime') return { id: c.id, slime: c.count,
           within: c.within, of: c.of };
         if (c.kind === 'area') return { id: c.id, biome_area: c.name, pct: c.pct,
+          within: c.within, of: c.of, precision: c.precision };
+        if (c.kind === 'height') return { id: c.id, height: c.height,
           within: c.within, of: c.of, precision: c.precision };
         const o = { id: c.id, within: c.within, of: c.of };
         if (c.kind === 'structure') {
@@ -1118,7 +1160,7 @@
           const desc = el('button','tiny','describe');
           desc.onclick = () => describe(s.seed);
           n.append(num, desc); box.append(n);
-          if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime || s.area || s.biome || s.cluster) {
+          if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime || s.area || s.biome || s.cluster || s.height) {
             const t = el('table');
             const idCell = (cat, name, label) => {
               const td = el('td','id');
@@ -1165,6 +1207,13 @@
               tr.append(idCell('biome', o.biome, pretty(o.biome)),
                         el('td',null,`x=${o.x}  z=${o.z}`),
                         el('td','d', `${o.pct}% within ${o.within}`));
+              t.append(tr);
+            });
+            (s.height || []).forEach(o => {
+              const tr = el('tr');
+              tr.append(idCell('height', '', 'Terrain Height'),
+                        el('td',null,`x=${o.x}  z=${o.z}`),
+                        el('td','d', `~${o.peak} peak (approx)`));
               t.append(tr);
             });
             (s.biome || []).forEach(o => {
@@ -1419,6 +1468,7 @@
       (s.ore   || []).forEach(o => push('ore', o.material, o.x, o.z, o.count + ' within ' + o.within));
       (s.slime || []).forEach(o => push('slime', o.id, o.x, o.z, o.count + ' within ' + o.within));
       (s.area  || []).forEach(o => push('biome_area', o.biome, o.x, o.z, o.pct + '% within ' + o.within));
+      (s.height|| []).forEach(o => push('height', 'terrain', o.x, o.z, '~' + o.peak + ' peak (approx)'));
       (s.biome || []).forEach(o => push('biome', o.biome, o.x, o.z, o.dist + ' from ' + o.ref));
       (s.cluster|| []).forEach(o => push('cluster', o.structure, o.x, o.z,
         o.tight ? o.count + ' within ' + o.spread + ' of each other' : o.count + ' within ' + o.within));

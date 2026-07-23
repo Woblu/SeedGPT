@@ -43,6 +43,7 @@ typedef enum {
     CT_ORE,         // >= N ore blocks of a material within `within` (all depths)
     CT_SLIME,       // >= N slime chunks within `within` blocks of parent
     CT_BIOME_AREA,  // biome covers >= N% of the disc of radius `within`
+    CT_HEIGHT,      // APPROXIMATE surface height peaks >= N within `within`
 } CondType;
 
 // End portal frames: 12, each independently 10% likely to hold an eye. That
@@ -85,6 +86,7 @@ typedef struct {
     int      slimeMin;      // CT_SLIME: minimum slime chunks in range
     int      areaPct;       // CT_BIOME_AREA: min % of the disc that is biomeId
     int      structMin;     // CT_STRUCTURE: min instances in range (1 = single)
+    int      heightMin;     // CT_HEIGHT: minimum approximate peak height in disc
     int      spread;        // CT_STRUCTURE cluster: if >0, the instances must
                             // fit within this radius of a common member (a TIGHT
                             // cluster anywhere in `within`), not just within
@@ -152,6 +154,7 @@ typedef struct {
     int areaCells[MAX_COND];  // CT_BIOME_AREA: matching sample cells found
     int areaTotal[MAX_COND];  // CT_BIOME_AREA: total sample cells in the disc
     int structCount[MAX_COND];// CT_STRUCTURE: viable instances found (cluster)
+    int peakHeight[MAX_COND]; // CT_HEIGHT: highest approximate surface Y in disc
 } Match;
 
 // Pass 1: geometry only. No Generator required. Returns 1 if all geometry

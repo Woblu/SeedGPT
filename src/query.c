@@ -55,6 +55,12 @@ static double viabCost(const Query *q, int i)
     }
     if (c->type == CT_STRUCTURE)
         return NS_VIABLE + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+    if (c->type == CT_HEIGHT) {
+        // A mapApproxHeight sample per lattice point, like a biome scan.
+        double step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
+        double n = 2.0 * (c->within / step) + 1.0;
+        return n * n * NS_BIOME_AT + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+    }
     // biome scan: samples on a `scanStep` lattice across the disc
     double step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
     double n = 2.0 * (c->within / step) + 1.0;
@@ -165,6 +171,7 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         cJSON *jore = cJSON_GetObjectItem(e, "ore");
         cJSON *jslime = cJSON_GetObjectItem(e, "slime");
         cJSON *jarea = cJSON_GetObjectItem(e, "biome_area");
+        cJSON *jheight = cJSON_GetObjectItem(e, "height");
         if (jslime && cJSON_IsNumber(jslime)) {
             c->type = CT_SLIME;
             c->dim = DIM_OVERWORLD;              // slime chunks are overworld
@@ -176,6 +183,28 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
             c->within = (sw && cJSON_IsNumber(sw)) ? sw->valueint : 128;
             if (c->within > 2048) c->within = 2048;
             if (c->within < 16)   c->within = 16;
+            cJSON *of = cJSON_GetObjectItem(e, "of");
+            snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "origin");
+        } else if (jheight && cJSON_IsNumber(jheight)) {
+            // APPROXIMATE terrain height: the disc must contain a surface point
+            // at least this high (mapApproxHeight -- an estimate, not exact game
+            // height). Best on 1.18+; overworld only.
+            c->type = CT_HEIGHT;
+            c->dim = DIM_OVERWORLD;
+            c->heightMin = jheight->valueint;
+            // A small disc so "tall terrain at an outpost" (of: outpost) means
+            // at the outpost. Default modest; cap so the scan can't wedge.
+            cJSON *hw = cJSON_GetObjectItem(e, "within");
+            c->within = (hw && cJSON_IsNumber(hw)) ? hw->valueint : 64;
+            if (c->within > 2048) c->within = 2048;
+            if (c->within < 4)    c->within = 4;
+            c->scanStep = SCAN_FINE;
+            cJSON *hp = cJSON_GetObjectItem(e, "precision");
+            if (hp && cJSON_IsString(hp)) {
+                if      (!strcmp(hp->valuestring, "fast"))  c->scanStep = SCAN_FAST;
+                else if (!strcmp(hp->valuestring, "fine"))  c->scanStep = SCAN_FINE;
+                else if (!strcmp(hp->valuestring, "exact")) c->scanStep = SCAN_EXACT;
+            }
             cJSON *of = cJSON_GetObjectItem(e, "of");
             snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "origin");
         } else if (jore && cJSON_IsString(jore)) {
@@ -592,6 +621,11 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
                  biome2str(q->mc, c->biomeId), c->areaPct, c->within, c->ofId);
         return buf;
     }
+    if (c->type == CT_HEIGHT) {
+        snprintf(buf, n, "~terrain height >= %d within %d of %s (approx)",
+                 c->heightMin, c->within, c->ofId);
+        return buf;
+    }
     const char *what = (c->type == CT_STRUCTURE)
         ? struct2str(c->structType) : biome2str(q->mc, c->biomeId);
     const char *prec = c->type != CT_BIOME ? ""
@@ -951,6 +985,35 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             fixed->pos[k] = centre;
             fixed->areaCells[k] = match;
             fixed->areaTotal[k] = total;
+            continue;
+        }
+
+        if (c->type == CT_HEIGHT) {
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
+            // mapApproxHeight needs SurfaceNoise only between Beta 1.8 and 1.18;
+            // 1.18+ derives height from the biome noise directly. Reuse the ore
+            // pass's sn (inited once per dim).
+            SurfaceNoise *snp = NULL;
+            if (q->mc < MC_1_18) {
+                if (!haveSN) { initSurfaceNoise(&sn, dim, worldSeed); haveSN = 1; }
+                snp = &sn;
+            }
+            int64_t lim = (int64_t)c->within * c->within;
+            int step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
+            int peak = -64; Pos peakPos = centre; int found = 0;
+            for (int dx = -c->within; dx <= c->within; dx += step)
+            for (int dz = -c->within; dz <= c->within; dz += step) {
+                if ((int64_t)dx*dx + (int64_t)dz*dz > lim) continue;
+                int bx = centre.x + dx, bz = centre.z + dz;
+                float y = 0;
+                mapApproxHeight(&y, NULL, g, snp, bx >> 2, bz >> 2, 1, 1);
+                int h = (int)y;
+                found = 1;
+                if (h > peak) { peak = h; peakPos = (Pos){bx, bz}; }
+            }
+            if (!found || peak < c->heightMin) return 0;
+            fixed->pos[k] = peakPos;
+            fixed->peakHeight[k] = peak;
             continue;
         }
 

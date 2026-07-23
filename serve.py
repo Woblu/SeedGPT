@@ -177,6 +177,12 @@ def parse_seeds(out: str) -> list:
                 {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
                  "count": int(m.group(4)), "within": int(m.group(5))})
             continue
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+~(\d+) peak within (\d+)", line)
+        if m and cur:
+            cur.setdefault("height", []).append(
+                {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
+                 "peak": int(m.group(4)), "within": int(m.group(5))})
+            continue
         m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+)% (\w+) within (\d+)", line)
         if m and cur:
             cur.setdefault("area", []).append(

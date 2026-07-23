@@ -52,8 +52,8 @@ Three conveniences for real use:
   click one to reload it.
 - **Export** on a result set writes the seeds and every coordinate to **CSV**
   or **JSON** (or copies CSV to the clipboard) — one flat row per structure,
-  structure cluster, biome, chest, ore count, slime cluster, biome area, spawn,
-  and portal.
+  structure cluster, biome, chest, ore count, slime cluster, biome area, terrain
+  height, spawn, and portal.
 
 ### Command line
 
@@ -425,6 +425,29 @@ neighbour), never false positives — a reported pair genuinely has both biomes
 within the requested distance. `tools/checkbiome` reports the biome at a point;
 the test suite confirms both reported positions really are their biomes and the
 child really is within its radius of the parent.
+
+## Terrain height (approximate)
+
+Find seeds with tall terrain near a point — a mountain over spawn, or a
+structure sitting up high (a "tall pillager outpost"):
+
+```json
+{ "id": "peak", "height": 150, "within": 300, "of": "origin" }
+```
+
+The disc must contain a surface point at least `height` blocks high. For "tall
+structure," measure from one with a small radius: `{ "height": 130, "within": 48,
+"of": "outpost" }`.
+
+> ⚠️ **This is the one approximate condition.** Everything else in the tool is
+> exact and independently verified; terrain height is cubiomes' *estimate*
+> (`mapApproxHeight`, the same routine it uses for spawn finding), not exact game
+> height. It can be off by a few blocks either way, so it can occasionally report
+> a peak that the real world doesn't quite reach — leave headroom on the
+> threshold. Overworld only; most accurate on **1.18+**. `find` prints it with a
+> leading `~` and the plan/UI label it "approx". `tools/checkheight` re-samples
+> the same estimate (confirming the finder reproduces it, not that the estimate
+> matches a real world), and the suite checks that.
 
 ## Biome area
 
