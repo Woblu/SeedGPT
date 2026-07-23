@@ -850,12 +850,22 @@
         cl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
         cl.textContent = 'at least (count)';
         const cn = el('input'); cn.type='number'; cn.value=c.count||1; cn.min=1; cn.max=12;
-        cn.title='minimum instances in the radius (1 = a normal single match)';
+        cn.title='minimum instances (1 = a normal single match)';
         cn.onchange = e => { c.count = Math.max(1, Math.min(12, +e.target.value||1)); render(); };
         g3.append(cl, cn); d.append(g3);
         if ((c.count||1) > 1) {
+          const g4 = el('div','grid');
+          const sl = el('div');
+          sl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+          sl.textContent = 'tight within (0 = off)';
+          const sp = el('input'); sp.type='number'; sp.value=c.spread||0; sp.min=0; sp.max=2048; sp.step=16;
+          sp.title='0 = count within the radius of the reference; >0 = the instances must fit within this many blocks of each other, anywhere in the radius (quad-hut style)';
+          sp.onchange = e => { c.spread = Math.max(0, Math.min(2048, +e.target.value||0)); render(); };
+          g4.append(sl, sp); d.append(g4);
           const note = el('div','note');
-          note.textContent = 'Cluster search: finds seeds with several of this structure packed within the radius of the reference (e.g. a triple village near spawn). Variant filters are disabled while counting.';
+          note.textContent = (c.spread||0) > 0
+            ? `Tight cluster: finds ${c.count} of this structure packed within ${c.spread} blocks of each other, anywhere within the search radius (the “quad huts” search). Rare — expect a long scan. Variant filters disabled.`
+            : `Cluster: finds ${c.count} of this structure within the radius of the reference (e.g. a triple village near spawn). Set “tight within” for a packed-together cluster anywhere. Variant filters disabled.`;
           d.append(note);
         }
       }
@@ -910,7 +920,10 @@
         const o = { id: c.id, within: c.within, of: c.of };
         if (c.kind === 'structure') {
           o.structure = c.name;
-          if ((c.count || 1) > 1) o.count = c.count;          // cluster
+          if ((c.count || 1) > 1) {                            // cluster
+            o.count = c.count;
+            if ((c.spread || 0) > 0) o.spread = c.spread;      // tight cluster
+          }
           else VARIANTS.forEach(v => { if (c[v.key] && v.applies(c.name)) o[v.key] = true; });
         }
         else { o.biome = c.name; o.precision = c.precision; }
@@ -1163,9 +1176,11 @@
             });
             (s.cluster || []).forEach(o => {
               const tr = el('tr');
+              const detail = o.tight ? `${o.count} within ${o.spread} of each other`
+                                     : `${o.count} within ${o.within}`;
               tr.append(idCell('structure', o.structure, `${o.count}× ${pretty(o.structure)}`),
                         el('td',null,`x=${o.x}  z=${o.z}`),
-                        el('td','d', `${o.count} within ${o.within}`));
+                        el('td','d', detail));
               t.append(tr);
             });
             s.places.forEach(p => {
@@ -1405,7 +1420,8 @@
       (s.slime || []).forEach(o => push('slime', o.id, o.x, o.z, o.count + ' within ' + o.within));
       (s.area  || []).forEach(o => push('biome_area', o.biome, o.x, o.z, o.pct + '% within ' + o.within));
       (s.biome || []).forEach(o => push('biome', o.biome, o.x, o.z, o.dist + ' from ' + o.ref));
-      (s.cluster|| []).forEach(o => push('cluster', o.structure, o.x, o.z, o.count + ' within ' + o.within));
+      (s.cluster|| []).forEach(o => push('cluster', o.structure, o.x, o.z,
+        o.tight ? o.count + ' within ' + o.spread + ' of each other' : o.count + ' within ' + o.within));
       (s.places|| []).forEach(p => push('structure', p.id, p.x, p.z, p.dist + ' from ' + (p.ref || 'origin')));
       if (!any) rows.push([s.seed, 'seed', '', '', '', '']);
     });

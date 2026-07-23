@@ -367,12 +367,36 @@ witch huts, three outposts in a stretch:
 Pass 1 counts candidate positions geometrically (an over-admit, since biomes
 aren't generated yet); pass 2 re-counts, biome-viability checking each instance,
 and keeps the seed only if at least `count` survive. The reported position is the
-cluster's centroid; open the map to see the members. Counting is **anchored to
-the reference** (origin/spawn/parent) — it finds clusters near a known point, not
-a tight cluster anywhere in the world (that is a different, whole-world scan). A
+cluster's centroid; open the map to see the members. This form is **anchored to
+the reference** (origin/spawn/parent) — it finds clusters near a known point. A
 cluster can't be combined with a variant filter. `tools/checkcluster` re-counts
 from the same reference, and the test suite confirms every count reproduces
 exactly and clears the threshold.
+
+### Tight clusters (the "quad huts" search)
+
+Add `"spread": T` to demand that the instances be packed **within T blocks of
+each other**, located *anywhere* within `within` of the reference — the classic
+quad-witch-hut hunt, where four huts must share one despawn sphere:
+
+```json
+{ "id": "quad", "structure": "swamp_hut", "count": 4, "spread": 160, "within": 10000, "of": "origin" }
+```
+
+Here `within` is the **search reach**, not the cluster size. The finder sweeps a
+bounded region window (capped at 64 regions per side) and, anchoring on each
+structure instance, counts how many others fall within `spread`; a seed passes
+when some member has `count` neighbours (itself included) that close. The
+reported position is that **anchor member** — a real structure, not a centroid —
+which makes the result exactly re-checkable: `tools/checkcluster` counts viable
+instances within `spread` of it and must reproduce the number. Tight clusters are
+genuinely rare (four huts within 160 blocks is a many-tens-of-millions-of-seeds
+search), so expect a long scan; the cost scales with the search reach, so keep
+`within` only as large as you need.
+
+This is *not* an infinite-world scan — it examines a large area around the
+reference, which is what you actually want (a quad hut you can reach), not a
+cluster half a million blocks away.
 
 ## Biome adjacency
 

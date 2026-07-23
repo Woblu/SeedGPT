@@ -350,6 +350,30 @@ done < <(awk '/^SEED/{s=$2} /\(spawn\)/{gsub(/x=|z=/,""); sx=$2; sz=$3} /vils /{
   && ok "every cluster result clears the requested threshold" \
   || bad "cluster result below threshold" "under=$cl_low"
 
+# Tight cluster ("spread"): N instances within T of a common member, anywhere in
+# the reach -- the quad-hut search. The finder reports a real member position, so
+# the count re-checks exactly: viable instances within T of it (checkcluster).
+check_err "spread needs count >= 2" \
+  '{"version":"1.21","conditions":[{"id":"h","structure":"swamp_hut","spread":128,"within":5000,"of":"origin"}]}' \
+  'spread'
+cat > /tmp/sc_test/tight.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"huts","structure":"swamp_hut","count":3,"spread":300,"within":5000,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/tight.json 3000000 16 2>/dev/null > /tmp/sc_test/tight.out
+tg_bad=0; tg_low=0; tg_n=0
+while read -r tseed tx tz tcnt; do
+  chk=$(./build/checkcluster.exe "$tseed" swamp_hut 1.21 "$tx" "$tz" 300 2>/dev/null | grep -oE 'count=[0-9]+' | cut -d= -f2)
+  tg_n=$((tg_n+1))
+  [ "$tcnt" != "$chk" ] && tg_bad=$((tg_bad+1))
+  [ "$tcnt" -lt 3 ] && tg_low=$((tg_low+1))
+done < <(awk '/^SEED/{s=$2} /huts /{gsub(/x=|z=/,""); print s, $2, $3, $4}' /tmp/sc_test/tight.out | head -8)
+[ "$tg_n" -ge 5 ] && [ "$tg_bad" -eq 0 ] \
+  && ok "tight-cluster counts re-check exactly at the reported member ($tg_n checked)" \
+  || bad "tight-cluster count disagreed with checkcluster" "checked=$tg_n mismatch=$tg_bad"
+[ "$tg_low" -eq 0 ] \
+  && ok "every tight-cluster result meets the requested count within its spread" \
+  || bad "tight-cluster result below threshold" "under=$tg_low"
+
 # Biome adjacency: a biome measured from another biome ("desert within D of a
 # forest"). The parent biome must be scheduled before the child in pass 2, both
 # reported positions must independently be the named biome (checkbiome), and the

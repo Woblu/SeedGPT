@@ -215,10 +215,16 @@ int main(int argc, char **argv)
                 }
                 if (q.cond[c].type != CT_STRUCTURE) continue;
                 if (q.cond[c].structMin > 1) {
-                    // Cluster: N instances within the radius, centred here.
-                    printf("   %-14s x=%6d z=%6d   %d %s within %d\n", q.cond[c].id,
-                           h->m.pos[c].x, h->m.pos[c].z, h->m.structCount[c],
-                           struct2str(q.cond[c].structType), q.cond[c].within);
+                    // Anchored cluster: N within the radius, centred here.
+                    // Tight cluster: N within `spread` of the reported member.
+                    if (q.cond[c].spread > 0)
+                        printf("   %-14s x=%6d z=%6d   %d %s within %d tight\n", q.cond[c].id,
+                               h->m.pos[c].x, h->m.pos[c].z, h->m.structCount[c],
+                               struct2str(q.cond[c].structType), q.cond[c].spread);
+                    else
+                        printf("   %-14s x=%6d z=%6d   %d %s within %d\n", q.cond[c].id,
+                               h->m.pos[c].x, h->m.pos[c].z, h->m.structCount[c],
+                               struct2str(q.cond[c].structType), q.cond[c].within);
                     continue;
                 }
                 Pos p = h->m.pos[c];

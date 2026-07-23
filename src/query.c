@@ -324,6 +324,27 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                     "cluster count", c->id);
                 goto done;
             }
+            // "spread": T -> a TIGHT cluster. The N instances must fit within T
+            // blocks of a common member, located anywhere within `within` of the
+            // reference (this is the "quad huts anywhere" search). `within` here
+            // is the search reach, not the cluster size.
+            cJSON *jspr = cJSON_GetObjectItem(e, "spread");
+            c->spread = (jspr && cJSON_IsNumber(jspr)) ? jspr->valueint : 0;
+            if (c->spread > 0) {
+                if (c->structMin < 2) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"spread\" needs \"count\" >= 2", c->id);
+                    goto done;
+                }
+                if (c->spread < 16)   c->spread = 16;
+                if (c->spread > 2048) c->spread = 2048;
+                // Search reach: default modest, cap so the region window stays
+                // bounded (tightCluster clamps to 64 regions per side anyway).
+                cJSON *tw = cJSON_GetObjectItem(e, "within");
+                c->within = (tw && cJSON_IsNumber(tw)) ? tw->valueint : 2000;
+                if (c->within > 12000) c->within = 12000;
+                if (c->within < 256)   c->within = 256;
+            }
         } else if (jb && cJSON_IsString(jb)) {
             c->type = CT_BIOME;
             c->biomeId = str2biome_(q->mc, jb->valuestring);
@@ -577,8 +598,12 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
                      : c->scanStep == SCAN_FAST  ? " [fast]"
                      : c->scanStep == SCAN_EXACT ? " [exact]" : " [fine]";
     if (c->type == CT_STRUCTURE && c->structMin > 1) {
-        snprintf(buf, n, ">= %d %s within %d of %s",
-                 c->structMin, what ? what : "?", c->within, c->ofId);
+        if (c->spread > 0)
+            snprintf(buf, n, ">= %d %s within %d of each other (searching %d of %s)",
+                     c->structMin, what ? what : "?", c->spread, c->within, c->ofId);
+        else
+            snprintf(buf, n, ">= %d %s within %d of %s",
+                     c->structMin, what ? what : "?", c->within, c->ofId);
         return buf;
     }
     snprintf(buf, n, "%s within %d of %s%s", what ? what : "?", c->within, c->ofId, prec);
@@ -638,6 +663,61 @@ static int countInstances(const Query *q, int k, uint64_t s48, Pos centre,
     return cnt;
 }
 
+// Find the largest TIGHT cluster of a structure: instances that all fall within
+// `spread` of a common member, with that member within `reach` of `centre`.
+// Geometry-only when g==NULL (pass 1); viability-checked otherwise (pass 2).
+// Returns the best member count found and writes that anchor member's position
+// to *anchor -- reporting a real instance (not a centroid) makes the result
+// exactly re-checkable: count viable instances within `spread` of it.
+#define TIGHT_MAX_DIM 64
+static int tightCluster(const Query *q, int k, uint64_t s48, Pos centre,
+                        int reach, Generator *g, Pos *anchor)
+{
+    const Cond *c = &q->cond[k];
+    StructureConfig sc;
+    if (!getStructureConfig(c->structType, q->mc, &sc)) return 0;
+    double span = sc.regionSize * 16.0;
+    int wr = (int)ceil(c->spread / span);          // neighbour reach, in regions
+    if (wr < 1) wr = 1;
+    // Region window: the core (anchors within reach of centre) plus a wr-region
+    // skirt so edge anchors can see every neighbour. Clamp to a fixed size so
+    // the per-thread grid is bounded regardless of `within`.
+    int g0x = (int)floor((centre.x - reach) / span) - wr;
+    int g0z = (int)floor((centre.z - reach) / span) - wr;
+    int W = (int)floor((centre.x + reach) / span) + wr - g0x + 1;
+    int H = (int)floor((centre.z + reach) / span) + wr - g0z + 1;
+    if (W > TIGHT_MAX_DIM) W = TIGHT_MAX_DIM;
+    if (H > TIGHT_MAX_DIM) H = TIGHT_MAX_DIM;
+
+    static _Thread_local Pos  grid[TIGHT_MAX_DIM * TIGHT_MAX_DIM];
+    static _Thread_local unsigned char has[TIGHT_MAX_DIM * TIGHT_MAX_DIM];
+    for (int j = 0; j < H; j++)
+    for (int i = 0; i < W; i++) {
+        int idx = j * W + i; has[idx] = 0;
+        Pos p;
+        if (!getStructurePos(c->structType, q->mc, s48, g0x + i, g0z + j, &p)) continue;
+        if (g && !isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
+        grid[idx] = p; has[idx] = 1;
+    }
+
+    int64_t spr2 = (int64_t)c->spread * c->spread;
+    int64_t reach2 = (int64_t)reach * reach;
+    int best = 0;
+    for (int j = wr; j < H - wr; j++)          // core anchors only
+    for (int i = wr; i < W - wr; i++) {
+        int a = j * W + i;
+        if (!has[a] || d2(grid[a], centre) > reach2) continue;
+        int cnt = 0;
+        for (int dj = -wr; dj <= wr; dj++)
+        for (int di = -wr; di <= wr; di++) {
+            int b = (j + dj) * W + (i + di);
+            if (has[b] && d2(grid[a], grid[b]) <= spr2) cnt++;
+        }
+        if (cnt > best) { best = cnt; if (anchor) *anchor = grid[a]; }
+    }
+    return best;
+}
+
 int queryStage1(const Query *q, uint64_t s48, Match *m)
 {
     // Zero it: callers declare Match on the stack, and haveSpawn/haveEyes must
@@ -656,8 +736,10 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
         // geometry only (no biome generator yet); pass 2 re-counts viability.
         if (c->structMin > 1) {
             Pos cen;
-            if (countInstances(q, k, s48, centre, reach, NULL, &cen) < c->structMin)
-                return 0;
+            int got = (c->spread > 0)
+                ? tightCluster(q, k, s48, centre, reach, NULL, &cen)
+                : countInstances(q, k, s48, centre, reach, NULL, &cen);
+            if (got < c->structMin) return 0;
             m->pos[k] = cen;
             continue;
         }
@@ -916,7 +998,9 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
         // only counted geometry, so this is where the biome check happens.
         if (c->type == CT_STRUCTURE && c->structMin > 1) {
             Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
-            Pos cen; int cnt = countInstances(q, k, s48, centre, c->within, g, &cen);
+            Pos cen; int cnt = (c->spread > 0)
+                ? tightCluster(q, k, s48, centre, c->within, g, &cen)
+                : countInstances(q, k, s48, centre, c->within, g, &cen);
             if (cnt < c->structMin) return 0;
             fixed->pos[k] = cen;
             fixed->structCount[k] = cnt;

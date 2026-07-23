@@ -85,6 +85,10 @@ typedef struct {
     int      slimeMin;      // CT_SLIME: minimum slime chunks in range
     int      areaPct;       // CT_BIOME_AREA: min % of the disc that is biomeId
     int      structMin;     // CT_STRUCTURE: min instances in range (1 = single)
+    int      spread;        // CT_STRUCTURE cluster: if >0, the instances must
+                            // fit within this radius of a common member (a TIGHT
+                            // cluster anywhere in `within`), not just within
+                            // `within` of the reference. 0 = anchored cluster.
     int      isParent;      // some other condition is measured from this one
 } Cond;
 

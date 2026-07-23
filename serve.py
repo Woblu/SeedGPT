@@ -192,7 +192,17 @@ def parse_seeds(out: str) -> list:
                 {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
                  "biome": m.group(4), "dist": int(m.group(5)), "ref": m.group(6)})
             continue
-        # Structure cluster: "<id>  x=.. z=..  <N> <structure> within <R>".
+        # Tight cluster: "<id>  x=.. z=..  <N> <structure> within <T> tight".
+        # The trailing "tight" marks a spread cluster; try it before the anchored
+        # cluster rule (which would otherwise swallow the same shape).
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) (\w+) within (\d+) tight", line)
+        if m and cur:
+            cur.setdefault("cluster", []).append(
+                {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
+                 "count": int(m.group(4)), "structure": m.group(5),
+                 "spread": int(m.group(6)), "tight": True})
+            continue
+        # Anchored cluster: "<id>  x=.. z=..  <N> <structure> within <R>".
         # Distinct from the ore/slime/area rows (those carry "ore"/"chunks"/"%").
         m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) (\w+) within (\d+)", line)
         if m and cur:
