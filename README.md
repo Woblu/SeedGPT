@@ -52,7 +52,8 @@ Three conveniences for real use:
   click one to reload it.
 - **Export** on a result set writes the seeds and every coordinate to **CSV**
   or **JSON** (or copies CSV to the clipboard) — one flat row per structure,
-  biome, chest, ore count, slime cluster, biome area, spawn, and portal.
+  structure cluster, biome, chest, ore count, slime cluster, biome area, spawn,
+  and portal.
 
 ### Command line
 
@@ -352,6 +353,26 @@ condition it still scans every seed, so pairing it with a structure narrows the
 field first. `tools/checkslime` re-derives the count from scratch, and the test
 suite confirms every reported count reproduces exactly (`find` == `checkslime`,
 origin- and spawn-relative) and clears the requested threshold.
+
+## Structure clusters
+
+A structure condition takes an optional `"count": N` to demand **several of that
+structure packed within the radius** — a triple village near spawn, a knot of
+witch huts, three outposts in a stretch:
+
+```json
+{ "id": "vils", "structure": "village", "count": 3, "within": 800, "of": "spawn" }
+```
+
+Pass 1 counts candidate positions geometrically (an over-admit, since biomes
+aren't generated yet); pass 2 re-counts, biome-viability checking each instance,
+and keeps the seed only if at least `count` survive. The reported position is the
+cluster's centroid; open the map to see the members. Counting is **anchored to
+the reference** (origin/spawn/parent) — it finds clusters near a known point, not
+a tight cluster anywhere in the world (that is a different, whole-world scan). A
+cluster can't be combined with a variant filter. `tools/checkcluster` re-counts
+from the same reference, and the test suite confirms every count reproduces
+exactly and clears the threshold.
 
 ## Biome adjacency
 

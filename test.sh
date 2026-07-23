@@ -34,7 +34,8 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkrpchest.c >/tmp/sc_test/b13 2>&1 \
 && ./build.sh tools/checkslime.c >/tmp/sc_test/b14 2>&1 \
 && ./build.sh tools/checkbiomearea.c >/tmp/sc_test/b15 2>&1 \
-&& ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1; then
+&& ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1 \
+&& ./build.sh tools/checkcluster.c >/tmp/sc_test/b17 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -322,6 +323,32 @@ done < <(awk '/^SEED/{s=$2} /sh /{gsub(/x=|z=|%/,""); print s, $2, $3, $4}' /tmp
 [ "$ar_low" -eq 0 ] \
   && ok "every biome-area result clears the requested threshold" \
   || bad "biome-area result below threshold" "under=$ar_low"
+
+# Structure clusters: "count": N asks for >= N viable instances of a structure
+# within the radius (triple village near spawn, huts near spawn). Every reported
+# count must reproduce under an independent re-count from the SAME reference the
+# finder used (checkcluster, counting from spawn), and clear the threshold.
+section "structure cluster search"
+check_err "variant + cluster count rejected" \
+  '{"version":"1.21","conditions":[{"id":"v","structure":"village","count":3,"within":800,"of":"spawn","abandoned":true}]}' \
+  "cluster count"
+cat > /tmp/sc_test/cluster.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"vils","structure":"village","count":3,"within":800,"of":"spawn"}]}
+EOF
+./build/find.exe /tmp/sc_test/cluster.json 300000 16 2>/dev/null > /tmp/sc_test/cluster.out
+cl_bad=0; cl_low=0; cl_n=0
+while read -r cseed sx sz ccnt; do
+  chk=$(./build/checkcluster.exe "$cseed" village 1.21 "$sx" "$sz" 800 2>/dev/null | grep -oE 'count=[0-9]+' | cut -d= -f2)
+  cl_n=$((cl_n+1))
+  [ "$ccnt" != "$chk" ] && cl_bad=$((cl_bad+1))
+  [ "$ccnt" -lt 3 ] && cl_low=$((cl_low+1))
+done < <(awk '/^SEED/{s=$2} /\(spawn\)/{gsub(/x=|z=/,""); sx=$2; sz=$3} /vils /{gsub(/x=|z=/,""); print s, sx, sz, $4}' /tmp/sc_test/cluster.out | head -8)
+[ "$cl_n" -ge 5 ] && [ "$cl_bad" -eq 0 ] \
+  && ok "cluster counts reproduce exactly under independent re-count ($cl_n checked)" \
+  || bad "cluster count disagreed with checkcluster" "checked=$cl_n mismatch=$cl_bad"
+[ "$cl_low" -eq 0 ] \
+  && ok "every cluster result clears the requested threshold" \
+  || bad "cluster result below threshold" "under=$cl_low"
 
 # Biome adjacency: a biome measured from another biome ("desert within D of a
 # forest"). The parent biome must be scheduled before the child in pass 2, both

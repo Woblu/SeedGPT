@@ -311,6 +311,19 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 }
                 c->reqGiant = 1;
             }
+            // "count": N asks for a CLUSTER -- at least N viable instances of
+            // this structure within the radius (triple village, huts near
+            // spawn). Default 1 = an ordinary single-instance match.
+            cJSON *jcnt = cJSON_GetObjectItem(e, "count");
+            c->structMin = (jcnt && cJSON_IsNumber(jcnt)) ? jcnt->valueint : 1;
+            if (c->structMin < 1) c->structMin = 1;
+            if (c->structMin > 1 && (c->surfaceOnly || c->reqAbandoned ||
+                                     c->reqBasement || c->reqGiant)) {
+                snprintf(err, errlen,
+                    "condition \"%s\": a variant filter can't be combined with a "
+                    "cluster count", c->id);
+                goto done;
+            }
         } else if (jb && cJSON_IsString(jb)) {
             c->type = CT_BIOME;
             c->biomeId = str2biome_(q->mc, jb->valuestring);
@@ -563,6 +576,11 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
     const char *prec = c->type != CT_BIOME ? ""
                      : c->scanStep == SCAN_FAST  ? " [fast]"
                      : c->scanStep == SCAN_EXACT ? " [exact]" : " [fine]";
+    if (c->type == CT_STRUCTURE && c->structMin > 1) {
+        snprintf(buf, n, ">= %d %s within %d of %s",
+                 c->structMin, what ? what : "?", c->within, c->ofId);
+        return buf;
+    }
     snprintf(buf, n, "%s within %d of %s%s", what ? what : "?", c->within, c->ofId, prec);
     return buf;
 }
@@ -591,6 +609,35 @@ static inline int64_t d2(Pos a, Pos b) {
     return dx*dx + dz*dz;
 }
 
+// Count structure instances of one condition's type whose position is within
+// `reach` of `centre`. If `g` is non-NULL each candidate is biome-viability
+// checked (pass 2); if NULL only geometry is counted (pass 1, an over-admit).
+// The centroid of the counted instances is written to `*centroid` when found.
+static int countInstances(const Query *q, int k, uint64_t s48, Pos centre,
+                          int reach, Generator *g, Pos *centroid)
+{
+    const Cond *c = &q->cond[k];
+    StructureConfig sc;
+    if (!getStructureConfig(c->structType, q->mc, &sc)) return 0;
+    double span = sc.regionSize * 16.0;
+    int r0x = (int)floor((centre.x - reach) / span);
+    int r1x = (int)floor((centre.x + reach) / span);
+    int r0z = (int)floor((centre.z - reach) / span);
+    int r1z = (int)floor((centre.z + reach) / span);
+    int64_t lim = (int64_t)reach * reach;
+    int cnt = 0; int64_t sx = 0, sz = 0;
+    for (int rx = r0x; rx <= r1x; rx++)
+    for (int rz = r0z; rz <= r1z; rz++) {
+        Pos p;
+        if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
+        if (d2(p, centre) > lim) continue;
+        if (g && !isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
+        cnt++; sx += p.x; sz += p.z;
+    }
+    if (cnt > 0 && centroid) { centroid->x = (int)(sx / cnt); centroid->z = (int)(sz / cnt); }
+    return cnt;
+}
+
 int queryStage1(const Query *q, uint64_t s48, Match *m)
 {
     // Zero it: callers declare Match on the stack, and haveSpawn/haveEyes must
@@ -604,6 +651,16 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
         // so a spawn-relative condition is filtered against origin widened by
         // SPAWN_MARGIN. Over-admits; pass 2 then checks it exactly.
         int reach = c->within + (c->parent == PARENT_SPAWN ? SPAWN_MARGIN : 0);
+
+        // Cluster: at least structMin instances within reach. Pass 1 counts
+        // geometry only (no biome generator yet); pass 2 re-counts viability.
+        if (c->structMin > 1) {
+            Pos cen;
+            if (countInstances(q, k, s48, centre, reach, NULL, &cen) < c->structMin)
+                return 0;
+            m->pos[k] = cen;
+            continue;
+        }
 
         StructureConfig sc;
         if (!getStructureConfig(c->structType, q->mc, &sc)) return 0;
@@ -851,6 +908,18 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 }
             }
             if (!hit) return 0;
+            continue;
+        }
+
+        // Cluster: re-count viable instances within the radius of the true
+        // reference (spawn resolved here) and require at least structMin. Pass 1
+        // only counted geometry, so this is where the biome check happens.
+        if (c->type == CT_STRUCTURE && c->structMin > 1) {
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
+            Pos cen; int cnt = countInstances(q, k, s48, centre, c->within, g, &cen);
+            if (cnt < c->structMin) return 0;
+            fixed->pos[k] = cen;
+            fixed->structCount[k] = cnt;
             continue;
         }
 

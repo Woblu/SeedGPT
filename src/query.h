@@ -84,6 +84,7 @@ typedef struct {
     int      oreMin;        // CT_ORE: minimum ore-block count in range
     int      slimeMin;      // CT_SLIME: minimum slime chunks in range
     int      areaPct;       // CT_BIOME_AREA: min % of the disc that is biomeId
+    int      structMin;     // CT_STRUCTURE: min instances in range (1 = single)
     int      isParent;      // some other condition is measured from this one
 } Cond;
 
@@ -146,6 +147,7 @@ typedef struct {
     int slimeCount[MAX_COND]; // CT_SLIME: slime-chunk count found in range
     int areaCells[MAX_COND];  // CT_BIOME_AREA: matching sample cells found
     int areaTotal[MAX_COND];  // CT_BIOME_AREA: total sample cells in the disc
+    int structCount[MAX_COND];// CT_STRUCTURE: viable instances found (cluster)
 } Match;
 
 // Pass 1: geometry only. No Generator required. Returns 1 if all geometry

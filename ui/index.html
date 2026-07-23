@@ -843,8 +843,25 @@
       }
       d.append(g2);
 
-      // Variant filters, each offered only on the structure that has it.
+      // Structure cluster count: >= N of this structure within the radius.
       if (c.kind === 'structure') {
+        const g3 = el('div','grid');
+        const cl = el('div');
+        cl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+        cl.textContent = 'at least (count)';
+        const cn = el('input'); cn.type='number'; cn.value=c.count||1; cn.min=1; cn.max=12;
+        cn.title='minimum instances in the radius (1 = a normal single match)';
+        cn.onchange = e => { c.count = Math.max(1, Math.min(12, +e.target.value||1)); render(); };
+        g3.append(cl, cn); d.append(g3);
+        if ((c.count||1) > 1) {
+          const note = el('div','note');
+          note.textContent = 'Cluster search: finds seeds with several of this structure packed within the radius of the reference (e.g. a triple village near spawn). Variant filters are disabled while counting.';
+          d.append(note);
+        }
+      }
+
+      // Variant filters, each offered only on the structure that has it.
+      if (c.kind === 'structure' && (c.count || 1) === 1) {
         VARIANTS.filter(v => v.applies(c.name)).forEach(v => {
           const row = el('label','chk');
           const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!c[v.key];
@@ -893,7 +910,8 @@
         const o = { id: c.id, within: c.within, of: c.of };
         if (c.kind === 'structure') {
           o.structure = c.name;
-          VARIANTS.forEach(v => { if (c[v.key] && v.applies(c.name)) o[v.key] = true; });
+          if ((c.count || 1) > 1) o.count = c.count;          // cluster
+          else VARIANTS.forEach(v => { if (c[v.key] && v.applies(c.name)) o[v.key] = true; });
         }
         else { o.biome = c.name; o.precision = c.precision; }
         return o;
@@ -1087,7 +1105,7 @@
           const desc = el('button','tiny','describe');
           desc.onclick = () => describe(s.seed);
           n.append(num, desc); box.append(n);
-          if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime || s.area || s.biome) {
+          if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime || s.area || s.biome || s.cluster) {
             const t = el('table');
             const idCell = (cat, name, label) => {
               const td = el('td','id');
@@ -1141,6 +1159,13 @@
               tr.append(idCell('biome', o.biome, pretty(o.biome)),
                         el('td',null,`x=${o.x}  z=${o.z}`),
                         el('td','d', `${o.dist} from ${o.ref}`));
+              t.append(tr);
+            });
+            (s.cluster || []).forEach(o => {
+              const tr = el('tr');
+              tr.append(idCell('structure', o.structure, `${o.count}× ${pretty(o.structure)}`),
+                        el('td',null,`x=${o.x}  z=${o.z}`),
+                        el('td','d', `${o.count} within ${o.within}`));
               t.append(tr);
             });
             s.places.forEach(p => {
@@ -1380,6 +1405,7 @@
       (s.slime || []).forEach(o => push('slime', o.id, o.x, o.z, o.count + ' within ' + o.within));
       (s.area  || []).forEach(o => push('biome_area', o.biome, o.x, o.z, o.pct + '% within ' + o.within));
       (s.biome || []).forEach(o => push('biome', o.biome, o.x, o.z, o.dist + ' from ' + o.ref));
+      (s.cluster|| []).forEach(o => push('cluster', o.structure, o.x, o.z, o.count + ' within ' + o.within));
       (s.places|| []).forEach(p => push('structure', p.id, p.x, p.z, p.dist + ' from ' + (p.ref || 'origin')));
       if (!any) rows.push([s.seed, 'seed', '', '', '', '']);
     });
