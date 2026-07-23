@@ -408,6 +408,11 @@ int queryPlan(Query *q, char *err, size_t errlen)
         }
         if (c->parent == i) { snprintf(err, errlen, "condition \"%s\" references itself", c->id); return 1; }
     }
+    // Mark conditions that are measured from -- a biome parent must record the
+    // representative match point (nearest its own centre), not just any hit.
+    for (int i = 0; i < q->n; i++) q->cond[i].isParent = 0;
+    for (int i = 0; i < q->n; i++)
+        if (q->cond[i].parent >= 0) q->cond[q->cond[i].parent].isParent = 1;
 
     // Pass 1 order: structure geometry, parents before children (a child's
     // radius is measured from its parent's matched position, so we cannot
@@ -436,13 +441,16 @@ int queryPlan(Query *q, char *err, size_t errlen)
             snprintf(err, errlen, "dependency cycle involving \"%s\"", q->cond[i].id);
             return 1;
         }
-    // a biome condition may not parent a structure it is measured from unless
-    // that structure was placed in pass 1
+    // A biome may be measured from a structure (placed in pass 1) or from
+    // another biome (placed in pass 2 -- this is how "biome A adjacent to
+    // biome B" is expressed: B is measured within a short radius of A). It may
+    // not orbit an ore/slime/area count, which has no single meaningful point.
     for (int i = 0; i < q->n; i++) {
         if (q->cond[i].type != CT_BIOME) continue;
         int p = q->cond[i].parent;
-        if (p >= 0 && q->cond[p].type != CT_STRUCTURE) {
-            snprintf(err, errlen, "condition \"%s\": parent \"%s\" is not a structure",
+        if (p >= 0 && q->cond[p].type != CT_STRUCTURE && q->cond[p].type != CT_BIOME) {
+            snprintf(err, errlen,
+                     "condition \"%s\": parent \"%s\" must be a structure or a biome",
                      q->cond[i].id, q->cond[p].id);
             return 1;
         }
@@ -484,15 +492,36 @@ int queryPlan(Query *q, char *err, size_t errlen)
         if (!seen && q->ndims < 3) q->dims[q->ndims++] = d;
     }
 
-    // Pass 2 order: everything biome-dependent, cheapest first. No dependency
-    // constraints here -- positions are already fixed by pass 1.
+    // Pass 2 order: everything biome-dependent, cheapest first. Structure
+    // positions are fixed by pass 1, so most conditions have no ordering
+    // constraint. The exception is a condition measured from a BIOME parent:
+    // that parent's position is produced here in pass 2, so it must run first.
+    // Schedule like pass 1 -- cheapest currently-schedulable condition each
+    // round -- honouring only the biome-parent edge.
+    int doneV[MAX_COND] = {0};
     q->nviab = 0;
-    for (int i = 0; i < q->n; i++) q->viab[q->nviab++] = i;
-    for (int a = 0; a < q->nviab; a++)
-        for (int b = a + 1; b < q->nviab; b++)
-            if (viabCost(q, q->viab[b]) < viabCost(q, q->viab[a])) {
-                int t = q->viab[a]; q->viab[a] = q->viab[b]; q->viab[b] = t;
+    for (int iter = 0; iter < q->n + 1 && q->nviab < q->n; iter++) {
+        int best = -1; double bestc = 1e30;
+        for (int i = 0; i < q->n; i++) {
+            if (doneV[i]) continue;
+            int p = q->cond[i].parent;
+            // Only a biome parent is produced in pass 2; wait for it.
+            if (p >= 0 && q->cond[p].type == CT_BIOME && !doneV[p]) continue;
+            double c = viabCost(q, i);
+            if (c < bestc) { bestc = c; best = i; }
+        }
+        if (best < 0) break;
+        doneV[best] = 1;
+        q->viab[q->nviab++] = best;
+    }
+    // Unscheduled leftovers mean a biome-parent cycle (A of B, B of A).
+    if (q->nviab < q->n) {
+        for (int i = 0; i < q->n; i++)
+            if (!doneV[i]) {
+                snprintf(err, errlen, "dependency cycle involving \"%s\"", q->cond[i].id);
+                return 1;
             }
+    }
 
     q->est_cost_ns = 0;
     for (int i = 0; i < q->ngeom; i++) q->est_cost_ns += geomCost(q, q->geom[i]);
@@ -694,6 +723,25 @@ static int resolveEyes(const Query *q, Generator *g, uint64_t worldSeed, Match *
     return 0;   // no portal room among the generated pieces
 }
 
+// The point a condition's radius is measured from. A structure parent's
+// position comes from pass 1 (m->pos, or fixed->pos when it was spawn-relative
+// and refined in pass 2); a BIOME parent's position is produced in pass 2
+// (fixed->pos) -- this is what makes "biome B within D of biome A" work.
+// Origin is (0,0); spawn is resolved lazily and cached.
+static Pos condCentre(const Query *q, int k, const Match *m, Match *fixed,
+                      int *haveSpawn, Pos *spawn, Generator *g)
+{
+    const Cond *c = &q->cond[k];
+    if (c->parent == PARENT_SPAWN) {
+        if (!*haveSpawn) { *spawn = getSpawn(g); *haveSpawn = 1; }
+        return *spawn;
+    }
+    if (c->parent == PARENT_ORIGIN) return (Pos){0, 0};
+    const Cond *p = &q->cond[c->parent];
+    if (p->type == CT_BIOME) return fixed->pos[c->parent];
+    return (p->parent == PARENT_SPAWN) ? fixed->pos[c->parent] : m->pos[c->parent];
+}
+
 static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                      const Match *m, Match *fixed, int *haveSpawn, Pos *spawn, LootCache *lc)
 {
@@ -711,12 +759,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
         }
 
         if (c->type == CT_ORE) {
-            Pos centre = c->parent >= 0
-                ? (q->cond[c->parent].parent == PARENT_SPAWN
-                     ? fixed->pos[c->parent] : m->pos[c->parent])
-                : (c->parent == PARENT_SPAWN
-                     ? (*haveSpawn ? *spawn : (*spawn = getSpawn(g), *haveSpawn = 1, *spawn))
-                     : (Pos){0,0});
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
             if (!haveSN) { initSurfaceNoise(&sn, dim, worldSeed); haveSN = 1; }
             int nm; const OreMaterial *tab = oreMaterials(&nm);
             int cnt = oreCountMaterial(g, &sn, q->mc, &tab[c->oreMat],
@@ -728,12 +771,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
         }
 
         if (c->type == CT_SLIME) {
-            Pos centre = c->parent >= 0
-                ? (q->cond[c->parent].parent == PARENT_SPAWN
-                     ? fixed->pos[c->parent] : m->pos[c->parent])
-                : (c->parent == PARENT_SPAWN
-                     ? (*haveSpawn ? *spawn : (*spawn = getSpawn(g), *haveSpawn = 1, *spawn))
-                     : (Pos){0,0});
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
             // Count slime chunks in the disc. isSlimeChunk uses the full world
             // seed (a per-chunk Java-RNG check), so this is a cheap pass-2 test.
             int64_t lim = (int64_t)c->within * c->within;
@@ -753,12 +791,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
         }
 
         if (c->type == CT_BIOME_AREA) {
-            Pos centre = c->parent >= 0
-                ? (q->cond[c->parent].parent == PARENT_SPAWN
-                     ? fixed->pos[c->parent] : m->pos[c->parent])
-                : (c->parent == PARENT_SPAWN
-                     ? (*haveSpawn ? *spawn : (*spawn = getSpawn(g), *haveSpawn = 1, *spawn))
-                     : (Pos){0,0});
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
             // Sample the disc on a scanStep lattice and take the fraction of
             // sample points that are the target biome. Same surface probe as a
             // plain biome check (y=319>>2 -- a y=63 probe lands in cave biomes).
@@ -849,24 +882,31 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             }
             fixed->pos[k] = p;
         } else {
-            Pos centre = c->parent >= 0 ? (q->cond[c->parent].parent == PARENT_SPAWN
-                                            ? fixed->pos[c->parent] : m->pos[c->parent])
-                       : (c->parent == PARENT_SPAWN
-                            ? (*haveSpawn ? *spawn : (*spawn = getSpawn(g), *haveSpawn = 1, *spawn))
-                            : (Pos){0,0});
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
             int64_t lim = (int64_t)c->within * c->within;
             int step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
-            int hit = 0;
-            for (int dx = -c->within; dx <= c->within && !hit; dx += step)
-            for (int dz = -c->within; dz <= c->within && !hit; dz += step) {
-                if ((int64_t)dx*dx + (int64_t)dz*dz > lim) continue;
-                int bx = centre.x + dx, bz = centre.z + dz;
-                // surface sampling: biomes are 3D since 1.18; a y=63 probe
-                // lands in cave biomes. 319>>2 is what viability checks use.
-                int id = getBiomeAt(g, 0, (bx>>4)*4 + 2, 319 >> 2, (bz>>4)*4 + 2);
-                if (id == c->biomeId) hit = 1;
+            // A leaf biome only needs presence, so stop at the first hit. A
+            // biome that is a PARENT records the match nearest its own centre --
+            // the representative point a child ("biome B within D of A") is then
+            // measured from, so a large biome's far corner doesn't anchor it.
+            int hit = 0; Pos best = centre; int64_t bestd = lim + 1;
+            for (int dx = -c->within; dx <= c->within; dx += step) {
+                for (int dz = -c->within; dz <= c->within; dz += step) {
+                    int64_t d = (int64_t)dx*dx + (int64_t)dz*dz;
+                    if (d > lim) continue;
+                    int bx = centre.x + dx, bz = centre.z + dz;
+                    // surface sampling: biomes are 3D since 1.18; a y=63 probe
+                    // lands in cave biomes. 319>>2 is what viability checks use.
+                    int id = getBiomeAt(g, 0, (bx>>4)*4 + 2, 319 >> 2, (bz>>4)*4 + 2);
+                    if (id != c->biomeId) continue;
+                    hit = 1;
+                    if (d < bestd) { bestd = d; best = (Pos){bx, bz}; }
+                    if (!c->isParent) break;   // presence-only: first hit is enough
+                }
+                if (hit && !c->isParent) break;
             }
             if (!hit) return 0;
+            fixed->pos[k] = best;   // where the biome was matched (for output/children)
         }
     }
     return 1;

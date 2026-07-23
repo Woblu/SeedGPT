@@ -33,7 +33,8 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkvariant.c >/tmp/sc_test/b12 2>&1 \
 && ./build.sh tools/checkrpchest.c >/tmp/sc_test/b13 2>&1 \
 && ./build.sh tools/checkslime.c >/tmp/sc_test/b14 2>&1 \
-&& ./build.sh tools/checkbiomearea.c >/tmp/sc_test/b15 2>&1; then
+&& ./build.sh tools/checkbiomearea.c >/tmp/sc_test/b15 2>&1 \
+&& ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -321,6 +322,45 @@ done < <(awk '/^SEED/{s=$2} /sh /{gsub(/x=|z=|%/,""); print s, $2, $3, $4}' /tmp
 [ "$ar_low" -eq 0 ] \
   && ok "every biome-area result clears the requested threshold" \
   || bad "biome-area result below threshold" "under=$ar_low"
+
+# Biome adjacency: a biome measured from another biome ("desert within D of a
+# forest"). The parent biome must be scheduled before the child in pass 2, both
+# reported positions must independently be the named biome (checkbiome), and the
+# child must lie within its radius of the parent.
+section "biome adjacency"
+check_err "biome parent must be structure or biome" \
+  '{"version":"1.21","conditions":[{"id":"o","ore":"diamond","count":1,"within":64,"of":"origin"},{"id":"b","biome":"desert","within":200,"of":"o"}]}' \
+  "must be a structure or a biome"
+cat > /tmp/sc_test/adj.json <<'EOF'
+{"version":"1.21","conditions":[
+  {"id":"forest","biome":"forest","within":400,"of":"origin","precision":"fast"},
+  {"id":"desert","biome":"desert","within":200,"of":"forest","precision":"fast"}]}
+EOF
+# Plan must order the parent (forest) before the child (desert) in pass 2.
+./build/find.exe /tmp/sc_test/adj.json --explain 1 1 2>/dev/null >/dev/null   # smoke
+plan=$(./build/find.exe /tmp/sc_test/adj.json 1 1 2>/dev/null | awk '/^    [0-9]\./{print $2}')
+if echo "$plan" | head -1 | grep -q forest; then
+  ok "pass 2 schedules the biome parent (forest) before its child (desert)"
+else
+  bad "biome parent not scheduled first" "order: $(echo $plan | tr '\n' ' ')"
+fi
+./build/find.exe /tmp/sc_test/adj.json 40000 16 2>/dev/null > /tmp/sc_test/adj.out
+aj_bad=0; aj_far=0; aj_n=0
+while read -r jseed fx fz dx dz; do
+  # Both reported positions must genuinely be their biome.
+  ./build/checkbiome.exe "$jseed" 1.21 "$fx" "$fz" forest >/dev/null 2>&1 || aj_bad=$((aj_bad+1))
+  ./build/checkbiome.exe "$jseed" 1.21 "$dx" "$dz" desert >/dev/null 2>&1 || aj_bad=$((aj_bad+1))
+  # Child must be within its 200-block radius of the parent forest.
+  dist=$(awk "BEGIN{print int(sqrt(($fx-$dx)^2+($fz-$dz)^2))}")
+  [ "$dist" -gt 200 ] && aj_far=$((aj_far+1))
+  aj_n=$((aj_n+1))
+done < <(awk '/^SEED/{s=$2} /^   forest /{gsub(/x=|z=/,""); fx=$2; fz=$3} /^   desert /{gsub(/x=|z=/,""); print s, fx, fz, $2, $3}' /tmp/sc_test/adj.out | head -8)
+[ "$aj_n" -ge 5 ] && [ "$aj_bad" -eq 0 ] \
+  && ok "both adjacency biomes independently confirmed at their reported positions ($aj_n checked)" \
+  || bad "an adjacency biome position was not that biome" "checked=$aj_n bad=$aj_bad"
+[ "$aj_far" -eq 0 ] \
+  && ok "every adjacency child lies within its radius of the parent biome" \
+  || bad "an adjacency child exceeded its radius" "over=$aj_far"
 
 # Structure variant filters (zombie village, igloo basement, giant portal) are
 # exact -- getVariant reads the same draw the game does. Each filtered result

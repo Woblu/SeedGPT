@@ -198,6 +198,21 @@ int main(int argc, char **argv)
                            biome2str(q.mc, q.cond[c].biomeId), q.cond[c].within);
                     continue;
                 }
+                if (q.cond[c].type == CT_BIOME) {
+                    // Biomes now record where they matched; report it with the
+                    // distance from their reference so adjacency is legible.
+                    Pos bp = h->m.pos[c];
+                    int par = q.cond[c].parent;
+                    Pos ref = (par == PARENT_SPAWN) ? h->m.spawn
+                            : (par >= 0) ? h->m.pos[par] : (Pos){0,0};
+                    const char *rl = (par == PARENT_SPAWN) ? "spawn"
+                                   : (par >= 0) ? q.cond[par].id : "origin";
+                    int64_t bdx = bp.x - ref.x, bdz = bp.z - ref.z;
+                    printf("   %-14s x=%6d z=%6d   %s %d from %s\n", q.cond[c].id,
+                           bp.x, bp.z, biome2str(q.mc, q.cond[c].biomeId),
+                           (int)sqrt((double)(bdx*bdx + bdz*bdz)), rl);
+                    continue;
+                }
                 if (q.cond[c].type != CT_STRUCTURE) continue;
                 Pos p = h->m.pos[c];
                 // Say which reference the distance is measured from: "spawn"

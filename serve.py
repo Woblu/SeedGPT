@@ -183,6 +183,15 @@ def parse_seeds(out: str) -> list:
                 {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
                  "pct": int(m.group(4)), "biome": m.group(5), "within": int(m.group(6))})
             continue
+        # Biome match: "<id>  x=.. z=..  <biome> <dist> from <ref>". A biome name
+        # sits before the distance, so this must be tried before the structure
+        # "places" rule (which expects the number right after the coordinates).
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\w+) (\d+) from (\w+)", line)
+        if m and cur:
+            cur.setdefault("biome", []).append(
+                {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
+                 "biome": m.group(4), "dist": int(m.group(5)), "ref": m.group(6)})
+            continue
         m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) (\w+)$", line)
         if m and cur and m.group(5) not in ("from",):
             cur.setdefault("loot", []).append(

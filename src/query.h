@@ -84,6 +84,7 @@ typedef struct {
     int      oreMin;        // CT_ORE: minimum ore-block count in range
     int      slimeMin;      // CT_SLIME: minimum slime chunks in range
     int      areaPct;       // CT_BIOME_AREA: min % of the disc that is biomeId
+    int      isParent;      // some other condition is measured from this one
 } Cond;
 
 // Biome scan precision. A biome condition samples points across the disc; the

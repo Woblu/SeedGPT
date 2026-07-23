@@ -52,7 +52,7 @@ Three conveniences for real use:
   click one to reload it.
 - **Export** on a result set writes the seeds and every coordinate to **CSV**
   or **JSON** (or copies CSV to the clipboard) — one flat row per structure,
-  chest, ore count, slime cluster, biome area, spawn, and portal.
+  biome, chest, ore count, slime cluster, biome area, spawn, and portal.
 
 ### Command line
 
@@ -352,6 +352,34 @@ condition it still scans every seed, so pairing it with a structure narrows the
 field first. `tools/checkslime` re-derives the count from scratch, and the test
 suite confirms every reported count reproduces exactly (`find` == `checkslime`,
 origin- and spawn-relative) and clears the requested threshold.
+
+## Biome adjacency
+
+A biome condition can be measured from **another biome**, not just from a
+structure — which is how you ask for two biomes *next to each other*:
+
+```json
+{ "conditions": [
+  { "id": "shroom", "biome": "mushroom_fields", "within": 800, "of": "spawn" },
+  { "id": "mesa",   "biome": "badlands",        "within": 300, "of": "shroom" }
+] }
+```
+
+That reads "a mushroom-island near spawn, with a mesa within 300 blocks of it."
+To make this work, a biome condition now **records where it matched** and reports
+that position; a biome that something else is measured from records the match
+nearest its own centre (so a large biome's far corner doesn't anchor the child).
+The planner schedules the parent biome before the child in pass 2 — the one
+place pass 2 has an ordering constraint, since the parent's position is produced
+there rather than in pass 1. A biome's parent must be a structure or a biome
+(orbiting an ore/slime/area count has no single meaningful point).
+
+Because the anchor is one representative point, adjacency errs toward **false
+negatives** (it can miss a pairing when the recorded point is far from the
+neighbour), never false positives — a reported pair genuinely has both biomes
+within the requested distance. `tools/checkbiome` reports the biome at a point;
+the test suite confirms both reported positions really are their biomes and the
+child really is within its radius of the parent.
 
 ## Biome area
 

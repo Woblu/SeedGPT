@@ -1087,7 +1087,7 @@
           const desc = el('button','tiny','describe');
           desc.onclick = () => describe(s.seed);
           n.append(num, desc); box.append(n);
-          if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime || s.area) {
+          if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime || s.area || s.biome) {
             const t = el('table');
             const idCell = (cat, name, label) => {
               const td = el('td','id');
@@ -1134,6 +1134,13 @@
               tr.append(idCell('biome', o.biome, pretty(o.biome)),
                         el('td',null,`x=${o.x}  z=${o.z}`),
                         el('td','d', `${o.pct}% within ${o.within}`));
+              t.append(tr);
+            });
+            (s.biome || []).forEach(o => {
+              const tr = el('tr');
+              tr.append(idCell('biome', o.biome, pretty(o.biome)),
+                        el('td',null,`x=${o.x}  z=${o.z}`),
+                        el('td','d', `${o.dist} from ${o.ref}`));
               t.append(tr);
             });
             s.places.forEach(p => {
@@ -1372,6 +1379,7 @@
       (s.ore   || []).forEach(o => push('ore', o.material, o.x, o.z, o.count + ' within ' + o.within));
       (s.slime || []).forEach(o => push('slime', o.id, o.x, o.z, o.count + ' within ' + o.within));
       (s.area  || []).forEach(o => push('biome_area', o.biome, o.x, o.z, o.pct + '% within ' + o.within));
+      (s.biome || []).forEach(o => push('biome', o.biome, o.x, o.z, o.dist + ' from ' + o.ref));
       (s.places|| []).forEach(p => push('structure', p.id, p.x, p.z, p.dist + ' from ' + (p.ref || 'origin')));
       if (!any) rows.push([s.seed, 'seed', '', '', '', '']);
     });
