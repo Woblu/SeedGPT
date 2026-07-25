@@ -315,32 +315,65 @@
   .mapctl label { margin: 0; font-size: 11px; }
   .mapctl select { width: auto; padding: 4px 7px; font-size: 12px; }
 
+  /* ---- app shell: history sidebar + main --------------------------------- */
+  body { margin: 0; }
+  .app { display: flex; min-height: 100vh; }
+  .sidebar { flex: none; width: 264px; background: var(--stone-dk);
+    border-right: 2px solid var(--slot-edge); display: flex; flex-direction: column;
+    padding: 14px 12px; position: sticky; top: 0; height: 100vh; }
+  .side-brand { font-size: 18px; font-weight: 800; display: flex; align-items: center;
+    gap: 8px; padding: 4px 6px 12px; }
+  .side-brand .logo { font-size: 20px; }
+  .newbtn { width: 100%; justify-content: center; margin-bottom: 14px; }
+  .side-label { font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-faint); padding: 0 6px 6px; }
+  .history { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+  .hist-item { display: block; width: 100%; text-align: left; font-size: 12.5px;
+    padding: 8px 10px; background: transparent; border: 1px solid transparent;
+    box-shadow: none; text-shadow: none; color: var(--ink-soft);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hist-item:hover:not(:disabled) { background: var(--slot); border-color: var(--slot-edge); }
+  .hist-empty { font-size: 12px; color: var(--ink-faint); padding: 6px; }
+  .side-foot { padding: 10px 6px 2px; border-top: 1px solid var(--slot-edge);
+    font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .topbar { display: flex; align-items: center; padding: 10px 14px; min-height: 20px; }
+  .topbar .menu { display: none; }
+  @media (max-width: 760px) {
+    .topbar .menu { display: inline-flex; }
+    .sidebar { position: fixed; top: 0; left: 0; z-index: 65;
+      transform: translateX(-102%); transition: transform .2s ease; }
+    .app.sb-open .sidebar { transform: none; box-shadow: 10px 0 40px rgba(0,0,0,.45); }
+    .hero { padding-top: 16vh; }
+  }
+
   /* ---- chat-style hero + prompt ---------------------------------------- */
-  .hero { padding: 7vh 20px 3vh; display: flex; justify-content: center; }
-  .hero-inner { width: 100%; max-width: 720px; text-align: center; }
+  .hero { padding: 32vh 20px 3vh; display: flex; justify-content: center;
+    transition: padding .25s ease; }
+  .main.searched .hero { padding: 3vh 20px 2vh; }
+  .main.searched .hero-sub { display: none; }
+  .hero-inner { width: 100%; max-width: 680px; text-align: center; }
   .hero-title { font-size: 30px; font-weight: 800; letter-spacing: .01em;
     display: inline-flex; align-items: center; gap: 10px; }
   .hero-title .logo { font-size: 27px; filter: drop-shadow(1px 1px 0 rgba(0,0,0,.4)); }
   .hero-sub { margin: 10px auto 22px; max-width: 520px; color: var(--ink-soft); font-size: 14px; }
-  .prompt { display: flex; align-items: flex-end; gap: 8px;
+  .prompt { display: flex; align-items: center; gap: 8px;
     background: var(--slot); border: 2px solid var(--slot-edge); border-radius: 26px;
-    padding: 7px 7px 7px 18px; box-shadow: 0 8px 30px rgba(0,0,0,.28); text-align: left; }
+    padding: 7px 8px; box-shadow: 0 8px 30px rgba(0,0,0,.28); text-align: left; }
   .prompt:focus-within { border-color: var(--grass-dk); }
   .prompt textarea { flex: 1; border: 0; background: transparent; resize: none;
     color: var(--ink); font-family: inherit; font-size: 15px; line-height: 1.5;
-    padding: 9px 0; max-height: 200px; outline: none; }
+    padding: 9px 4px; max-height: 200px; outline: none; }
   .iconbtn { flex: none; width: 40px; height: 40px; border-radius: 50%; padding: 0;
     display: flex; align-items: center; justify-content: center; font-size: 18px;
-    box-shadow: none; border-width: 2px; }
+    box-shadow: none; border-width: 2px; align-self: center; }
   .iconbtn.go { background: linear-gradient(#7ed957, var(--grass) 55%, var(--grass-dk)); color: #10240a; }
   .iconbtn:disabled { opacity: .5; }
-  .examples { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
-  .examples button { font-size: 12px; border-radius: 16px; padding: 6px 12px; }
   .ai-note { margin-top: 14px; font-size: 12.5px; color: var(--ink-soft); min-height: 1em; }
   .ai-note.err { color: #ff7a7a; }
 
   /* ---- live seed scroll ------------------------------------------------- */
-  .scroll { max-width: 860px; margin: 0 auto 20px; padding: 0 20px; }
+  .scroll { max-width: 860px; margin: 0 auto 20px; padding: 0 20px; width: 100%; }
   .scroll.hidden { display: none; }
   .scroll-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
     font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
@@ -372,46 +405,39 @@
 </head>
 <body>
 
-<header>
-  <span class="sub" id="engine">cubiomes · loading…</span>
-  <span class="spacer"></span>
-  <button class="tiny" id="share" title="copy a link that rebuilds this query">🔗 share</button>
-  <button class="tiny" id="theme">☀ / ☾</button>
-</header>
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="side-brand"><span class="logo">🌱</span> SeedGPT</div>
+    <button class="newbtn" id="newSearch">＋ New search</button>
+    <div class="side-label">History</div>
+    <div class="history" id="history"></div>
+    <div class="side-foot"><span id="engine">cubiomes · loading…</span></div>
+  </aside>
 
-<main class="hero" id="hero">
-  <div class="hero-inner">
-    <div class="hero-title"><span class="logo">⛏️</span> Seed Finder</div>
-    <div class="hero-sub">Describe the Minecraft world you want. It scans millions of seeds and shows the matches.</div>
-    <form class="prompt" id="promptForm">
-      <textarea id="nl" rows="1" placeholder="a woodland mansion near spawn with a village next to it…"></textarea>
-      <button type="button" id="gear" class="iconbtn" title="Settings & manual builder">⚙</button>
-      <button type="submit" id="go" class="iconbtn go" title="Search">➜</button>
-    </form>
-    <div class="examples" id="examples"></div>
-    <div id="aiNote" class="ai-note"></div>
-  </div>
-</main>
+  <main class="main" id="main">
+    <div class="topbar"><button class="tiny menu" id="menuBtn" title="menu">☰</button></div>
 
-<div class="scroll hidden" id="scroll">
-  <div class="scroll-head"><span class="dot"></span><span id="scrollMeta">scanning…</span></div>
-  <div class="scroll-track" id="scrollTrack"></div>
+    <div class="hero" id="hero">
+      <div class="hero-inner">
+        <div class="hero-title"><span class="logo">🌱</span> SeedGPT</div>
+        <div class="hero-sub">Describe the Minecraft world you want. It scans millions of seeds and shows the matches.</div>
+        <form class="prompt" id="promptForm">
+          <button type="button" id="gear" class="iconbtn" title="Settings &amp; manual builder">⚙</button>
+          <textarea id="nl" rows="1" placeholder="a woodland mansion near spawn with a village next to it…"></textarea>
+          <button type="submit" id="go" class="iconbtn go" title="Search">➜</button>
+        </form>
+        <div id="aiNote" class="ai-note"></div>
+      </div>
+    </div>
+
+    <div class="scroll hidden" id="scroll">
+      <div class="scroll-head"><span class="dot"></span><span id="scrollMeta">scanning…</span></div>
+      <div class="scroll-track" id="scrollTrack"></div>
+    </div>
+
+    <div class="results-wrap"><div class="col" id="out"></div></div>
+  </main>
 </div>
-
-<div class="results-wrap"><div class="col" id="out">
-  <div class="card">
-    <h3>How this works</h3>
-    <p style="margin:0 0 10px;font-size:13px;color:var(--ink-soft)">
-      Type what you want in plain English (needs a free <b>Gemini</b> key — add it in
-      ⚙ settings). Or open ⚙ and build the query by hand. Either way the finder
-      splits every structure check into cheap 48-bit geometry and expensive biome
-      viability, and <b>reorders by measured cost</b>.
-    </p>
-    <p style="margin:0;font-size:13px;color:var(--ink-soft)">
-      While it runs you’ll see the seeds it’s testing scroll past; matches appear here.
-    </p>
-  </div>
-</div></div>
 
 <div class="scrim hidden" id="scrim"></div>
 <aside class="drawer hidden" id="drawer">
@@ -616,17 +642,38 @@
   let vocab = { structures:{}, biomes:{} }, lootVocab = { structures:{} };
   let conds = [], nextId = 1;
 
-  // ---- theme -------------------------------------------------------------
-  // Default is "cave" (dark stone) — Minecraft's own GUI world. "day" is the
-  // Overworld/sandstone variant. Persisted so a reload keeps your choice.
-  const root = document.documentElement;
-  const savedTheme = localStorage.getItem('sf-theme');
-  if (savedTheme === 'day') root.setAttribute('data-theme', 'day');
-  $('#theme').onclick = () => {
-    const day = root.getAttribute('data-theme') === 'day';
-    if (day) { root.removeAttribute('data-theme'); localStorage.setItem('sf-theme','cave'); }
-    else     { root.setAttribute('data-theme','day'); localStorage.setItem('sf-theme','day'); }
+  // ---- history sidebar + shell -------------------------------------------
+  const HIST_LS = 'sf-history';
+  const getHistory = () => { try { return JSON.parse(localStorage.getItem(HIST_LS) || '[]'); } catch (_) { return []; } };
+  function addHistory(text) {
+    let h = getHistory().filter(x => x.text !== text);
+    h.unshift({ text, ts: Date.now() });
+    localStorage.setItem(HIST_LS, JSON.stringify(h.slice(0, 60)));
+    renderHistory();
+  }
+  function renderHistory() {
+    const box = $('#history'); box.innerHTML = '';
+    const h = getHistory();
+    if (!h.length) { box.append(el('div', 'hist-empty', 'Your searches show up here.')); return; }
+    h.forEach(item => {
+      const b = el('button', 'hist-item', item.text);
+      b.title = item.text;
+      b.onclick = () => { $('#nl').value = item.text; closeSidebar(); submitPrompt(); };
+      box.append(b);
+    });
+  }
+  renderHistory();
+
+  $('#newSearch').onclick = () => {
+    $('#nl').value = ''; $('#nl').style.height = 'auto'; aiNote('');
+    out.innerHTML = ''; stopScroll();
+    $('#main').classList.remove('searched'); closeSidebar();
+    $('#nl').focus();
   };
+
+  // Sidebar collapses under a narrow viewport; the ☰ button toggles it.
+  const closeSidebar = () => $('#app').classList.remove('sb-open');
+  $('#menuBtn').onclick = () => $('#app').classList.toggle('sb-open');
 
   // ---- vocabulary --------------------------------------------------------
   async function loadVocab() {
@@ -1246,6 +1293,7 @@
     // reflect into the builder so result rows resolve their icons and the user
     // can open settings and tweak.
     loadQueryIntoBuilder(query);
+    $('#main').classList.add('searched');   // collapse the hero, ChatGPT-style
     setBusyUI(true); startScroll(); out.innerHTML = '';
     try {
       const d = await streamSearch(query, s => pushSeed(s));
@@ -1507,6 +1555,7 @@
       aiNote('Add a free Gemini key to search by description — opening settings…', true);
       openDrawer(); $('#geminiKey').focus(); return;
     }
+    addHistory(text);
     aiNote('thinking…'); setBusyUI(true);
     try {
       const d = await post('/api/gemini', { text, version: $('#version').value, key });
@@ -1525,20 +1574,6 @@
   });
   nlBox.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitPrompt(); }
-  });
-
-  const EXAMPLES = [
-    'a mansion near spawn with a village next to it',
-    'a huge mushroom island at spawn',
-    '3 villages within 800 blocks of spawn',
-    'a slime chunk cluster near spawn',
-    'lots of diamonds under a village',
-    'a jungle next to a desert',
-  ];
-  EXAMPLES.forEach(x => {
-    const b = el('button', 'tiny', x); b.type = 'button';
-    b.onclick = () => { nlBox.value = x; submitPrompt(); };
-    $('#examples').append(b);
   });
 
   // ---- village smith search (real worldgen, tier-2 backend) --------------
@@ -1639,12 +1674,6 @@
         atob(str.replace(/-/g, '+').replace(/_/g, '/')))));
     } catch (e) { return null; }
   }
-  $('#share').onclick = async () => {
-    const link = location.origin + location.pathname + '#q=' + encodeState(currentState());
-    try { await navigator.clipboard.writeText(link); toast('link copied to clipboard'); }
-    catch (e) { location.hash = 'q=' + encodeState(currentState()); toast('link is in the address bar'); }
-  };
-
   function getSaved() { try { return JSON.parse(localStorage.getItem('sf-saved') || '[]'); } catch (e) { return []; } }
   function setSaved(a) { localStorage.setItem('sf-saved', JSON.stringify(a)); renderSaved(); }
   function renderSaved() {
