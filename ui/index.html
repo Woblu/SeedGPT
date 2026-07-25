@@ -337,35 +337,33 @@
   .side-foot { padding: 10px 6px 2px; border-top: 1px solid var(--slot-edge);
     font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
   .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .topbar { display: flex; align-items: center; padding: 10px 14px; min-height: 20px; }
+  .topbar { display: flex; align-items: center; padding: 10px 14px; min-height: 18px; }
   .topbar .menu { display: none; }
-  @media (max-width: 760px) {
-    .topbar .menu { display: inline-flex; }
-    .sidebar { position: fixed; top: 0; left: 0; z-index: 65;
-      transform: translateX(-102%); transition: transform .2s ease; }
-    .app.sb-open .sidebar { transform: none; box-shadow: 10px 0 40px rgba(0,0,0,.45); }
-    .hero { padding-top: 16vh; }
-  }
 
   /* ---- chat-style hero + prompt ---------------------------------------- */
-  .hero { padding: 32vh 20px 3vh; display: flex; justify-content: center;
-    transition: padding .25s ease; }
-  .main.searched .hero { padding: 3vh 20px 2vh; }
-  .main.searched .hero-sub { display: none; }
+  /* Landing: prompt sits low on the page. After a search the hero collapses
+     to the top so results fill in below, ChatGPT-style. */
+  .hero { min-height: calc(100vh - 44px); display: flex; flex-direction: column;
+    justify-content: flex-end; align-items: center; padding: 0 20px 15vh;
+    transition: min-height .25s ease, padding .25s ease; }
+  .main.searched .hero { min-height: 0; justify-content: flex-start; padding: 3vh 20px 2vh; }
+  .main.searched .hero-sub, .main.searched .hero-logo { display: none; }
   .hero-inner { width: 100%; max-width: 680px; text-align: center; }
-  .hero-title { font-size: 30px; font-weight: 800; letter-spacing: .01em;
-    display: inline-flex; align-items: center; gap: 10px; }
-  .hero-title .logo { font-size: 27px; filter: drop-shadow(1px 1px 0 rgba(0,0,0,.4)); }
+  .hero-logo { margin: 0 auto 14px; line-height: 1; font-size: 52px; }
+  .hero-logo img { width: 92px; height: 92px; object-fit: contain;
+    image-rendering: pixelated; display: block; margin: 0 auto;
+    filter: drop-shadow(0 3px 7px rgba(0,0,0,.45)); }
+  .hero-title { font-size: 30px; font-weight: 800; letter-spacing: .01em; }
   .hero-sub { margin: 10px auto 22px; max-width: 520px; color: var(--ink-soft); font-size: 14px; }
-  .prompt { display: flex; align-items: center; gap: 8px;
-    background: var(--slot); border: 2px solid var(--slot-edge); border-radius: 26px;
-    padding: 7px 8px; box-shadow: 0 8px 30px rgba(0,0,0,.28); text-align: left; }
+  .prompt { display: flex; align-items: center; gap: 7px;
+    background: var(--slot); border: 2px solid var(--slot-edge); border-radius: 22px;
+    padding: 5px 6px; box-shadow: 0 8px 30px rgba(0,0,0,.28); text-align: left; }
   .prompt:focus-within { border-color: var(--grass-dk); }
   .prompt textarea { flex: 1; border: 0; background: transparent; resize: none;
-    color: var(--ink); font-family: inherit; font-size: 15px; line-height: 1.5;
-    padding: 9px 4px; max-height: 200px; outline: none; }
-  .iconbtn { flex: none; width: 40px; height: 40px; border-radius: 50%; padding: 0;
-    display: flex; align-items: center; justify-content: center; font-size: 18px;
+    color: var(--ink); font-family: inherit; font-size: 15px; line-height: 1.45;
+    padding: 6px 4px; max-height: 180px; outline: none; }
+  .iconbtn { flex: none; width: 34px; height: 34px; border-radius: 50%; padding: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 16px;
     box-shadow: none; border-width: 2px; align-self: center; }
   .iconbtn.go { background: linear-gradient(#7ed957, var(--grass) 55%, var(--grass-dk)); color: #10240a; }
   .iconbtn:disabled { opacity: .5; }
@@ -419,7 +417,8 @@
 
     <div class="hero" id="hero">
       <div class="hero-inner">
-        <div class="hero-title"><span class="logo">🌱</span> SeedGPT</div>
+        <div class="hero-logo" id="heroLogo"><span class="logo-emoji">🌱</span></div>
+        <div class="hero-title">SeedGPT</div>
         <div class="hero-sub">Describe the Minecraft world you want. It scans millions of seeds and shows the matches.</div>
         <form class="prompt" id="promptForm">
           <button type="button" id="gear" class="iconbtn" title="Settings &amp; manual builder">⚙</button>
@@ -1638,11 +1637,23 @@
         document.body.style.backgroundSize = '64px, 512px';
       }
       if (assets.logo) {
-        const logo = $('.logo');
-        logo.textContent = '';
-        const im = el('img'); im.src = '/assets/' + assets.logo; im.alt = '';
-        im.style.cssText = 'width:26px;height:26px;image-rendering:pixelated;display:block';
-        logo.append(im);
+        const src = '/assets/' + assets.logo;
+        // Big logo in the centre of the landing screen; fall back to the seed
+        // emoji if the image is missing or broken.
+        const hl = $('#heroLogo');
+        if (hl) {
+          const im = el('img'); im.src = src; im.alt = 'SeedGPT';
+          im.onerror = () => { hl.innerHTML = ''; hl.append(el('span', 'logo-emoji', '🌱')); };
+          hl.innerHTML = ''; hl.append(im);
+        }
+        // Small logo beside the sidebar brand.
+        const brand = $('.side-brand .logo');
+        if (brand) {
+          brand.textContent = '';
+          const im = el('img'); im.src = src; im.alt = '';
+          im.style.cssText = 'width:22px;height:22px;object-fit:contain;image-rendering:pixelated;display:block';
+          brand.append(im);
+        }
       }
     } catch (e) { /* graphics are optional — the built-in look stands alone */ }
   }

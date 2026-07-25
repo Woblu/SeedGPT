@@ -280,8 +280,16 @@ def api_assets() -> dict:
         if not d.is_dir():
             return []
         return sorted(f.stem for f in d.glob("*.png"))
-    logo = next((f.name for f in (ASSETS.glob("logo.*") if ASSETS.is_dir() else [])
-                 if f.suffix.lower() in (".png", ".webp", ".gif", ".jpg", ".jpeg")), None)
+    # The centre logo: a file named seed.* takes priority (that's what people
+    # reach for), else logo.*.
+    imgext = (".png", ".webp", ".gif", ".jpg", ".jpeg")
+    logo = None
+    if ASSETS.is_dir():
+        for stem in ("seed", "logo"):
+            logo = next((f.name for f in ASSETS.glob(stem + ".*")
+                         if f.suffix.lower() in imgext), None)
+            if logo:
+                break
     return {"structures": names("structures"), "items": names("items"),
             "backdrop": (ASSETS / "backdrop.png").is_file(), "logo": logo}
 
