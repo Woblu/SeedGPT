@@ -27,14 +27,30 @@ bump the pin, then re-run `./test.sh`.
 python serve.py        # opens http://127.0.0.1:8777
 ```
 
-Build queries by clicking, see the execution plan, estimate whether a search
-will finish, run it, and click any result for a **biome map** of that world —
-structures marked, spawn crosshaired, zoomable from 500 to 8,000 blocks.
-Binds to loopback only — the search is a native binary, so this cannot be a
-hosted page; the server exists to bridge the browser to `build/find.exe`.
+The main screen is a single rounded prompt box: **describe the world you want**
+in plain English and press Enter. While it searches, the **seeds it's testing
+scroll past live**; matches appear below, each clickable for a **biome map** of
+that world — structures marked, spawn crosshaired, zoomable from 500 to 8,000
+blocks. Binds to loopback only — the search is a native binary, so this cannot
+be a hosted page; the server exists to bridge the browser to `build/find.exe`.
 
-The natural-language box needs an Anthropic key; everything else works without
-one.
+The **⚙ dot** by the prompt opens settings and the full **manual builder** —
+click conditions together by hand if you'd rather not use AI (it needs no key).
+
+#### The natural-language box needs a Gemini API key
+
+Getting one is free:
+
+1. Go to **[aistudio.google.com/apikey](https://aistudio.google.com/apikey)** and
+   sign in with a Google account.
+2. Click **Create API key** and copy it (it looks like `AIza…`).
+3. In the finder, click the **⚙ dot** → paste the key under **Gemini API key** →
+   **Save key**. It's stored only in your browser (localStorage), never committed.
+
+Prefer not to keep it in the browser? Set it in the environment before starting
+the server instead — `export GEMINI_API_KEY=AIza…` (or `$env:GEMINI_API_KEY` in
+PowerShell) — and the prompt box uses that. The manual builder needs no key at
+all. (The older `ask.py` path still uses Anthropic; the web prompt uses Gemini.)
 
 The interface is styled as a Minecraft GUI — beveled stone panels, item-slot
 condition cards, and a `☀ / ☾` toggle between a dark **Cave** theme and a

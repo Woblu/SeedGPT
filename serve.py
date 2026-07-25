@@ -11,12 +11,17 @@ Endpoints (all POST bodies are JSON):
     GET  /api/vocab?v=..  -> valid structures/biomes for a version, with dimension
     POST /api/plan        -> parse + plan only, no search (fast, always safe)
     POST /api/explain     -> sampled rarity estimate
-    POST /api/search      -> the real search
+    POST /api/search      -> the real search (batch)
+    POST /api/stream      -> the real search, streamed: {"t":seed} heartbeats
+                             while scanning, then {"done":{...}} -- lets the UI
+                             show the seeds scroll past live
     POST /api/describe    -> what is actually in a given seed
     GET  /api/map?...     -> biome map PNG for a seed
     GET  /api/assets      -> lists which structure/item icons the user has added
     GET  /assets/<path>   -> static image files (user-provided graphics)
     POST /api/ask         -> natural language -> query JSON (needs ANTHROPIC_API_KEY)
+    POST /api/gemini      -> natural language -> query JSON via Google Gemini
+                             (key from the request body or GEMINI_API_KEY)
 """
 
 import json
@@ -25,10 +30,12 @@ import re
 import subprocess
 import sys
 import threading
+import urllib.error
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 ROOT = Path(__file__).parent
 ASSETS = ROOT / "assets"
@@ -379,6 +386,130 @@ def api_ask(body) -> dict:
             "notes": notes.group(1).strip() if notes else ""}
 
 
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+# The full condition schema, taught to Gemini. Kept here (not in the model's
+# head) so it always matches what the C planner actually accepts. The vocabulary
+# (structures/biomes) is injected per-version so the model can't name something
+# the chosen version doesn't have.
+AI_SCHEMA = """\
+You translate a description of a Minecraft world into a JSON search query for a
+seed finder. Output ONLY JSON of the form:
+  { "conditions": [ ... ], "notes": "one short sentence on anything you assumed or could not express" }
+
+Each condition is one object with a short lowercase "id". Distances ("within")
+are in BLOCKS (a chunk is 16). "of" is "origin", "spawn", or another condition's
+id (forming a tree). If no distance is given, choose a sensible one and say so in
+notes. Do NOT order conditions for speed -- a cost planner reorders them.
+
+Condition types (use EXACTLY these keys):
+- Structure:      {"id","structure":<name>,"within","of"}
+    variants (only where valid): "surface":true (ruined_portal, skip buried),
+    "giant":true (ruined_portal), "abandoned":true (village = zombie village),
+    "basement":true (igloo).
+    cluster: add "count":N for >=N of that structure within the radius.
+    tight cluster (quad-hut style): add "count":N AND "spread":T -- N instances
+    within T blocks of EACH OTHER, anywhere within `within` of the reference.
+- Biome present:  {"id","biome":<name>,"within","of"}  (of may be another biome:
+    "biome B within D of biome A" = the two biomes are adjacent.)
+- Biome area:     {"id","biome_area":<name>,"pct":P,"within","of"}  P = min %% of
+    the disc that is this biome (a huge mushroom island, sprawling mesa).
+- Terrain height: {"id","height":Y,"within","of"}  APPROXIMATE peak >= Y (tall
+    mountains; small radius + of a structure = "tall structure"). Overworld only.
+- Ore density:    {"id","ore":<material>,"count":N,"within","of"}  materials:
+    diamond iron gold emerald redstone lapis copper coal quartz ancient_debris nether_gold
+- Slime chunks:   {"id","slime":N,"within","of"}  >=N slime chunks (farm site).
+- Chest loot:     {"id","within","loot":{"structure":<s>,"item":<i>,"count":N}}
+    loot structures: desert_pyramid jungle_temple igloo outpost shipwreck ruined_portal
+- End portal eyes:{"id":"portal","eyes":N}  the first stronghold's portal has >=N eyes.
+
+Rules:
+- Use ONLY structure/biome names from the vocabulary below. Never invent one.
+- If the request implies something none of these express, leave it out and say so
+  plainly in notes. Do not approximate it with an unrelated condition.
+- Prefer fewer, tighter conditions -- every extra one makes seeds rarer.
+"""
+
+
+def _vocab_for(version: str) -> dict:
+    rc, out, err = run([tool("vocab"), version], TIMEOUTS["plan"])
+    if rc != 0:
+        raise Failure(err.strip() or f"vocab failed for {version}")
+    return json.loads(out)
+
+
+def api_gemini(body) -> dict:
+    """Natural language -> query JSON via Google's Gemini API.
+
+    The key comes from the request (the UI stores it in the browser) or the
+    GEMINI_API_KEY env var. We call Gemini server-side so the browser never has
+    to deal with CORS, and force JSON output via responseMimeType.
+    """
+    text = str(body.get("text", "")).strip()
+    if not text:
+        raise Failure("say what you're looking for")
+    key = str(body.get("key", "")).strip() or os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise Failure("no Gemini API key yet. Open settings (the dot by the search "
+                      "box) and paste one -- get a free key at "
+                      "https://aistudio.google.com/apikey")
+    v = check_version(str(body.get("version", "1.21")))
+    vocab = _vocab_for(v)
+    model = re.sub(r"[^A-Za-z0-9._-]", "", str(body.get("model", "")) or GEMINI_MODEL)
+    system = (AI_SCHEMA + "\n\nMinecraft version: " + vocab["version"]
+              + "\n\nValid structures: " + ", ".join(vocab["structures"])
+              + "\n\nValid biomes: " + ", ".join(vocab["biomes"]))
+    payload = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": text}]}],
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
+    }
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
+           f":generateContent?key={quote(key, safe='')}")
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(errors="replace")
+        msg = raw
+        try:
+            msg = json.loads(raw)["error"]["message"]
+        except Exception:  # noqa: BLE001
+            pass
+        if e.code in (400, 403) and re.search(r"api.?key|permission|invalid", msg, re.I):
+            raise Failure(f"Gemini rejected the key ({e.code}). Check it in settings. [{msg}]")
+        raise Failure(f"Gemini error {e.code}: {msg}")
+    except urllib.error.URLError as e:
+        raise Failure(f"could not reach Gemini ({e.reason}). Check your connection.")
+
+    try:
+        cand = data["candidates"][0]
+        parts = cand["content"]["parts"]
+        answer = "".join(p.get("text", "") for p in parts)
+    except (KeyError, IndexError):
+        reason = ""
+        try:
+            reason = data["candidates"][0].get("finishReason", "")
+        except Exception:  # noqa: BLE001
+            reason = (data.get("promptFeedback") or {}).get("blockReason", "")
+        raise Failure(f"Gemini returned no query{f' ({reason})' if reason else ''}. Try rephrasing.")
+
+    m = re.search(r"\{.*\}", answer, re.S)
+    if not m:
+        raise Failure("Gemini did not return a usable query. Try rephrasing.")
+    try:
+        obj = json.loads(m.group(0))
+    except ValueError:
+        raise Failure("Gemini returned malformed JSON. Try rephrasing.")
+    conds = obj.get("conditions") or []
+    if not isinstance(conds, list) or not conds:
+        raise Failure(obj.get("notes") or "couldn't turn that into any conditions -- try being more specific.")
+    return {"query": {"version": v, "conditions": conds}, "notes": obj.get("notes", "")}
+
+
 def api_villagesmiths(body) -> dict:
     """Tier-2 search: run the real-Minecraft worldgen backend to find seeds with
     a village holding >= N smith buildings. Slow (real jigsaw generation), and
@@ -417,7 +548,8 @@ def api_villagesmiths(body) -> dict:
 
 ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/search": api_search, "/api/describe": api_describe,
-          "/api/ask": api_ask, "/api/villagesmiths": api_villagesmiths}
+          "/api/ask": api_ask, "/api/gemini": api_gemini,
+          "/api/villagesmiths": api_villagesmiths}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -472,9 +604,72 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001 - surface anything to the browser
             self._send(500, {"error": f"{type(e).__name__}: {e}"})
 
+    def _write_line(self, obj):
+        self.wfile.write((json.dumps(obj) + "\n").encode())
+        self.wfile.flush()
+
+    def _stream_search(self, body):
+        """Run find.exe in stream mode and forward it to the browser as
+        newline-delimited JSON: {"t": seed} per heartbeat while scanning, then a
+        final {"done": {...}} (or {"error": ...}). Lets the UI show seeds scroll
+        past live. Uses connection-close framing, read by the browser via a
+        streaming fetch()."""
+        try:
+            find = tool("find")
+            path = write_query(body)
+        except Failure as e:
+            self._send(400, {"error": str(e)}); return
+        rng = str(max(1, min(500_000_000, int(body.get("range", 3_000_000)))))
+        threads = str(max(1, min(64, int(body.get("threads", 16)))))
+        env = dict(os.environ); env["FIND_STREAM"] = "1"
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        p = subprocess.Popen([str(find), str(path), rng, threads],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, cwd=str(ROOT), env=env, bufsize=1)
+        watchdog = threading.Timer(TIMEOUTS["search"], p.terminate)
+        watchdog.start()
+        buf = []
+        try:
+            for line in p.stdout:
+                if line.startswith("@TICK "):
+                    self._write_line({"t": line[6:].strip()})
+                else:
+                    buf.append(line)
+        except (BrokenPipeError, ConnectionError, OSError):
+            p.terminate(); return
+        finally:
+            watchdog.cancel()
+            p.wait()
+        out = "".join(buf)
+        low = out.lower()
+        try:
+            if "query error" in low or "plan error" in low:
+                tail = out.strip().splitlines()
+                self._write_line({"error": tail[-1] if tail else "search failed"})
+            else:
+                self._write_line({"done": {
+                    "plan": parse_plan(out), "seeds": parse_seeds(out),
+                    "funnel": parse_funnel(out), "notes": parse_notes(out),
+                    "raw": out}})
+        except (BrokenPipeError, ConnectionError, OSError):
+            return
+
     def do_POST(self):
         u = urlparse(self.path)
         try:
+            if u.path == "/api/stream":
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                self._stream_search(body)
+                return
             fn = ROUTES.get(u.path)
             if fn is None:
                 self._send(404, {"error": "not found"}); return

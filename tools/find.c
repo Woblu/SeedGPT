@@ -33,6 +33,10 @@ typedef struct {
 static CRITICAL_SECTION g_lock;
 static volatile LONG g_found = 0;
 static int g_want = MAX_HITS;
+// Stream mode (env FIND_STREAM): emit "@TICK <seed>" heartbeats so the web UI
+// can show the seeds being scanned scroll past live. Time-throttled per thread
+// so the rate is readable regardless of how fast the query scans.
+static int g_stream = 0;
 
 static DWORD WINAPI worker(LPVOID arg)
 {
@@ -40,10 +44,22 @@ static DWORD WINAPI worker(LPVOID arg)
     Generator g;
     setupGenerator(&g, j->q->mc, 0);
     LootCache *lc = lootCacheNew();   // one per thread; loot tables are stateful
+    ULONGLONG lastTick = 0;
 
     for (uint64_t s48 = j->lo; s48 < j->hi; s48++) {
         if (g_found >= g_want) break;
         j->scanned++;
+
+        if (g_stream) {
+            ULONGLONG now = GetTickCount64();
+            if (now - lastTick >= 55) {
+                lastTick = now;
+                EnterCriticalSection(&g_lock);
+                printf("@TICK %" PRIu64 "\n", s48);
+                fflush(stdout);
+                LeaveCriticalSection(&g_lock);
+            }
+        }
 
         Match m;
         if (!queryStage1(j->q, s48, &m)) continue;   // cheap reject
@@ -138,6 +154,7 @@ int main(int argc, char **argv)
     if (bias)    { explainCompare(&q, samples, nthreads, stdout); free(json); return 0; }
     if (explain) { explainQuery(&q, samples, nthreads, stdout);   free(json); return 0; }
 
+    g_stream = getenv("FIND_STREAM") != NULL;
     InitializeCriticalSection(&g_lock);
     Job *jobs = calloc(nthreads, sizeof(Job));
     HANDLE *th = calloc(nthreads, sizeof(HANDLE));

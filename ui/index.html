@@ -314,30 +314,125 @@
   .mapctl { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
   .mapctl label { margin: 0; font-size: 11px; }
   .mapctl select { width: auto; padding: 4px 7px; font-size: 12px; }
+
+  /* ---- chat-style hero + prompt ---------------------------------------- */
+  .hero { padding: 7vh 20px 3vh; display: flex; justify-content: center; }
+  .hero-inner { width: 100%; max-width: 720px; text-align: center; }
+  .hero-title { font-size: 30px; font-weight: 800; letter-spacing: .01em;
+    display: inline-flex; align-items: center; gap: 10px; }
+  .hero-title .logo { font-size: 27px; filter: drop-shadow(1px 1px 0 rgba(0,0,0,.4)); }
+  .hero-sub { margin: 10px auto 22px; max-width: 520px; color: var(--ink-soft); font-size: 14px; }
+  .prompt { display: flex; align-items: flex-end; gap: 8px;
+    background: var(--slot); border: 2px solid var(--slot-edge); border-radius: 26px;
+    padding: 7px 7px 7px 18px; box-shadow: 0 8px 30px rgba(0,0,0,.28); text-align: left; }
+  .prompt:focus-within { border-color: var(--grass-dk); }
+  .prompt textarea { flex: 1; border: 0; background: transparent; resize: none;
+    color: var(--ink); font-family: inherit; font-size: 15px; line-height: 1.5;
+    padding: 9px 0; max-height: 200px; outline: none; }
+  .iconbtn { flex: none; width: 40px; height: 40px; border-radius: 50%; padding: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 18px;
+    box-shadow: none; border-width: 2px; }
+  .iconbtn.go { background: linear-gradient(#7ed957, var(--grass) 55%, var(--grass-dk)); color: #10240a; }
+  .iconbtn:disabled { opacity: .5; }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
+  .examples button { font-size: 12px; border-radius: 16px; padding: 6px 12px; }
+  .ai-note { margin-top: 14px; font-size: 12.5px; color: var(--ink-soft); min-height: 1em; }
+  .ai-note.err { color: #ff7a7a; }
+
+  /* ---- live seed scroll ------------------------------------------------- */
+  .scroll { max-width: 860px; margin: 0 auto 20px; padding: 0 20px; }
+  .scroll.hidden { display: none; }
+  .scroll-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+  .scroll-head .dot { width: 9px; height: 9px; border-radius: 50%;
+    background: var(--grass); animation: sfpulse 1s infinite; }
+  @keyframes sfpulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+  .scroll-track { height: 132px; overflow: hidden; border: 2px solid var(--slot-edge);
+    background: var(--slot); border-radius: 12px; padding: 8px 14px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.75; color: var(--ink-faint);
+    display: flex; flex-direction: column-reverse; }
+  @media (prefers-reduced-motion: reduce) { .scroll-head .dot { animation: none; } }
+  .scroll-track .s { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .scroll-track .s.hit { color: var(--grass); font-weight: 700; }
+
+  .results-wrap { max-width: 860px; margin: 0 auto; padding: 0 20px 70px; }
+  .results-wrap .col { display: block; }
+
+  /* ---- settings / manual-builder drawer -------------------------------- */
+  .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(470px, 94vw);
+    overflow-y: auto; background: var(--stone); border-left: 3px solid var(--slot-edge);
+    box-shadow: -10px 0 40px rgba(0,0,0,.45); z-index: 60; padding: 0 16px 48px;
+    transition: transform .2s ease; }
+  .drawer.hidden { transform: translateX(103%); }
+  .drawer-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center;
+    gap: 8px; padding: 14px 2px; background: var(--stone); border-bottom: 1px solid var(--slot-edge); }
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 55; }
+  .scrim.hidden { display: none; }
 </style>
 </head>
 <body>
 
 <header>
-  <span class="logo">⛏️</span>
-  <h1>Seed Finder</h1>
   <span class="sub" id="engine">cubiomes · loading…</span>
   <span class="spacer"></span>
   <button class="tiny" id="share" title="copy a link that rebuilds this query">🔗 share</button>
   <button class="tiny" id="theme">☀ / ☾</button>
 </header>
 
-<div class="wrap">
-  <div class="col left">
+<main class="hero" id="hero">
+  <div class="hero-inner">
+    <div class="hero-title"><span class="logo">⛏️</span> Seed Finder</div>
+    <div class="hero-sub">Describe the Minecraft world you want. It scans millions of seeds and shows the matches.</div>
+    <form class="prompt" id="promptForm">
+      <textarea id="nl" rows="1" placeholder="a woodland mansion near spawn with a village next to it…"></textarea>
+      <button type="button" id="gear" class="iconbtn" title="Settings & manual builder">⚙</button>
+      <button type="submit" id="go" class="iconbtn go" title="Search">➜</button>
+    </form>
+    <div class="examples" id="examples"></div>
+    <div id="aiNote" class="ai-note"></div>
+  </div>
+</main>
+
+<div class="scroll hidden" id="scroll">
+  <div class="scroll-head"><span class="dot"></span><span id="scrollMeta">scanning…</span></div>
+  <div class="scroll-track" id="scrollTrack"></div>
+</div>
+
+<div class="results-wrap"><div class="col" id="out">
+  <div class="card">
+    <h3>How this works</h3>
+    <p style="margin:0 0 10px;font-size:13px;color:var(--ink-soft)">
+      Type what you want in plain English (needs a free <b>Gemini</b> key — add it in
+      ⚙ settings). Or open ⚙ and build the query by hand. Either way the finder
+      splits every structure check into cheap 48-bit geometry and expensive biome
+      viability, and <b>reorders by measured cost</b>.
+    </p>
+    <p style="margin:0;font-size:13px;color:var(--ink-soft)">
+      While it runs you’ll see the seeds it’s testing scroll past; matches appear here.
+    </p>
+  </div>
+</div></div>
+
+<div class="scrim hidden" id="scrim"></div>
+<aside class="drawer hidden" id="drawer">
+  <div class="drawer-head">
+    <b>Settings &amp; manual builder</b>
+    <span class="spacer"></span>
+    <button class="tiny" id="drawerClose">✕ close</button>
+  </div>
+  <div class="drawer-body">
 
     <section>
-      <h2>Describe it</h2>
-      <textarea id="nl" placeholder="a mansion near spawn with a village next to it"></textarea>
-      <div class="btnrow">
-        <button id="askBtn">Translate to query</button>
+      <h2>Gemini API key</h2>
+      <input type="password" id="geminiKey" placeholder="paste your key (AIza…)" autocomplete="off">
+      <div class="btnrow" style="margin-top:8px">
+        <button id="keySave">Save key</button>
+        <button class="tiny" id="keyClear">clear</button>
+        <span id="keyState" class="hint" style="align-self:center;margin:0"></span>
       </div>
-      <div class="hint">Needs an Anthropic key. The builder below works without one.</div>
-      <div id="askOut"></div>
+      <div class="hint">Stored only in this browser. Get a free key at
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> —
+        sign in, “Create API key”, copy it here. (Or set <code>GEMINI_API_KEY</code> before starting the server.)</div>
     </section>
 
     <section>
@@ -428,23 +523,7 @@
       </div>
     </section>
   </div>
-
-  <div class="col" id="out">
-    <div class="card">
-      <h3>How this works</h3>
-      <p style="margin:0 0 10px;font-size:13px;color:var(--ink-soft)">
-        A structure check costs <b>~9&nbsp;ns</b>; a biome check <b>~31&nbsp;µs</b> — a
-        ~3,650× gap. So the planner splits every structure condition into cheap
-        48-bit geometry (pass&nbsp;1) and expensive biome viability (pass&nbsp;2), and
-        <b>reorders by measured cost</b> — not the order you wrote them.
-      </p>
-      <p style="margin:0;font-size:13px;color:var(--ink-soft)">
-        <b>Plan</b> shows that ordering. <b>Estimate</b> samples the seed space and
-        predicts whether the search will ever finish. <b>Search</b> runs it.
-      </p>
-    </div>
-  </div>
-</div>
+</aside>
 
 <script>
 (() => {
@@ -524,6 +603,14 @@
     }
     s.textContent = emojiFor(cat, name);
     return s;
+  }
+
+  // A table cell with an icon + label. Shared by search results and the village
+  // search, so it lives here rather than inside either handler.
+  function idCell(cat, name, label) {
+    const td = el('td', 'id');
+    td.append(mkIcon(cat, name), document.createTextNode(label));
+    return td;
   }
 
   let vocab = { structures:{}, biomes:{} }, lootVocab = { structures:{} };
@@ -1073,7 +1160,7 @@
 
   $('#planBtn').onclick = async () => {
     if (!guard()) return;
-    busy('planning…');
+    closeDrawer(); busy('planning…');
     try {
       const d = await post('/api/plan', { query: buildQuery() });
       out.innerHTML = ''; out.append(...noteCards(d.notes), planCard(d.plan), rawCard(d.raw));
@@ -1082,7 +1169,7 @@
 
   $('#explainBtn').onclick = async () => {
     if (!guard()) return;
-    busy('sampling the seed space…');
+    closeDrawer(); busy('sampling the seed space…');
     try {
       const d = await post('/api/explain',
         { query: buildQuery(), threads: +$('#threads').value });
@@ -1108,13 +1195,70 @@
     } catch (e) { fail(e.message); }
   };
 
-  $('#searchBtn').onclick = async () => {
-    if (!guard()) return;
-    busy('searching…');
+  // ---- streaming search + live seed scroll -------------------------------
+  function setBusyUI(on) {
+    $('#go').disabled = on;
+    const sb = $('#searchBtn'); if (sb) sb.disabled = on;
+  }
+  function startScroll() {
+    const s = $('#scroll'); s.classList.remove('hidden');
+    $('#scrollTrack').innerHTML = ''; $('#scrollMeta').textContent = 'scanning…';
+  }
+  function stopScroll() { $('#scroll').classList.add('hidden'); }
+  function pushSeed(seed, hit) {
+    const t = $('#scrollTrack');
+    const d = el('div', 's' + (hit ? ' hit' : ''), (hit ? '✓ found  ' : 'seed  ') + seed);
+    t.insertBefore(d, t.firstChild);
+    while (t.childElementCount > 44) t.removeChild(t.lastChild);
+    if (!hit) $('#scrollMeta').textContent = 'scanning… now at ' + Number(seed).toLocaleString();
+  }
+
+  // Read the newline-delimited stream from /api/stream: {"t":seed} heartbeats,
+  // then a final {"done":{...}} (or {"error":...}).
+  async function streamSearch(query, onTick) {
+    const resp = await fetch('/api/stream', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, range: +$('#range').value || 3000000,
+                             threads: +$('#threads').value || 16 }) });
+    if (!resp.ok) throw new Error((await resp.text()) || ('HTTP ' + resp.status));
+    const reader = resp.body.getReader(), dec = new TextDecoder();
+    let buf = '', result = null;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        let msg; try { msg = JSON.parse(line); } catch (_) { continue; }
+        if (msg.t !== undefined) onTick(msg.t);
+        else if (msg.done) result = msg.done;
+        else if (msg.error) throw new Error(msg.error);
+      }
+    }
+    if (!result) throw new Error('the search ended without a result');
+    return result;
+  }
+
+  async function runSearch(query) {
+    if (!query || !(query.conditions || []).length) { fail('nothing to search — add a condition'); return; }
+    // reflect into the builder so result rows resolve their icons and the user
+    // can open settings and tweak.
+    loadQueryIntoBuilder(query);
+    setBusyUI(true); startScroll(); out.innerHTML = '';
     try {
-      const d = await post('/api/search', { query: buildQuery(),
-        range: +$('#range').value, threads: +$('#threads').value });
-      const f = d.funnel;
+      const d = await streamSearch(query, s => pushSeed(s));
+      stopScroll();
+      (d.seeds || []).slice(0, 12).forEach(s => pushSeed(s.seed, true));
+      renderResults(d);
+    } catch (e) {
+      stopScroll(); fail(e.message);
+    } finally { setBusyUI(false); }
+  }
+
+  function renderResults(d) {
+      const f = d.funnel || {};
       out.innerHTML = '';
       out.append(...noteCards(d.notes));   // caveats first: they qualify what follows
 
@@ -1162,11 +1306,6 @@
           n.append(num, desc); box.append(n);
           if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime || s.area || s.biome || s.cluster || s.height) {
             const t = el('table');
-            const idCell = (cat, name, label) => {
-              const td = el('td','id');
-              td.append(mkIcon(cat, name), document.createTextNode(label));
-              return td;
-            };
             if (s.spawn) {
               const tr = el('tr');
               tr.append(idCell('spawn','','Spawn'),
@@ -1246,8 +1385,9 @@
         out.append(c);
       }
       out.append(planCard(d.plan), rawCard(d.raw));
-    } catch (e) { fail(e.message); }
-  };
+  }
+
+  $('#searchBtn').onclick = () => { if (!guard()) return; closeDrawer(); runSearch(buildQuery()); };
 
   const MARKERS = [
     ['mansion','#FF4646'], ['village','#FFD23C'], ['monument','#50BEFF'],
@@ -1304,25 +1444,102 @@
     } catch (e) { fail(e.message); }
   }
 
-  $('#askBtn').onclick = async () => {
+  // ---- AI prompt (Gemini) + settings drawer ------------------------------
+  const KEY_LS = 'sf-gemini-key';
+  const getKey = () => localStorage.getItem(KEY_LS) || '';
+  function refreshKeyState() {
+    $('#keyState').textContent = getKey() ? '✓ saved in this browser' : 'no key yet';
+  }
+  $('#keySave').onclick = () => {
+    const v = $('#geminiKey').value.trim();
+    if (!v) { toast('paste a key first'); return; }
+    localStorage.setItem(KEY_LS, v); $('#geminiKey').value = ''; refreshKeyState();
+    toast('Gemini key saved (this browser only)');
+  };
+  $('#keyClear').onclick = () => { localStorage.removeItem(KEY_LS); refreshKeyState(); toast('key cleared'); };
+  refreshKeyState();
+
+  function openDrawer() { $('#drawer').classList.remove('hidden'); $('#scrim').classList.remove('hidden'); }
+  function closeDrawer() { $('#drawer').classList.add('hidden'); $('#scrim').classList.add('hidden'); }
+  $('#gear').onclick = openDrawer;
+  $('#drawerClose').onclick = closeDrawer;
+  $('#scrim').onclick = closeDrawer;
+
+  function aiNote(msg, isErr) {
+    const n = $('#aiNote'); n.textContent = msg || ''; n.classList.toggle('err', !!isErr);
+  }
+
+  // Inverse of buildQuery: turn a query object back into the builder's condition
+  // list, so an AI-generated search shows up (and can be tweaked) in settings.
+  function loadQueryIntoBuilder(query) {
+    conds = (query.conditions || []).map(c => {
+      if (c.eyes !== undefined) return { id: c.id, kind: 'eyes', eyes: c.eyes };
+      if (c.loot) return { id: c.id, kind: 'loot', struct: c.loot.structure,
+        item: c.loot.item, count: c.loot.count, within: c.within || 3000 };
+      if (c.ore) return { id: c.id, kind: 'ore', mat: c.ore, count: c.count || 1,
+        within: c.within || 64, of: c.of || 'origin' };
+      if (c.slime !== undefined) return { id: c.id, kind: 'slime', count: c.slime,
+        within: c.within || 128, of: c.of || 'origin' };
+      if (c.biome_area) return { id: c.id, kind: 'area', name: c.biome_area,
+        pct: c.pct || 50, within: c.within || 800, of: c.of || 'origin', precision: c.precision || 'fine' };
+      if (c.height !== undefined) return { id: c.id, kind: 'height', height: c.height,
+        within: c.within || 300, of: c.of || 'origin', precision: 'fine' };
+      if (c.structure) {
+        const o = { id: c.id, kind: 'structure', name: c.structure,
+          within: c.within || 400, of: c.of || 'origin', precision: 'fine' };
+        ['surface', 'giant', 'abandoned', 'basement'].forEach(k => { if (c[k]) o[k] = true; });
+        if (c.count) o.count = c.count;
+        if (c.spread) o.spread = c.spread;
+        return o;
+      }
+      return { id: c.id, kind: 'biome', name: c.biome || 'plains',
+        within: c.within || 400, of: c.of || 'origin', precision: c.precision || 'fine' };
+    });
+    nextId = conds.length + 1;
+    render();
+  }
+
+  async function submitPrompt() {
     const text = $('#nl').value.trim();
     if (!text) return;
-    $('#askOut').innerHTML = '<div class="busy">translating…</div>';
-    try {
-      const d = await post('/api/ask', { text, version: $('#version').value });
-      conds = (d.query.conditions || []).map(c => ({
-        id: c.id, kind: c.structure ? 'structure' : 'biome',
-        name: c.structure || c.biome, within: c.within ?? 400,
-        of: c.of || 'origin', precision: c.precision || 'fine'
-      }));
-      nextId = conds.length + 1;
-      render();
-      $('#askOut').innerHTML = d.notes
-        ? `<div class="note">${esc(d.notes)}</div>` : '';
-    } catch (e) {
-      $('#askOut').innerHTML = `<div class="err"><b>error</b>${esc(e.message)}</div>`;
+    const key = getKey();
+    if (!key) {
+      aiNote('Add a free Gemini key to search by description — opening settings…', true);
+      openDrawer(); $('#geminiKey').focus(); return;
     }
-  };
+    aiNote('thinking…'); setBusyUI(true);
+    try {
+      const d = await post('/api/gemini', { text, version: $('#version').value, key });
+      aiNote(d.notes ? d.notes : '');
+      await runSearch(d.query);
+    } catch (e) {
+      setBusyUI(false); aiNote(e.message, true);
+    }
+  }
+  $('#promptForm').addEventListener('submit', e => { e.preventDefault(); submitPrompt(); });
+
+  // Enter submits, Shift+Enter makes a newline; textarea auto-grows.
+  const nlBox = $('#nl');
+  nlBox.addEventListener('input', () => {
+    nlBox.style.height = 'auto'; nlBox.style.height = Math.min(200, nlBox.scrollHeight) + 'px';
+  });
+  nlBox.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitPrompt(); }
+  });
+
+  const EXAMPLES = [
+    'a mansion near spawn with a village next to it',
+    'a huge mushroom island at spawn',
+    '3 villages within 800 blocks of spawn',
+    'a slime chunk cluster near spawn',
+    'lots of diamonds under a village',
+    'a jungle next to a desert',
+  ];
+  EXAMPLES.forEach(x => {
+    const b = el('button', 'tiny', x); b.type = 'button';
+    b.onclick = () => { nlBox.value = x; submitPrompt(); };
+    $('#examples').append(b);
+  });
 
   // ---- village smith search (real worldgen, tier-2 backend) --------------
   function prettyBuildings(s) {
