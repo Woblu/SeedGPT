@@ -169,6 +169,10 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seeds", help="comma-separated seeds")
     ap.add_argument("--random", type=int, help="hunt this many random 32-bit seeds")
+    ap.add_argument("--rng", type=int, default=20260726,
+                    help="sampling seed. Change it to explore NEW seeds -- the "
+                         "default is fixed so a run is reproducible, which also "
+                         "means restarting re-hunts the same ones.")
     ap.add_argument("--version", default="1.21", help="Java version for the terrain engine")
     ap.add_argument("--reach", type=int, default=6000)
     ap.add_argument("--step", type=int, default=800)
@@ -190,7 +194,7 @@ def main():
     seeds = [int(s) for s in a.seeds.split(",")] if a.seeds else []
     if a.random:
         # Bedrock seeds are 32-bit signed; sample the space it actually has.
-        rng = random.Random(20260726)
+        rng = random.Random(a.rng)
         seeds += [rng.randint(-2**31, 2**31 - 1) for _ in range(a.random)]
     if not seeds:
         seeds = [12345]
