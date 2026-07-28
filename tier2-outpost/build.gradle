@@ -1,0 +1,32 @@
+plugins {
+    id 'fabric-loom' version '1.7.4'
+    id 'java'
+}
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+repositories {
+    mavenCentral()
+    maven { url = 'https://libraries.minecraft.net/' }
+}
+dependencies {
+    minecraft "com.mojang:minecraft:1.21.1"
+    mappings loom.officialMojangMappings()
+}
+// Dump the deobfuscated runtime classpath so we can compile/run with plain
+// javac/java (much faster to iterate than gradle run), like the 1.16.5 backend.
+tasks.register('printcp') {
+    doLast {
+        def f = new File(projectDir, 'cp.txt')
+        f.text = sourceSets.main.runtimeClasspath.collect { it.toString() }.join(System.lineSeparator())
+        println "wrote ${f} with ${sourceSets.main.runtimeClasspath.files.size()} entries"
+    }
+}
+tasks.register('worldgen', JavaExec) {
+    dependsOn 'classes'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'OutpostWorldgen'
+    if (project.hasProperty('appArgs')) { args(project.getProperty('appArgs').split(',')) }
+}
