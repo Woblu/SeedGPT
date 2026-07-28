@@ -62,6 +62,49 @@ def tool(name: str) -> Path:
     return exe
 
 
+# Running searches, keyed by the job id the browser sends. A streaming search
+# blocks a handler thread inside find.exe, so "stop" cannot be a local decision:
+# the browser has to be able to reach in and kill the process. Aborting the
+# fetch alone is not enough -- the pipe only breaks on the next heartbeat write,
+# and a slow query can sit for seconds between those.
+JOBS = {}
+JOBS_LOCK = threading.Lock()
+
+
+def job_register(job, proc):
+    if not job:
+        return
+    with JOBS_LOCK:
+        JOBS[str(job)] = proc
+
+
+def job_done(job):
+    if not job:
+        return
+    with JOBS_LOCK:
+        JOBS.pop(str(job), None)
+
+
+def api_cancel(body) -> dict:
+    """Kill a running search by job id. Idempotent: cancelling a job that has
+    already finished is a no-op, not an error -- the browser cannot know which
+    it is, and a spurious error on a Stop button is worse than silence."""
+    job = str(body.get("job", "")).strip()
+    with JOBS_LOCK:
+        proc = JOBS.pop(job, None)
+    if proc is None:
+        return {"cancelled": False}
+    # Mark it before killing: on Windows terminate() sets exit code 1, which is
+    # indistinguishable from a normal failure, so the stream handler needs an
+    # explicit flag to know the empty result was deliberate.
+    proc.sc_cancelled = True
+    try:
+        proc.terminate()
+    except OSError:
+        pass
+    return {"cancelled": True}
+
+
 def run(args, timeout, stdin=None):
     """Run a tool. No shell, so query text can never become a command."""
     try:
@@ -123,9 +166,15 @@ def parse_plan(out: str) -> dict:
 
 def parse_funnel(out: str) -> dict:
     f = {}
-    m = re.search(r"scanned\s*:\s*(\d+) structure seeds in ([\d.]+)s", out)
+    # Either funnel shape: the two-pass one ("structure seeds") or the direct
+    # world-seed walk a query with no structure conditions uses.
+    m = re.search(r"scanned\s*:\s*(\d+) (structure|world) seeds in ([\d.]+)s", out)
     if m:
-        f["scanned"], f["seconds"] = int(m.group(1)), float(m.group(2))
+        f["scanned"], f["seconds"] = int(m.group(1)), float(m.group(3))
+        f["whole_seed"] = m.group(2) == "world"
+    m = re.search(r"matched\s*:\s*(\d+)", out)
+    if m:
+        f["pass2"] = int(m.group(1))
     m = re.search(r"pass1 \(48b\):\s*(\d+)\s*\(([\d.]+)% survive\)", out)
     if m:
         f["pass1"], f["pass1_pct"] = int(m.group(1)), float(m.group(2))
@@ -156,9 +205,13 @@ def parse_notes(out: str) -> list:
 def parse_seeds(out: str) -> list:
     seeds, cur = [], None
     for line in out.splitlines():
-        m = re.match(r"^SEED (-?\d+)", line)
+        # A ranked (leaderboard) run appends the score: "SEED n   relief = 173".
+        m = re.match(r"^SEED (-?\d+)(?:\s{2,}(.+?) = (-?\d+))?\s*$", line)
         if m:
             cur = {"seed": m.group(1), "places": []}
+            if m.group(2):
+                cur["score"] = int(m.group(3))
+                cur["metric"] = m.group(2)
             seeds.append(cur)
             continue
         # find.exe now labels the reference: "from spawn" or "from origin".
@@ -172,11 +225,32 @@ def parse_seeds(out: str) -> list:
             cur["portal"] = {"x": int(m.group(1)), "z": int(m.group(2)),
                              "eyes": int(m.group(3))}
             continue
-        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) (\w+) ore within (\d+)", line)
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) (\w+)( exposed)? ore"
+                     r" within (\d+)(?:, biggest vein (\d+))?", line)
         if m and cur:
-            cur.setdefault("ore", []).append(
+            o = {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
+                 "count": int(m.group(4)), "material": m.group(5),
+                 "within": int(m.group(7))}
+            if m.group(6):
+                o["exposed"] = True
+            if m.group(8):
+                o["vein"] = int(m.group(8))
+            cur.setdefault("ore", []).append(o)
+            continue
+        # Overlap prints the pair across two lines: the first structure with the
+        # condition id, then the second indented with no id.
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+([a-z_]+)\s*$", line)
+        if m and cur:
+            cur.setdefault("overlap", []).append(
                 {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
-                 "count": int(m.group(4)), "material": m.group(5), "within": int(m.group(6))})
+                 "structure": m.group(4)})
+            continue
+        m = re.match(r"^\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+([a-z_]+), (\d+) blocks away,"
+                     r" (\d+) overlap", line)
+        if m and cur and cur.get("overlap"):
+            cur["overlap"][-1].update(
+                {"x2": int(m.group(1)), "z2": int(m.group(2)), "structure2": m.group(3),
+                 "gap": int(m.group(4)), "area": int(m.group(5))})
             continue
         m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) slime chunks within (\d+)", line)
         if m and cur:
@@ -184,11 +258,24 @@ def parse_seeds(out: str) -> list:
                 {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
                  "count": int(m.group(4)), "within": int(m.group(5))})
             continue
-        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+~(\d+) peak within (\d+)", line)
+        # The leading "~" marks the smoothed estimate; exact terrain prints the
+        # number bare. Dropping that distinction would present an estimate as a
+        # measurement, so it is carried through.
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(~?)(-?\d+) peak"
+                     r"(?:, ~?(-?\d+) relief)? within (\d+)", line)
         if m and cur:
-            cur.setdefault("height", []).append(
+            h = {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
+                 "peak": int(m.group(5)), "within": int(m.group(7)),
+                 "exact": m.group(4) != "~"}
+            if m.group(6) is not None:
+                h["relief"] = int(m.group(6))
+            cur.setdefault("height", []).append(h)
+            continue
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+island, (\d+)% ocean within (\d+)", line)
+        if m and cur:
+            cur.setdefault("island", []).append(
                 {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
-                 "peak": int(m.group(4)), "within": int(m.group(5))})
+                 "pct": int(m.group(4)), "within": int(m.group(5))})
             continue
         m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+)% (\w+) within (\d+)", line)
         if m and cur:
@@ -229,11 +316,15 @@ def parse_seeds(out: str) -> list:
                 {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
                  "count": int(m.group(4)), "item": m.group(5)})
             continue
-        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) from (\w+)", line)
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) from (\w+)"
+                     r"(?:, size (\d+))?", line)
         if m and cur:
-            cur["places"].append({"id": m.group(1), "x": int(m.group(2)),
-                                  "z": int(m.group(3)), "dist": int(m.group(4)),
-                                  "ref": m.group(5)})
+            pl = {"id": m.group(1), "x": int(m.group(2)),
+                  "z": int(m.group(3)), "dist": int(m.group(4)),
+                  "ref": m.group(5)}
+            if m.group(6):
+                pl["size"] = int(m.group(6))
+            cur["places"].append(pl)
     return seeds
 
 
@@ -345,7 +436,12 @@ def api_describe(body) -> dict:
         raise Failure("seed must be an integer")
     v = check_version(str(body.get("version", "1.21")))
     radius = int(body.get("radius", 2000))
-    rc, out, err = run([tool("describe"), seed, v, str(radius)], TIMEOUTS["describe"])
+    # The world preset travels with the seed: describing a Large Biomes result
+    # against the default generator would list biomes that are not there.
+    args = [tool("describe"), seed, v, str(radius)]
+    if body.get("large_biomes"):
+        args.append("large")
+    rc, out, err = run(args, TIMEOUTS["describe"])
     if rc != 0:
         raise Failure(err.strip() or "describe failed")
     return {"raw": out}
@@ -359,16 +455,33 @@ def api_map(qs) -> bytes:
     v = check_version((qs.get("v") or ["1.21"])[0])
     radius = max(200, min(20000, int((qs.get("r") or ["2000"])[0])))
     px = max(64, min(1024, int((qs.get("px") or ["560"])[0])))
+    cx = max(-30000000, min(30000000, int((qs.get("cx") or ["0"])[0])))
+    cz = max(-30000000, min(30000000, int((qs.get("cz") or ["0"])[0])))
+    large = (qs.get("large") or ["0"])[0] in ("1", "true")
+    dim = (qs.get("dim") or ["overworld"])[0]
+    if dim not in ("overworld", "nether", "end"):
+        raise Failure(f"unknown dimension {dim!r}")
     out = ROOT / "build" / "tmp"
     out.mkdir(parents=True, exist_ok=True)
     # Write to a file rather than piping: PNG bytes through a pipe are easy to
-    # corrupt, and a path keeps the failure mode obvious.
-    dest = out / "map.png"
-    rc, _, err = run([tool("map"), seed, v, str(radius), str(px), dest],
-                     TIMEOUTS["map"])
+    # corrupt, and a path keeps the failure mode obvious. Unique name per tile so
+    # concurrent pan/zoom requests don't clobber each other.
+    dest = out / f"map_{abs(hash((seed, v, radius, px, cx, cz, large, dim))):x}.png"
+    margs = [tool("map"), seed, v, str(radius), str(px), dest, str(cx), str(cz)]
+    # Positional up to cz; the tail flags are order-independent keywords, so a
+    # nether map without large biomes still needs a placeholder in that slot.
+    margs.append("large" if large else "-")
+    if dim != "overworld":
+        margs.append(dim)
+    rc, _, err = run(margs, TIMEOUTS["map"])
     if rc != 0 or not dest.exists():
         raise Failure(err.strip() or "map render failed")
-    return dest.read_bytes()
+    data = dest.read_bytes()
+    try:
+        dest.unlink()
+    except OSError:
+        pass
+    return data
 
 
 def api_ask(body) -> dict:
@@ -394,7 +507,7 @@ def api_ask(body) -> dict:
             "notes": notes.group(1).strip() if notes else ""}
 
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 
 # The full condition schema, taught to Gemini. Kept here (not in the model's
 # head) so it always matches what the C planner actually accepts. The vocabulary
@@ -404,6 +517,7 @@ AI_SCHEMA = """\
 You translate a description of a Minecraft world into a JSON search query for a
 seed finder. Output ONLY JSON of the form:
   { "conditions": [ ... ], "notes": "one short sentence on anything you assumed or could not express" }
+(optionally with a "rank" key -- see Leaderboard below)
 
 Each condition is one object with a short lowercase "id". Distances ("within")
 are in BLOCKS (a chunk is 16). "of" is "origin", "spawn", or another condition's
@@ -414,7 +528,9 @@ Condition types (use EXACTLY these keys):
 - Structure:      {"id","structure":<name>,"within","of"}
     variants (only where valid): "surface":true (ruined_portal, skip buried),
     "giant":true (ruined_portal), "abandoned":true (village = zombie village),
-    "basement":true (igloo).
+    "basement":true (igloo), "ship":true (end_city that contains an end ship =
+    guaranteed elytra). For "end city with a ship / elytra" use
+    {"structure":"end_city","ship":true}.
     cluster: add "count":N for >=N of that structure within the radius.
     tight cluster (quad-hut style): add "count":N AND "spread":T -- N instances
     within T blocks of EACH OTHER, anywhere within `within` of the reference.
@@ -422,14 +538,54 @@ Condition types (use EXACTLY these keys):
     "biome B within D of biome A" = the two biomes are adjacent.)
 - Biome area:     {"id","biome_area":<name>,"pct":P,"within","of"}  P = min %% of
     the disc that is this biome (a huge mushroom island, sprawling mesa).
+- Island spawn:   {"id","island":true,"of":"spawn","pct":P,"within":R}  the spawn
+    (default "of":"spawn") is on LAND and ocean covers >= P%% (default 75) of the
+    disc of radius R (default 256) -- a small survival island. Higher pct / larger
+    within = smaller, more isolated island. Use for "island / survival island /
+    stranded / surrounded by ocean" spawns.
 - Terrain height: {"id","height":Y,"within","of"}  APPROXIMATE peak >= Y (tall
     mountains; small radius + of a structure = "tall structure"). Overworld only.
+- Terrain relief: {"id","relief":D,"within","of"[,"exact":true]}  peak-minus-valley
+    drop >= D blocks in the disc = STEEP terrain. Without "exact" it uses the
+    SMOOTHED estimate (cheap, but blind to sharp cliffs). With "exact":true it uses
+    Minecraft's REAL block-level terrain (accurate but SLOW, 1.18+ only).
+    NOTE: there is no "glitched / tall-cobblestone pillager outpost" in Java --
+    Java never builds a support pillar down to the ground (that is Bedrock). If
+    asked for one, say so in notes and emit a plain outpost condition, optionally
+    with height/relief for a dramatically-placed one.
 - Ore density:    {"id","ore":<material>,"count":N,"within","of"}  materials:
     diamond iron gold emerald redstone lapis copper coal quartz ancient_debris nether_gold
+    "vein":N  -> at least N of that ore in ONE connected blob ("a big diamond
+    vein", "diamonds in one spot"), which is far rarer than a scattered total.
+    "exposed":true -> only count ore with a non-solid neighbour in real terrain,
+    i.e. ore visible in a cave wall. 1.18+ overworld only, SLOW, radius <= 64.
+- Structure overlap: {"id","overlap":[<structure A>,<structure B>],"within","of"[,"pad":P]}
+    the two structures' footprints MEET -- "a ruined portal inside a village", "a
+    village generated on top of a shipwreck", "two structures colliding". "pad"
+    adds slack in blocks (use ~16 for "practically touching"). Footprints are
+    nominal boxes, so a hit is a strong candidate, not a proof.
+- Geode shape:    {"id","structure":"geode","size":N,"cracked":false,"within","of"}
+    size is 3 or 4 (4 = the big one); "cracked":false = the RARE SEALED geode
+    (1 in 20), "cracked":true = broken open (19 in 20, barely a filter).
 - Slime chunks:   {"id","slime":N,"within","of"}  >=N slime chunks (farm site).
 - Chest loot:     {"id","within","loot":{"structure":<s>,"item":<i>,"count":N}}
     loot structures: desert_pyramid jungle_temple igloo outpost shipwreck ruined_portal
 - End portal eyes:{"id":"portal","eyes":N}  the first stronghold's portal has >=N eyes.
+
+World preset. If the request says "large biomes", add "large_biomes": true next
+to "conditions". It is a property of the world, not of a condition, and it
+changes every biome answer -- so never set it unless it was asked for.
+
+Leaderboard (records). If the request is superlative -- "the TALLEST mountain",
+"the BIGGEST diamond vein", "the most slime chunks", "the largest mushroom
+island" -- add a sibling key next to "conditions":
+  "rank": {"of": <condition id>, "by": <metric>, "top": K}
+  metric: auto|height|relief|vein|count|pct|size|area  (auto = that condition's
+  own measurement; usually correct). K defaults to 10.
+A ranked search scans the whole range and returns the best it saw instead of
+stopping at the first match, so set that condition's THRESHOLD LOW (e.g.
+{"height":0} ranked by height) -- a tight threshold starves the leaderboard.
+Use rank ONLY for superlatives; an ordinary request wants a plain filter.
 
 Rules:
 - Use ONLY structure/biome names from the vocabulary below. Never invent one.
@@ -515,7 +671,24 @@ def api_gemini(body) -> dict:
     conds = obj.get("conditions") or []
     if not isinstance(conds, list) or not conds:
         raise Failure(obj.get("notes") or "couldn't turn that into any conditions -- try being more specific.")
-    return {"query": {"version": v, "conditions": conds}, "notes": obj.get("notes", "")}
+    # The model may override the version (e.g. a request that only makes sense on
+    # an older release, like a pre-1.18 terrain feature). Validate it.
+    ver = v
+    ov = obj.get("version")
+    if isinstance(ov, str):
+        try:
+            ver = check_version(ov)
+        except Exception:  # noqa: BLE001
+            ver = v
+    q = {"version": ver, "conditions": conds}
+    # A leaderboard request survives only if it names a condition that exists;
+    # a dangling "rank" would be a hard planner error rather than a search.
+    rank = obj.get("rank")
+    if isinstance(rank, dict) and any(c.get("id") == rank.get("of") for c in conds):
+        q["rank"] = {"of": rank["of"],
+                     "by": rank.get("by", "auto"),
+                     "top": int(rank.get("top", 10) or 10)}
+    return {"query": q, "notes": obj.get("notes", "")}
 
 
 def api_villagesmiths(body) -> dict:
@@ -554,10 +727,40 @@ def api_villagesmiths(body) -> dict:
     return {"hits": hits, "summary": summary}
 
 
+def api_exposedtreasure(body) -> dict:
+    """Tier-2 search: find buried treasures whose chest is TOUCHING AIR (on land,
+    not underwater). Tier 1 (cubiomes) can't see water, so the headless MC 1.21.1
+    worker reads the real block above each chest. Slow (JVM bootstrap)."""
+    tier2 = ROOT / "tier2-outpost"
+    if not (tier2 / "out" / "OutpostWorldgen.class").exists() or not (tier2 / "cp.txt").exists():
+        raise Failure("outpost/treasure worldgen backend not built -- see tier2-outpost "
+                      "(gradle printcp, then javac OutpostWorldgen.java)")
+    rng = max(100000, min(200_000_000, int(body.get("range", 3_000_000))))
+    limit = max(1, min(30, int(body.get("limit", 8))))
+    version = check_version(str(body.get("version", "1.21")))
+    args = [sys.executable, str(tier2 / "treasure_search.py"),
+            "--version", version, "--range", str(rng), "--limit", str(limit),
+            "--workers", "6"]
+    rc, out, err = run(args, TIMEOUTS["villagesmiths"])
+    hits, summary = [], {}
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        (summary.update(obj) if obj.get("summary") else hits.append(obj))
+    return {"hits": hits, "summary": summary}
+
+
 ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/search": api_search, "/api/describe": api_describe,
           "/api/ask": api_ask, "/api/gemini": api_gemini,
-          "/api/villagesmiths": api_villagesmiths}
+          "/api/villagesmiths": api_villagesmiths,
+          "/api/exposedtreasure": api_exposedtreasure,
+          "/api/cancel": api_cancel}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -642,13 +845,19 @@ class Handler(BaseHTTPRequestHandler):
         p = subprocess.Popen([str(find), str(path), rng, threads],
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, cwd=str(ROOT), env=env, bufsize=1)
+        job = str(body.get("job", "")).strip()
+        job_register(job, p)
         watchdog = threading.Timer(TIMEOUTS["search"], p.terminate)
         watchdog.start()
         buf = []
         try:
             for line in p.stdout:
                 if line.startswith("@TICK "):
-                    self._write_line({"t": line[6:].strip()})
+                    parts = line[6:].split()
+                    msg = {"t": parts[0]}
+                    if len(parts) > 1:
+                        msg["n"] = parts[1]   # total seeds scanned so far
+                    self._write_line(msg)
                 else:
                     buf.append(line)
         except (BrokenPipeError, ConnectionError, OSError):
@@ -656,6 +865,16 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             watchdog.cancel()
             p.wait()
+            job_done(job)
+        # A cancelled search was killed mid-scan, so whatever it printed is a
+        # partial funnel, not a result. Say it was stopped rather than reporting
+        # an empty search that looks like "no seeds exist".
+        if getattr(p, "sc_cancelled", False):
+            try:
+                self._write_line({"cancelled": True})
+            except (BrokenPipeError, ConnectionError, OSError):
+                pass
+            return
         out = "".join(buf)
         low = out.lower()
         try:
