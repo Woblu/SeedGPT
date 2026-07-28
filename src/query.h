@@ -44,7 +44,23 @@ typedef enum {
     CT_SLIME,       // >= N slime chunks within `within` blocks of parent
     CT_BIOME_AREA,  // biome covers >= N% of the disc of radius `within`
     CT_HEIGHT,      // APPROXIMATE surface height peaks >= N within `within`
+    CT_ISLAND,      // land at the reference, ocean covering >= N% of the disc
+    CT_OVERLAP,     // two structures whose footprint boxes intersect
 } CondType;
+
+// What a leaderboard search ranks by. AUTO picks the condition's natural
+// measurement (a height condition ranks by peak, an ore condition by count),
+// which is what almost every query wants; the rest are explicit overrides.
+typedef enum {
+    RANK_AUTO,
+    RANK_HEIGHT,    // CT_HEIGHT: peak surface Y
+    RANK_RELIEF,    // CT_HEIGHT: peak - valley
+    RANK_VEIN,      // CT_ORE:    largest single connected vein
+    RANK_COUNT,     // CT_ORE/CT_SLIME/CT_STRUCTURE/CT_LOOT: the count
+    RANK_PCT,       // CT_BIOME_AREA/CT_ISLAND: percent of the disc
+    RANK_SIZE,      // CT_STRUCTURE (geode): variant size
+    RANK_AREA,      // CT_OVERLAP: intersection area in blocks^2
+} RankBy;
 
 // End portal frames: 12, each independently 10% likely to hold an eye. That
 // makes high counts brutally rare, and the search rate is ~98 seeds/s because
@@ -81,12 +97,32 @@ typedef struct {
     int      reqAbandoned;  // CT_STRUCTURE: require zombie village
     int      reqBasement;   // CT_STRUCTURE: require an igloo with a basement
     int      reqGiant;      // CT_STRUCTURE: require the giant ruined portal
+    int      reqExposed;    // CT_STRUCTURE (buried_treasure): chest on dry land
+                            // at/above sea level (exposed), not submerged
+    int      reqShip;       // CT_STRUCTURE (end_city): require an end ship (elytra)
+    int      structType2;   // CT_OVERLAP: the second structure type
+    int      overlapPad;    // CT_OVERLAP: slack in blocks. 0 = the two footprint
+                            // boxes must genuinely intersect; N = within N blocks
+                            // of each other, for "practically on top of".
+    int      geodeSize;     // CT_STRUCTURE (geode): min getVariant().size
+    int      reqCracked;    // CT_STRUCTURE (geode): require the cracked variant
     int      oreMat;        // CT_ORE: index into the ore material table
     int      oreMin;        // CT_ORE: minimum ore-block count in range
+    int      veinMin;       // CT_ORE: min blocks in ONE connected vein (a single
+                            // mineable blob), not the scattered total
+    int      oreExposed;    // CT_ORE: count only blocks open to air -- a cave
+                            // wall you can see the ore in. 1.18+ overworld, SLOW.
     int      slimeMin;      // CT_SLIME: minimum slime chunks in range
     int      areaPct;       // CT_BIOME_AREA: min % of the disc that is biomeId
     int      structMin;     // CT_STRUCTURE: min instances in range (1 = single)
     int      heightMin;     // CT_HEIGHT: minimum approximate peak height in disc
+    int      reliefMin;     // CT_HEIGHT: min (peak - valley) height spread in disc.
+                            // A large local relief means steep terrain -- a
+                            // structure on a cliff edge or a mountainside.
+    int      exactTerrain;  // CT_HEIGHT: if set, use cubiomes' real block-level
+                            // terrain (generateColumn) instead of the smoothed
+                            // 1:4 approximation -- the only way to see a sharp
+                            // drop under the footprint. 1.18+, SLOW.
     int      spread;        // CT_STRUCTURE cluster: if >0, the instances must
                             // fit within this radius of a common member (a TIGHT
                             // cluster anywhere in `within`), not just within
@@ -120,6 +156,27 @@ typedef struct {
     int  mc;
     Cond cond[MAX_COND];
     int  n;
+
+    // World type. "large_biomes": true is the Large Biomes world preset -- the
+    // same generator with the biome scale multiplied, so structures, ores and
+    // terrain all still work, they just land in a differently shaped world. It
+    // is a property of the WORLD, not of any one condition, so it lives here
+    // and every generator this query creates has to be told about it.
+    int  largeBiomes;
+
+    // --- leaderboard ("what is the biggest X anywhere?") ---
+    //
+    // A normal query is a FILTER: every condition is pass/fail and the search
+    // stops once it has enough hits. A ranked query is an OPTIMISER: it scans a
+    // fixed budget of seeds and keeps the best `rankTop` by one condition's
+    // measurement. That is the difference between "a seed with a tall mountain"
+    // and "the tallest mountain in 50 million seeds", and records are the
+    // latter. Set the ranked condition's threshold LOW -- it still filters, and
+    // a tight threshold just starves the leaderboard.
+    char rankOf[ID_LEN];              // condition id to rank by ("" = filter)
+    int  rankBy;                      // RankBy; RANK_AUTO = the natural metric
+    int  rankTop;                     // how many to keep (0 = not ranking)
+    int  rankIdx;                     // resolved index, -1 until queryPlan
 
     // --- plan output ---
     int  geom[MAX_COND]; int ngeom;   // pass 1: 48-bit, dependency order
@@ -155,7 +212,18 @@ typedef struct {
     int areaTotal[MAX_COND];  // CT_BIOME_AREA: total sample cells in the disc
     int structCount[MAX_COND];// CT_STRUCTURE: viable instances found (cluster)
     int peakHeight[MAX_COND]; // CT_HEIGHT: highest approximate surface Y in disc
+    int peakDrop[MAX_COND];   // CT_HEIGHT: peak - valley (local relief) in disc
+    int veinMax[MAX_COND];    // CT_ORE: largest single connected vein found
+    int geodeSize[MAX_COND];  // CT_STRUCTURE (geode): the matched geode's size
+    Pos partner[MAX_COND];    // CT_OVERLAP: position of the SECOND structure
+    int overlapArea[MAX_COND];// CT_OVERLAP: footprint intersection, blocks^2
 } Match;
+
+// Leaderboard scoring. Returns the ranked condition's measurement for this
+// match (higher is better), or INT_MIN when the query is a plain filter search.
+// The unit is whatever queryScoreLabel names.
+int         queryScore(const Query *q, const Match *m);
+const char *queryScoreLabel(const Query *q);
 
 // Pass 1: geometry only. No Generator required. Returns 1 if all geometry
 // conditions are satisfiable for this 48-bit structure seed.
@@ -173,6 +241,11 @@ int  queryStage2(const Query *q, Generator *g, uint64_t worldSeed, Match *m, Loo
 
 const char *condDesc(const Query *q, int i, char *buf, size_t n);
 const char *dimName(int dim);
+
+// setupGenerator flags this query needs (LARGE_BIOMES, or none). Every caller
+// that builds a Generator for a query must use this rather than passing 0, or
+// it silently searches the default world while claiming to search another.
+uint32_t    queryGenFlags(const Query *q);
 
 // Vocabulary accessors -- the NL layer reads these instead of hardcoding names.
 int         queryStructureCount(void);

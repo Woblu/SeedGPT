@@ -27,3 +27,22 @@ const OreMaterial *oreMaterialByName(const char *name);
 // count. Returns the count.
 int oreCountMaterial(const Generator *g, const SurfaceNoise *sn, int mc,
                      const OreMaterial *mat, int cx, int cz, int radius);
+
+// The same scan, with the two record-hunting measurements layered on top.
+//
+//   veinMax   (optional) largest CONNECTED blob of this ore -- the thing a
+//             player actually mines in one go. Blocks touching face-to-face
+//             count as one vein, so two placements that happen to overlap merge
+//             into a bigger one. That merging is exactly where records come
+//             from, which is why this is not just "the placement size".
+//   exposed   if non-zero, the returned count is restricted to blocks with at
+//             least one AIR neighbour in real 1.18+ terrain (generateColumn) --
+//             ore visible in a cave wall rather than sealed in stone.
+//
+// `exposed` needs mc >= 1.18 and the overworld, and costs a terrain column per
+// candidate chunk (milliseconds). It under-reports at chunk borders: a
+// neighbour outside the generated chunk is treated as solid, which can only
+// miss an exposed block, never invent one.
+int oreScan(const Generator *g, const SurfaceNoise *sn, int mc, uint32_t gflags,
+            const OreMaterial *mat, int cx, int cz, int radius,
+            int exposed, int *veinMax);

@@ -14,13 +14,42 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 #include <inttypes.h>
 #include <windows.h>
 
 #define MAX_HITS      12
 #define UPPER_SAMPLES 64
+#define MAX_RANK      50
 
 typedef struct { uint64_t ws; Match m; } Hit;
+
+// --- leaderboard ---------------------------------------------------------
+//
+// A ranked query does not stop when it has enough hits: "the best in N seeds"
+// is only meaningful if all N are actually scanned. So the search runs the full
+// range and keeps a small sorted table of the best scores seen. The table is
+// tiny (<= 50) and writes are rare (a new entry needs to beat the current
+// floor), so one lock around it costs nothing measurable.
+static CRITICAL_SECTION g_lock;
+
+typedef struct { uint64_t ws; int score; Match m; } Ranked;
+static Ranked g_rank[MAX_RANK];
+static int    g_nrank = 0;
+static int    g_rankFloor = INT_MIN;   // score to beat once the table is full
+
+static void rankOffer(const Query *q, uint64_t ws, const Match *m, int score)
+{
+    if (g_nrank >= q->rankTop && score <= g_rankFloor) return;   // unlocked fast path
+    EnterCriticalSection(&g_lock);
+    if (g_nrank < q->rankTop || score > g_rank[g_nrank-1].score) {
+        int i = (g_nrank < q->rankTop) ? g_nrank++ : g_nrank - 1;
+        for (; i > 0 && g_rank[i-1].score < score; i--) g_rank[i] = g_rank[i-1];
+        g_rank[i].ws = ws; g_rank[i].score = score; g_rank[i].m = *m;
+        if (g_nrank >= q->rankTop) g_rankFloor = g_rank[g_nrank-1].score;
+    }
+    LeaveCriticalSection(&g_lock);
+}
 
 typedef struct {
     const Query *q;
@@ -30,21 +59,81 @@ typedef struct {
     int nhits;
 } Job;
 
-static CRITICAL_SECTION g_lock;
 static volatile LONG g_found = 0;
+static volatile LONG64 g_scanned = 0;   // total seeds scanned across all threads
 static int g_want = MAX_HITS;
 // Stream mode (env FIND_STREAM): emit "@TICK <seed>" heartbeats so the web UI
 // can show the seeds being scanned scroll past live. Time-throttled per thread
 // so the rate is readable regardless of how fast the query scans.
 static int g_stream = 0;
+static int g_hitstream = 0;   // FIND_HITSTREAM: print every hit, uncapped
+
+// A bijection on 64 bits (splitmix64's finaliser). Whole-seed mode walks an
+// index and maps it through this, so a scan of N seeds is N DISTINCT world
+// seeds spread across the whole range rather than 0,1,2,... -- which would be a
+// corner of the space, and would look like it too.
+static inline uint64_t mix64(uint64_t x)
+{
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
 
 static DWORD WINAPI worker(LPVOID arg)
 {
     Job *j = (Job*)arg;
     Generator g;
-    setupGenerator(&g, j->q->mc, 0);
+    setupGenerator(&g, j->q->mc, queryGenFlags(j->q));
     LootCache *lc = lootCacheNew();   // one per thread; loot tables are stateful
     ULONGLONG lastTick = 0;
+    uint64_t  lastRep  = 0;   // this thread's scanned count at its last tick
+
+    // With no structure conditions there is no 48-bit geometry to filter on, so
+    // the two-pass funnel has nothing to do: every structure seed survives and
+    // the upper bits are sampled blind. Walk WORLD seeds directly instead. One
+    // index is then one world, which is both faster and the only way "best of N
+    // seeds" means what it says.
+    int wholeSeed = (j->q->ngeom == 0);
+    if (wholeSeed) {
+        for (uint64_t i = j->lo; i < j->hi; i++) {
+            if (g_found >= g_want) break;
+            j->scanned++;
+            uint64_t ws = mix64(i);
+
+            if (g_stream) {
+                ULONGLONG now = GetTickCount64();
+                if (now - lastTick >= 55) {
+                    lastTick = now;
+                    LONG64 tot = InterlockedAdd64(&g_scanned, (LONG64)(j->scanned - lastRep));
+                    lastRep = j->scanned;
+                    EnterCriticalSection(&g_lock);
+                    printf("@TICK %" PRIu64 " %lld\n", ws, (long long)tot);
+                    fflush(stdout);
+                    LeaveCriticalSection(&g_lock);
+                }
+            }
+
+            Match m;
+            queryStage1(j->q, ws & ((1ULL << 48) - 1), &m);   // zeroes the match
+            j->pass1++; j->applies++;
+            if (!queryStage2(j->q, &g, ws, &m, lc)) continue;
+            j->pass2++;
+
+            if (j->q->rankTop > 0) {
+                rankOffer(j->q, ws, &m, queryScore(j->q, &m));
+                InterlockedIncrement(&g_found);
+                continue;
+            }
+            EnterCriticalSection(&g_lock);
+            if (j->nhits < MAX_HITS) { j->hits[j->nhits].ws = ws; j->hits[j->nhits].m = m; j->nhits++; }
+            if (g_hitstream) { printf("HIT %lld %d %d\n", (long long)ws, m.pos[0].x, m.pos[0].z); fflush(stdout); }
+            InterlockedIncrement(&g_found);
+            LeaveCriticalSection(&g_lock);
+        }
+        lootCacheFree(lc);
+        return 0;
+    }
 
     for (uint64_t s48 = j->lo; s48 < j->hi; s48++) {
         if (g_found >= g_want) break;
@@ -54,8 +143,13 @@ static DWORD WINAPI worker(LPVOID arg)
             ULONGLONG now = GetTickCount64();
             if (now - lastTick >= 55) {
                 lastTick = now;
+                // Roll this thread's progress since its last tick into a shared
+                // total, so the UI can show ONE monotonic "N scanned" figure
+                // instead of 16 thread positions bouncing around.
+                LONG64 tot = InterlockedAdd64(&g_scanned, (LONG64)(j->scanned - lastRep));
+                lastRep = j->scanned;
                 EnterCriticalSection(&g_lock);
-                printf("@TICK %" PRIu64 "\n", s48);
+                printf("@TICK %" PRIu64 " %lld\n", s48, (long long)tot);
                 fflush(stdout);
                 LeaveCriticalSection(&g_lock);
             }
@@ -82,8 +176,22 @@ static DWORD WINAPI worker(LPVOID arg)
             if (!queryStage2(j->q, &g, ws, &m, lc)) continue;
             j->pass2++;
 
+            // Ranked search: every survivor is a leaderboard candidate, and the
+            // scan keeps going. Breaking here (rather than trying more upper
+            // bits) keeps one structure seed from flooding the table with 64
+            // near-identical variants of the same world.
+            if (j->q->rankTop > 0) {
+                rankOffer(j->q, ws, &m, queryScore(j->q, &m));
+                InterlockedIncrement(&g_found);
+                break;
+            }
+
             EnterCriticalSection(&g_lock);
             if (j->nhits < MAX_HITS) { j->hits[j->nhits].ws = ws; j->hits[j->nhits].m = m; j->nhits++; }
+            // Stream mode (FIND_HITSTREAM): emit EVERY hit as "HIT <seed> <x> <z>"
+            // (condition 0's matched position), uncapped -- for tier-2 pipelines
+            // that need thousands of candidates, not the 12 the array holds.
+            if (g_hitstream) { printf("HIT %lld %d %d\n", (long long)ws, m.pos[0].x, m.pos[0].z); fflush(stdout); }
             InterlockedIncrement(&g_found);
             LeaveCriticalSection(&g_lock);
             break;
@@ -91,6 +199,139 @@ static DWORD WINAPI worker(LPVOID arg)
     }
     lootCacheFree(lc);
     return 0;
+}
+
+// One result, in the human-readable form, plus its machine-readable twin.
+// Shared by the plain search and the leaderboard so the two never drift.
+static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
+{
+    if (mm->haveSpawn)
+        printf("   %-14s x=%6d z=%6d\n", "(spawn)", mm->spawn.x, mm->spawn.z);
+    if (mm->haveEyes)
+        printf("   %-14s x=%6d z=%6d   %d/%d eyes\n", "(end portal)",
+               mm->stronghold.x, mm->stronghold.z, mm->eyes, EYE_FRAMES);
+    for (int c = 0; c < q->n; c++) {
+        const Cond *cd = &q->cond[c];
+        if (cd->type == CT_LOOT) {
+            const char *it = cd->lootItem;
+            if (!strncmp(it, "minecraft:", 10)) it += 10;
+            printf("   %-14s x=%6d z=%6d   %d %s\n", cd->id,
+                   mm->pos[c].x, mm->pos[c].z, mm->lootCount[c], it);
+            continue;
+        }
+        if (cd->type == CT_OVERLAP) {
+            // Both halves, because the whole point is the pair -- and the
+            // separation, which is what you check first in game.
+            int dx = mm->partner[c].x - mm->pos[c].x;
+            int dz = mm->partner[c].z - mm->pos[c].z;
+            printf("   %-14s x=%6d z=%6d   %s\n", cd->id,
+                   mm->pos[c].x, mm->pos[c].z, struct2str(cd->structType));
+            printf("   %-14s x=%6d z=%6d   %s, %d blocks away, %d overlap\n", "",
+                   mm->partner[c].x, mm->partner[c].z, struct2str(cd->structType2),
+                   (int)sqrt((double)(dx*dx + dz*dz)), mm->overlapArea[c]);
+            continue;
+        }
+        if (cd->type == CT_ORE) {
+            int nm; const OreMaterial *tab = oreMaterials(&nm);
+            printf("   %-14s x=%6d z=%6d   %d %s%s ore within %d", cd->id,
+                   mm->pos[c].x, mm->pos[c].z, mm->oreCount[c],
+                   tab[cd->oreMat].name, cd->oreExposed ? " exposed" : "",
+                   cd->within);
+            if (mm->veinMax[c] > 0) printf(", biggest vein %d", mm->veinMax[c]);
+            printf("\n");
+            continue;
+        }
+        if (cd->type == CT_SLIME) {
+            printf("   %-14s x=%6d z=%6d   %d slime chunks within %d\n", cd->id,
+                   mm->pos[c].x, mm->pos[c].z, mm->slimeCount[c], cd->within);
+            continue;
+        }
+        if (cd->type == CT_HEIGHT) {
+            const char *tag = cd->exactTerrain ? "" : "~";
+            if (cd->reliefMin > 0)
+                printf("   %-14s x=%6d z=%6d   %s%d peak, %s%d relief within %d\n",
+                       cd->id, mm->pos[c].x, mm->pos[c].z,
+                       tag, mm->peakHeight[c], tag, mm->peakDrop[c], cd->within);
+            else
+                printf("   %-14s x=%6d z=%6d   %s%d peak within %d\n", cd->id,
+                       mm->pos[c].x, mm->pos[c].z, tag, mm->peakHeight[c], cd->within);
+            continue;
+        }
+        if (cd->type == CT_BIOME_AREA) {
+            int tot = mm->areaTotal[c], mat = mm->areaCells[c];
+            int pct = tot > 0 ? (int)((int64_t)mat * 100 / tot) : 0;
+            printf("   %-14s x=%6d z=%6d   %d%% %s within %d\n", cd->id,
+                   mm->pos[c].x, mm->pos[c].z, pct,
+                   biome2str(q->mc, cd->biomeId), cd->within);
+            continue;
+        }
+        if (cd->type == CT_ISLAND) {
+            int tot = mm->areaTotal[c], oc = mm->areaCells[c];
+            int pct = tot > 0 ? (int)((int64_t)oc * 100 / tot) : 0;
+            printf("   %-14s x=%6d z=%6d   island, %d%% ocean within %d\n", cd->id,
+                   mm->pos[c].x, mm->pos[c].z, pct, cd->within);
+            continue;
+        }
+        if (cd->type == CT_BIOME) {
+            // Biomes record where they matched; report it with the distance
+            // from their reference so adjacency is legible.
+            Pos bp = mm->pos[c];
+            int par = cd->parent;
+            Pos ref = (par == PARENT_SPAWN) ? mm->spawn
+                    : (par >= 0) ? mm->pos[par] : (Pos){0,0};
+            const char *rl = (par == PARENT_SPAWN) ? "spawn"
+                           : (par >= 0) ? q->cond[par].id : "origin";
+            int64_t bdx = bp.x - ref.x, bdz = bp.z - ref.z;
+            printf("   %-14s x=%6d z=%6d   %s %d from %s\n", cd->id,
+                   bp.x, bp.z, biome2str(q->mc, cd->biomeId),
+                   (int)sqrt((double)(bdx*bdx + bdz*bdz)), rl);
+            continue;
+        }
+        if (cd->type != CT_STRUCTURE) continue;
+        if (cd->structMin > 1) {
+            // Anchored cluster: N within the radius, centred here. Tight
+            // cluster: N within `spread` of the reported member.
+            if (cd->spread > 0)
+                printf("   %-14s x=%6d z=%6d   %d %s within %d tight\n", cd->id,
+                       mm->pos[c].x, mm->pos[c].z, mm->structCount[c],
+                       struct2str(cd->structType), cd->spread);
+            else
+                printf("   %-14s x=%6d z=%6d   %d %s within %d\n", cd->id,
+                       mm->pos[c].x, mm->pos[c].z, mm->structCount[c],
+                       struct2str(cd->structType), cd->within);
+            continue;
+        }
+        Pos p = mm->pos[c];
+        // Say which reference the distance is measured from: "spawn" and
+        // "origin" are different places (median 22 blocks apart, p90 520), and
+        // labelling one as the other is how a correct search still produces
+        // results that look wrong in game.
+        int spawnRel = (cd->parent == PARENT_SPAWN && mm->haveSpawn);
+        int64_t dx = p.x - (spawnRel ? mm->spawn.x : 0);
+        int64_t dz = p.z - (spawnRel ? mm->spawn.z : 0);
+        printf("   %-14s x=%6d z=%6d   %d %s", cd->id, p.x, p.z,
+               (int)sqrt((double)(dx*dx + dz*dz)),
+               spawnRel ? "from spawn" : "from origin");
+        if (cd->structType == Geode && mm->geodeSize[c] > 0)
+            printf(", size %d", mm->geodeSize[c]);
+        printf("\n");
+    }
+    // machine-readable twin, for piping into verifiers
+    if (tsv) {
+        fprintf(tsv, "%" PRId64, (int64_t)ws);
+        for (int c = 0; c < q->n; c++) {
+            // Anything with a matched position: structures, loot, overlaps.
+            if (q->cond[c].type != CT_STRUCTURE && q->cond[c].type != CT_LOOT &&
+                q->cond[c].type != CT_OVERLAP)
+                continue;
+            fprintf(tsv, "\t%s\t%d\t%d", q->cond[c].id, mm->pos[c].x, mm->pos[c].z);
+            if (q->cond[c].type == CT_OVERLAP)
+                fprintf(tsv, "\t%s.b\t%d\t%d", q->cond[c].id,
+                        mm->partner[c].x, mm->partner[c].z);
+        }
+        fprintf(tsv, "\n");
+    }
+    printf("\n");
 }
 
 static char *slurp(const char *path)
@@ -155,6 +396,18 @@ int main(int argc, char **argv)
     if (explain) { explainQuery(&q, samples, nthreads, stdout);   free(json); return 0; }
 
     g_stream = getenv("FIND_STREAM") != NULL;
+    g_hitstream = getenv("FIND_HITSTREAM") != NULL;
+    if (g_hitstream) g_want = 0x7fffffff;   // don't stop early; stream them all
+    // A leaderboard is only as good as the range it covers: stopping at the
+    // first N survivors would report "the best of the first few", which is the
+    // one thing a record search must not do.
+    if (q.rankTop > 0) {
+        g_want = 0x7fffffff;
+        printf("ranking the top %d by %s over %" PRIu64 " %s "
+               "(the full range is scanned -- no early stop)\n\n",
+               q.rankTop, queryScoreLabel(&q), range,
+               q.ngeom == 0 ? "world seeds" : "structure seeds");
+    }
     InitializeCriticalSection(&g_lock);
     Job *jobs = calloc(nthreads, sizeof(Job));
     HANDLE *th = calloc(nthreads, sizeof(HANDLE));
@@ -177,107 +430,35 @@ int main(int argc, char **argv)
     for (int i = 0; i < nthreads; i++) {
         sc += jobs[i].scanned; p1 += jobs[i].pass1; p2 += jobs[i].pass2; ap += jobs[i].applies;
     }
-    for (int i = 0; i < nthreads && shown < MAX_HITS; i++)
-        for (int k = 0; k < jobs[i].nhits && shown < MAX_HITS; k++, shown++) {
-            Hit *h = &jobs[i].hits[k];
-            printf("SEED %" PRId64 "\n", (int64_t)h->ws);
-            if (h->m.haveSpawn)
-                printf("   %-14s x=%6d z=%6d\n", "(spawn)", h->m.spawn.x, h->m.spawn.z);
-            if (h->m.haveEyes)
-                printf("   %-14s x=%6d z=%6d   %d/%d eyes\n", "(end portal)",
-                       h->m.stronghold.x, h->m.stronghold.z, h->m.eyes, EYE_FRAMES);
-            for (int c = 0; c < q.n; c++) {
-                if (q.cond[c].type == CT_LOOT) {
-                    const char *it = q.cond[c].lootItem;
-                    if (!strncmp(it, "minecraft:", 10)) it += 10;
-                    printf("   %-14s x=%6d z=%6d   %d %s\n", q.cond[c].id,
-                           h->m.pos[c].x, h->m.pos[c].z, h->m.lootCount[c], it);
-                    continue;
-                }
-                if (q.cond[c].type == CT_ORE) {
-                    int nm; const OreMaterial *tab = oreMaterials(&nm);
-                    printf("   %-14s x=%6d z=%6d   %d %s ore within %d\n", q.cond[c].id,
-                           h->m.pos[c].x, h->m.pos[c].z, h->m.oreCount[c],
-                           tab[q.cond[c].oreMat].name, q.cond[c].within);
-                    continue;
-                }
-                if (q.cond[c].type == CT_SLIME) {
-                    printf("   %-14s x=%6d z=%6d   %d slime chunks within %d\n", q.cond[c].id,
-                           h->m.pos[c].x, h->m.pos[c].z, h->m.slimeCount[c],
-                           q.cond[c].within);
-                    continue;
-                }
-                if (q.cond[c].type == CT_HEIGHT) {
-                    printf("   %-14s x=%6d z=%6d   ~%d peak within %d\n", q.cond[c].id,
-                           h->m.pos[c].x, h->m.pos[c].z, h->m.peakHeight[c],
-                           q.cond[c].within);
-                    continue;
-                }
-                if (q.cond[c].type == CT_BIOME_AREA) {
-                    int tot = h->m.areaTotal[c], mat = h->m.areaCells[c];
-                    int pct = tot > 0 ? (int)((int64_t)mat * 100 / tot) : 0;
-                    printf("   %-14s x=%6d z=%6d   %d%% %s within %d\n", q.cond[c].id,
-                           h->m.pos[c].x, h->m.pos[c].z, pct,
-                           biome2str(q.mc, q.cond[c].biomeId), q.cond[c].within);
-                    continue;
-                }
-                if (q.cond[c].type == CT_BIOME) {
-                    // Biomes now record where they matched; report it with the
-                    // distance from their reference so adjacency is legible.
-                    Pos bp = h->m.pos[c];
-                    int par = q.cond[c].parent;
-                    Pos ref = (par == PARENT_SPAWN) ? h->m.spawn
-                            : (par >= 0) ? h->m.pos[par] : (Pos){0,0};
-                    const char *rl = (par == PARENT_SPAWN) ? "spawn"
-                                   : (par >= 0) ? q.cond[par].id : "origin";
-                    int64_t bdx = bp.x - ref.x, bdz = bp.z - ref.z;
-                    printf("   %-14s x=%6d z=%6d   %s %d from %s\n", q.cond[c].id,
-                           bp.x, bp.z, biome2str(q.mc, q.cond[c].biomeId),
-                           (int)sqrt((double)(bdx*bdx + bdz*bdz)), rl);
-                    continue;
-                }
-                if (q.cond[c].type != CT_STRUCTURE) continue;
-                if (q.cond[c].structMin > 1) {
-                    // Anchored cluster: N within the radius, centred here.
-                    // Tight cluster: N within `spread` of the reported member.
-                    if (q.cond[c].spread > 0)
-                        printf("   %-14s x=%6d z=%6d   %d %s within %d tight\n", q.cond[c].id,
-                               h->m.pos[c].x, h->m.pos[c].z, h->m.structCount[c],
-                               struct2str(q.cond[c].structType), q.cond[c].spread);
-                    else
-                        printf("   %-14s x=%6d z=%6d   %d %s within %d\n", q.cond[c].id,
-                               h->m.pos[c].x, h->m.pos[c].z, h->m.structCount[c],
-                               struct2str(q.cond[c].structType), q.cond[c].within);
-                    continue;
-                }
-                Pos p = h->m.pos[c];
-                // Say which reference the distance is measured from: "spawn"
-                // and "origin" are different places (median 22 blocks apart,
-                // p90 520), and labelling one as the other is how a correct
-                // search still produces results that look wrong in game.
-                int spawnRel = (q.cond[c].parent == PARENT_SPAWN && h->m.haveSpawn);
-                int64_t dx = p.x - (spawnRel ? h->m.spawn.x : 0);
-                int64_t dz = p.z - (spawnRel ? h->m.spawn.z : 0);
-                printf("   %-14s x=%6d z=%6d   %d %s\n", q.cond[c].id, p.x, p.z,
-                       (int)sqrt((double)(dx*dx + dz*dz)),
-                       spawnRel ? "from spawn" : "from origin");
-            }
-            // machine-readable twin, for piping into verifiers
-            if (tsv) {
-                fprintf(tsv, "%" PRId64, (int64_t)h->ws);
-                for (int c = 0; c < q.n; c++) {
-                    // Anything with a matched position: structures and loot.
-                    if (q.cond[c].type != CT_STRUCTURE && q.cond[c].type != CT_LOOT)
-                        continue;
-                    fprintf(tsv, "\t%s\t%d\t%d", q.cond[c].id, h->m.pos[c].x, h->m.pos[c].z);
-                }
-                fprintf(tsv, "\n");
-            }
-            printf("\n");
+    if (q.rankTop > 0) {
+        // Leaderboard: the whole range was scanned, so these really are the
+        // best seen -- not merely the first that cleared a threshold.
+        printf("--- leaderboard: top %d by %s ---\n\n", g_nrank, queryScoreLabel(&q));
+        for (int i = 0; i < g_nrank; i++, shown++) {
+            printf("SEED %" PRId64 "   %s = %d\n", (int64_t)g_rank[i].ws,
+                   queryScoreLabel(&q), g_rank[i].score);
+            printHit(&q, g_rank[i].ws, &g_rank[i].m, tsv);
         }
+    } else {
+        for (int i = 0; i < nthreads && shown < MAX_HITS; i++)
+            for (int k = 0; k < jobs[i].nhits && shown < MAX_HITS; k++, shown++) {
+                Hit *h = &jobs[i].hits[k];
+                printf("SEED %" PRId64 "\n", (int64_t)h->ws);
+                printHit(&q, h->ws, &h->m, tsv);
+            }
+    }
 
     double r1 = 100.0 * p1 / (sc ? sc : 1);
+    int wholeSeed = (q.ngeom == 0);
     printf("--- funnel ---\n");
+    if (wholeSeed) {
+        // No geometry pass exists here, so reporting a survival rate would be
+        // theatre: it is 100% by construction.
+        printf("scanned    : %" PRIu64 " world seeds in %.2fs  (no structure conditions,\n"
+               "             so world seeds are walked directly -- one seed, one world)\n", sc, el);
+        printf("matched    : %" PRIu64 "\n", p2);
+        printf("throughput : %.2f seeds/s\n", sc / (el > 0 ? el : 1));
+    } else {
     printf("scanned    : %" PRIu64 " structure seeds in %.2fs\n", sc, el);
     printf("pass1 (48b): %" PRIu64 "  (%.4f%% survive)\n", p1, r1);
     printf("applySeed  : %" PRIu64 "\n", ap);
@@ -286,6 +467,7 @@ int main(int argc, char **argv)
     if (r1 > 50.0)
         printf("\nWARNING: pass 1 rejects almost nothing (%.1f%% survive). The query is too\n"
                "         loose to filter, so every seed pays full biome cost. Tighten radii.\n", r1);
+    }
     if (tsv) fclose(tsv);
     free(json);
     return shown ? 0 : 3;

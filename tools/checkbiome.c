@@ -20,7 +20,11 @@ int main(int argc, char **argv)
     int mc = str2mc(argv[2]);
     if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
     int x = atoi(argv[3]), z = atoi(argv[4]);
-    const char *expect = (argc > 5) ? argv[5] : NULL;
+    const char *expect = (argc > 5 && strcmp(argv[5], "large")) ? argv[5] : NULL;
+    // "large" anywhere in the tail selects the Large Biomes world preset, so a
+    // result found in that world can be re-checked in the same world.
+    int large = 0;
+    for (int i = 5; i < argc; i++) if (!strcmp(argv[i], "large")) large = 1;
 
     // We don't know the biome's dimension a priori; if an expected name is
     // given, generate in that biome's dimension, else default overworld.
@@ -32,12 +36,13 @@ int main(int argc, char **argv)
         }
     }
 
-    Generator g; setupGenerator(&g, mc, 0);
+    Generator g; setupGenerator(&g, mc, large ? LARGE_BIOMES : 0);
     applySeed(&g, dim, seed);
     int id = getBiomeAt(&g, 0, (x>>4)*4 + 2, 319 >> 2, (z>>4)*4 + 2);
     const char *name = biome2str(mc, id);
 
-    printf("%lld x=%d z=%d biome=%s", (long long)seed, x, z, name ? name : "?");
+    printf("%lld x=%d z=%d biome=%s%s", (long long)seed, x, z,
+           name ? name : "?", large ? " [large biomes]" : "");
     if (expect) printf(" expect=%s %s", expect,
                        (name && !strcmp(name, expect)) ? "MATCH" : "MISMATCH");
     printf("\n");

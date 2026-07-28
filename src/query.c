@@ -2,12 +2,14 @@
 #include "util.h"
 #include "cJSON.h"
 #include "features/stronghold.h"
+#include "terrain.h"
 #include "loot.h"
 #include "ore.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 
 // ---------------------------------------------------------------- cost model
 //
@@ -25,6 +27,49 @@
 #define NS_LOOT       47000.0   // structure viability + a ~5us loot roll
 #define NS_ORE_CHUNK   4000.0   // per chunk: one biome probe + config scan + gen
 #define NS_SLIME_CHUNK    6.0   // per chunk: one Java-RNG isSlimeChunk call
+#define NS_TERRAIN_CELL 200000.0 // exact terrain: one heavy noise column per 4x4
+#define SEA_LEVEL          63    // overworld sea level: at/above = dry land
+
+// Real block-level terrain relief under a footprint, using cubiomes' actual
+// 1.18+ terrain (generateColumn / generateRegion) -- not the smoothed 1:4
+// approximation. This is what tells a genuinely dramatic placement (a structure
+// right on a cliff edge, a village clinging to a mountainside) apart from one
+// merely standing on high ground. Returns 1 with peak/relief written, 0 if
+// unavailable. Heights come back in WORLD Y (see terrain.h: generateRegion
+// itself reports column indices, 65 higher).
+static int exactFootprint(int mc, uint32_t gflags, uint64_t ws, Pos centre, int within,
+                          int *peakOut, int *reliefOut)
+{
+    TerrainNoise *tn = terrainFor(mc, ws, gflags);
+    if (!tn) return 0;
+    // Chunk region covering the footprint square [centre +- within].
+    int cxMin = (centre.x - within) >> 4, cxMax = (centre.x + within) >> 4;
+    int czMin = (centre.z - within) >> 4, czMax = (centre.z + within) >> 4;
+    int chunkW = cxMax - cxMin + 1, chunkH = czMax - czMin + 1;
+    int blockH = chunkH << 4;
+    int *ys = malloc((size_t)(chunkW << 4) * (chunkH << 4) * sizeof(int));
+    if (!ys) return 0;
+    generateRegion(tn, cxMin, czMin, chunkW, chunkH, NULL, ys, /*flag=*/1);
+    int bx0 = cxMin << 4, bz0 = czMin << 4;
+    int64_t lim = (int64_t)within * within;
+    int peak = -100000, valley = 100000, found = 0;
+    for (int dx = -within; dx <= within; dx++)
+    for (int dz = -within; dz <= within; dz++) {
+        if ((int64_t)dx*dx + (int64_t)dz*dz > lim) continue;
+        int rx = (centre.x + dx) - bx0, rz = (centre.z + dz) - bz0;
+        int y = ys[rx * blockH + rz] - TERRAIN_Y_BIAS;   // column index -> world Y
+        found = 1;
+        if (y > peak)   peak = y;
+        if (y < valley) valley = y;
+    }
+    free(ys);
+    if (!found) return 0;
+    *peakOut = peak; *reliefOut = peak - valley;
+    return 1;
+}
+
+static int isPopulationFeature(int stype);   // defined with the vocabulary
+static int hasPlacementRule(int mc, int stype);   // 1.18+ surface rules, below
 
 static double geomCost(const Query *q, int i)
 {
@@ -35,6 +80,10 @@ static double geomCost(const Query *q, int i)
     double span = sc.regionSize * 16.0;
     double reach = c->within + (c->parent == PARENT_SPAWN ? SPAWN_MARGIN : 0);
     double n = 2.0 * (reach / span) + 1.0;
+    // An overlap pair also probes the second structure's regions around each
+    // candidate of the first -- a 3x3 region window is enough, since a
+    // footprint collision is a few dozen blocks at most.
+    if (c->type == CT_OVERLAP) return n * n * 10.0 * NS_STRUCT_POS;
     return n * n * NS_STRUCT_POS;
 }
 
@@ -47,16 +96,53 @@ static double viabCost(const Query *q, int i)
         // A per-chunk cost over the disc's bounding square -- the most expensive
         // condition, so it sorts last and runs only for earlier survivors.
         double n = 2.0 * (c->within / 16.0) + 1.0;
-        return n * n * NS_ORE_CHUNK + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+        double cost = n * n * NS_ORE_CHUNK;
+        // Exposure generates a real terrain column set for every chunk that
+        // holds any of this ore: 16 heavy cells per chunk, dwarfing the ore
+        // generation itself. Assume half the chunks in range contain some.
+        if (c->oreExposed) cost += 0.5 * n * n * 16.0 * NS_TERRAIN_CELL;
+        return cost + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
     }
     if (c->type == CT_SLIME) {
         double n = 2.0 * (c->within / 16.0) + 1.0;   // one RNG call per chunk
         return n * n * NS_SLIME_CHUNK + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
     }
-    if (c->type == CT_STRUCTURE)
-        return NS_VIABLE + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+    if (c->type == CT_STRUCTURE) {
+        double cost = NS_VIABLE;
+        // 1.18+ surface rule: four terrain columns, each needing the four noise
+        // columns around its cell -- 16 at worst, fewer when they share cells.
+        // Sorts this structure behind everything that needs only biomes.
+        if (hasPlacementRule(q->mc, c->structType))
+            cost += 16.0 * NS_TERRAIN_CELL;
+        // A population-seeded feature is also LOCATED here, chunk by chunk,
+        // because pass 1 could not place it.
+        if (isPopulationFeature(c->structType)) {
+            StructureConfig sc;
+            if (getStructureConfig(c->structType, q->mc, &sc)) {
+                double n = 2.0 * (c->within / (sc.regionSize * 16.0)) + 1.0;
+                cost += n * n * NS_STRUCT_POS;
+            }
+        }
+        return cost + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+    }
+    if (c->type == CT_OVERLAP)   // both halves of the pair must be viable
+        return 2.0 * NS_VIABLE + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
     if (c->type == CT_HEIGHT) {
+        if (c->exactTerrain) {
+            // Real per-block terrain: ~one heavy noise column per 4x4 cell over
+            // the footprint region. Enormous vs everything else, so it sorts
+            // dead last and runs only for survivors of every cheaper filter.
+            double cells = 2.0 * (c->within / 4.0) + 3.0;
+            return cells * cells * NS_TERRAIN_CELL + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+        }
         // A mapApproxHeight sample per lattice point, like a biome scan.
+        double step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
+        double n = 2.0 * (c->within / step) + 1.0;
+        return n * n * NS_BIOME_AT + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+    }
+    if (c->type == CT_ISLAND) {
+        // ocean-fraction sample over the disc, like a biome-area scan, plus the
+        // world-spawn resolve it almost always needs.
         double step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
         double n = 2.0 * (c->within / step) + 1.0;
         return n * n * NS_BIOME_AT + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
@@ -70,6 +156,11 @@ static double viabCost(const Query *q, int i)
 const char *dimName(int dim)
 {
     return dim == DIM_NETHER ? "nether" : dim == DIM_END ? "end" : "overworld";
+}
+
+uint32_t queryGenFlags(const Query *q)
+{
+    return q->largeBiomes ? LARGE_BIOMES : 0;
 }
 
 // ------------------------------------------------------------------- parsing
@@ -93,7 +184,9 @@ static const struct { const char *n; int t; } STRUCT_TBL[] = {
     {"outpost", Outpost}, {"ancient_city", Ancient_City},
     {"ruined_portal", Ruined_Portal}, {"trail_ruins", Trail_Ruins},
     {"trial_chambers", Trial_Chambers}, {"treasure", Treasure},
+    {"buried_treasure", Treasure},
     {"ocean_ruin", Ocean_Ruin},
+    {"mineshaft", Mineshaft}, {"geode", Geode}, {"amethyst_geode", Geode},
     // nether -- fortress and bastion share salt+geometry and are mutually
     // exclusive at a given site (nextInt(5) < 2 picks which)
     {"fortress", Fortress}, {"bastion", Bastion},
@@ -127,6 +220,61 @@ static int str2struct_(const char *s)
     return -1;
 }
 
+// Structures cubiomes places from the chunk POPULATION seed rather than the
+// region-based structure algorithm. The distinction matters here: a region
+// structure's position depends only on the lower 48 bits (which is what makes
+// pass 1 possible at all), while a population-seeded one is derived from all 64
+// bits on 1.18+ (Xoroshiro). Filtering those on the structure seed alone
+// reports positions that are not in the world -- so they are excluded from
+// pass 1 and located in pass 2, where the full seed exists.
+static int isPopulationFeature(int stype)
+{
+    return stype == Geode || stype == Desert_Well ||
+           stype == End_Gateway || stype == End_Island;
+}
+
+// ------------------------------------------------------- structure footprints
+//
+// NOMINAL half-extents in blocks, measured out from the position the engine
+// reports for an instance. These are the sizes the overlap test uses, and they
+// are approximations on purpose: cubiomes models a structure's *placement*
+// exactly but not its full assembled extent (getVariant sizes cover only the
+// starting piece for jigsaw structures like villages, and nothing at all for
+// several others). A box here is "roughly what this structure occupies",
+// generous enough that a real collision is not missed and tight enough that
+// two structures a hundred blocks apart are not called overlapping.
+//
+// Consequence, stated plainly: an overlap hit is a STRONG CANDIDATE for two
+// structures generating into each other, not a proof. Sprawling structures
+// (village, mineshaft, fortress) reach well past their nominal box.
+static int structHalfExtent(int stype)
+{
+    switch (stype) {
+    case Treasure:        return 1;
+    case Igloo:           return 4;
+    case Swamp_Hut:       return 5;
+    case Jungle_Pyramid:  return 8;
+    case Ocean_Ruin:      return 8;
+    case Geode:           return 8;
+    case Ruined_Portal:   return 8;
+    case Ruined_Portal_N: return 8;
+    case Desert_Pyramid:  return 11;
+    case Shipwreck:       return 14;
+    case Outpost:         return 16;
+    case Trail_Ruins:     return 16;
+    case End_City:        return 24;
+    case Bastion:         return 24;
+    case Mansion:         return 24;
+    case Monument:        return 29;
+    case Village:         return 32;
+    case Mineshaft:       return 40;
+    case Trial_Chambers:  return 48;
+    case Fortress:        return 48;
+    case Ancient_City:    return 64;
+    default:              return 16;
+    }
+}
+
 int queryParse(Query *q, const char *json, char *err, size_t errlen)
 {
     memset(q, 0, sizeof(*q));
@@ -138,6 +286,12 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
     if (!jv || !cJSON_IsString(jv)) { snprintf(err, errlen, "missing \"version\""); goto done; }
     q->mc = str2mc(jv->valuestring);
     if (q->mc < 0) { snprintf(err, errlen, "unknown version \"%s\"", jv->valuestring); goto done; }
+
+    // World preset. Large Biomes is the same generator at a different biome
+    // scale, so it changes every biome-dependent answer -- and nothing else in
+    // the query needs to know, as long as every Generator is built with it.
+    cJSON *jlb = cJSON_GetObjectItem(root, "large_biomes");
+    q->largeBiomes = (jlb && cJSON_IsTrue(jlb)) ? 1 : 0;
 
     cJSON *jc = cJSON_GetObjectItem(root, "conditions");
     if (!jc || !cJSON_IsArray(jc)) { snprintf(err, errlen, "missing \"conditions\" array"); goto done; }
@@ -172,7 +326,72 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         cJSON *jslime = cJSON_GetObjectItem(e, "slime");
         cJSON *jarea = cJSON_GetObjectItem(e, "biome_area");
         cJSON *jheight = cJSON_GetObjectItem(e, "height");
-        if (jslime && cJSON_IsNumber(jslime)) {
+        cJSON *jrelief = cJSON_GetObjectItem(e, "relief");
+        cJSON *jisland = cJSON_GetObjectItem(e, "island");
+        cJSON *jovl = cJSON_GetObjectItem(e, "overlap");
+        if (jovl && cJSON_IsArray(jovl) && cJSON_GetArraySize(jovl) == 2) {
+            // Two structures generating into the same ground: a ruined portal
+            // inside a village, a mineshaft under a monument. Distance alone
+            // cannot express this -- "within 30 blocks" is satisfied by two
+            // structures that merely sit near each other, while a real
+            // collision is about their FOOTPRINTS meeting.
+            c->type = CT_OVERLAP;
+            const char *an = cJSON_GetArrayItem(jovl, 0)->valuestring;
+            const char *bn = cJSON_GetArrayItem(jovl, 1)->valuestring;
+            if (!an || !bn) {
+                snprintf(err, errlen, "condition \"%s\": overlap needs two structure names", c->id);
+                goto done;
+            }
+            c->structType  = str2struct_(an);
+            c->structType2 = str2struct_(bn);
+            if (c->structType < 0 || c->structType2 < 0) {
+                snprintf(err, errlen, "condition \"%s\": unknown structure in overlap", c->id);
+                goto done;
+            }
+            StructureConfig sa, sb;
+            if (!getStructureConfig(c->structType, q->mc, &sa) ||
+                !getStructureConfig(c->structType2, q->mc, &sb)) {
+                snprintf(err, errlen, "condition \"%s\": a structure in overlap does not exist in %s",
+                         c->id, jv->valuestring);
+                goto done;
+            }
+            if (sa.dim != sb.dim) {
+                snprintf(err, errlen,
+                    "condition \"%s\": %s and %s are in different dimensions -- they can never overlap",
+                    c->id, an, bn);
+                goto done;
+            }
+            c->dim = sa.dim;
+            cJSON *jpad = cJSON_GetObjectItem(e, "pad");
+            c->overlapPad = (jpad && cJSON_IsNumber(jpad)) ? jpad->valueint : 0;
+            if (c->overlapPad < 0)   c->overlapPad = 0;
+            if (c->overlapPad > 128) c->overlapPad = 128;
+            // `within` is how far from the reference the PAIR may be, not how
+            // close the two structures are (that is the footprint test).
+            cJSON *ow = cJSON_GetObjectItem(e, "within");
+            c->within = (ow && cJSON_IsNumber(ow)) ? ow->valueint : 3000;
+            if (c->within > 30000) c->within = 30000;
+            if (c->within < 64)    c->within = 64;
+            cJSON *of = cJSON_GetObjectItem(e, "of");
+            snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "origin");
+        } else if (jisland && cJSON_IsTrue(jisland)) {
+            // Island / survival-island spawn: the reference point is LAND, and
+            // ocean covers at least `pct`% of the surrounding disc -- a small
+            // landmass in open water. Defaults to spawn (the useful case).
+            c->type = CT_ISLAND;
+            c->dim = DIM_OVERWORLD;
+            cJSON *ip = cJSON_GetObjectItem(e, "pct");
+            c->areaPct = (ip && cJSON_IsNumber(ip)) ? ip->valueint : 75;
+            if (c->areaPct < 1)   c->areaPct = 1;
+            if (c->areaPct > 100) c->areaPct = 100;
+            cJSON *iw = cJSON_GetObjectItem(e, "within");
+            c->within = (iw && cJSON_IsNumber(iw)) ? iw->valueint : 256;
+            if (c->within < 48)   c->within = 48;
+            if (c->within > 2048) c->within = 2048;
+            c->scanStep = SCAN_FINE;
+            cJSON *of = cJSON_GetObjectItem(e, "of");
+            snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "spawn");
+        } else if (jslime && cJSON_IsNumber(jslime)) {
             c->type = CT_SLIME;
             c->dim = DIM_OVERWORLD;              // slime chunks are overworld
             c->slimeMin = jslime->valueint;
@@ -185,13 +404,22 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
             if (c->within < 16)   c->within = 16;
             cJSON *of = cJSON_GetObjectItem(e, "of");
             snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "origin");
-        } else if (jheight && cJSON_IsNumber(jheight)) {
+        } else if ((jheight && cJSON_IsNumber(jheight)) ||
+                   (jrelief && cJSON_IsNumber(jrelief))) {
             // APPROXIMATE terrain height: the disc must contain a surface point
-            // at least this high (mapApproxHeight -- an estimate, not exact game
-            // height). Best on 1.18+; overworld only.
+            // at least "height" high AND/OR a peak-to-valley spread ("relief") of
+            // at least that many blocks (mapApproxHeight -- an estimate, not exact
+            // game height). Best on 1.18+; overworld only.
+            //   height : find tall terrain (a peak/mountain)
+            //   relief : find STEEP terrain -- a big local drop. Pair with
+            //            of:<structure> + a small radius for a structure sitting
+            //            on a cliff edge / halfway up a mountainside.
             c->type = CT_HEIGHT;
             c->dim = DIM_OVERWORLD;
-            c->heightMin = jheight->valueint;
+            // -64 = world floor = "no minimum" when only relief is asked for.
+            c->heightMin = (jheight && cJSON_IsNumber(jheight)) ? jheight->valueint : -64;
+            c->reliefMin = (jrelief && cJSON_IsNumber(jrelief)) ? jrelief->valueint : 0;
+            if (c->reliefMin < 0) c->reliefMin = 0;
             // A small disc so "tall terrain at an outpost" (of: outpost) means
             // at the outpost. Default modest; cap so the scan can't wedge.
             cJSON *hw = cJSON_GetObjectItem(e, "within");
@@ -204,6 +432,21 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 if      (!strcmp(hp->valuestring, "fast"))  c->scanStep = SCAN_FAST;
                 else if (!strcmp(hp->valuestring, "fine"))  c->scanStep = SCAN_FINE;
                 else if (!strcmp(hp->valuestring, "exact")) c->scanStep = SCAN_EXACT;
+            }
+            // "exact": real block-level terrain (generateColumn) instead of the
+            // 1:4 smoothed approximation. The only way to see a sharp drop right
+            // under a structure's footprint. 1.18+ only.
+            cJSON *jex = cJSON_GetObjectItem(e, "exact");
+            if (jex && cJSON_IsBool(jex) && cJSON_IsTrue(jex)) {
+                if (q->mc < MC_1_18) {
+                    snprintf(err, errlen, "condition \"%s\": \"exact\" terrain needs MC 1.18+",
+                             c->id);
+                    goto done;
+                }
+                c->exactTerrain = 1;
+                // Exact terrain is per-block; a big radius is ruinously slow. This
+                // is a footprint check, so cap it hard.
+                if (c->within > 48) c->within = 48;
             }
             cJSON *of = cJSON_GetObjectItem(e, "of");
             snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "origin");
@@ -222,12 +465,38 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
             cJSON *oc = cJSON_GetObjectItem(e, "count");
             c->oreMin = (oc && cJSON_IsNumber(oc)) ? oc->valueint : 1;
             if (c->oreMin < 1) c->oreMin = 1;
+            // "vein": the biggest CONNECTED blob, not the scattered total. This
+            // is the record-hunting measure -- 40 diamonds spread over a disc is
+            // ordinary, 12 in one vein is not.
+            cJSON *ov = cJSON_GetObjectItem(e, "vein");
+            c->veinMin = (ov && cJSON_IsNumber(ov)) ? ov->valueint : 0;
+            if (c->veinMin < 0) c->veinMin = 0;
+            // "exposed": only count ore with an air neighbour in real terrain --
+            // ore you can see in a cave wall. Needs block-level terrain.
+            cJSON *oe = cJSON_GetObjectItem(e, "exposed");
+            if (oe && cJSON_IsTrue(oe)) {
+                if (q->mc < MC_1_18) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"exposed\" ore needs MC 1.18+ (block-level terrain)",
+                        c->id);
+                    goto done;
+                }
+                if (mat->dim != DIM_OVERWORLD) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"exposed\" ore is overworld-only", c->id);
+                    goto done;
+                }
+                c->oreExposed = 1;
+            }
             // Counting is per-chunk over the whole column, so cost scales with
             // area. Default modest; cap so it cannot wedge the search.
             cJSON *ow = cJSON_GetObjectItem(e, "within");
             c->within = (ow && cJSON_IsNumber(ow)) ? ow->valueint : 64;
             if (c->within > 256) c->within = 256;
             if (c->within < 16)  c->within = 16;
+            // Exposure generates real terrain per candidate chunk, so a wide
+            // disc is ruinous. Keep it to a cave's worth of ground.
+            if (c->oreExposed && c->within > 64) c->within = 64;
             // Ore is measured from a point; default origin. Spawn only makes
             // sense in the overworld (guarded later, like every condition).
             cJSON *of = cJSON_GetObjectItem(e, "of");
@@ -340,12 +609,69 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 }
                 c->reqGiant = 1;
             }
+            // "exposed": buried treasure whose chest sits on dry land at/above
+            // sea level (visible/reachable) rather than submerged underwater.
+            // Checked against real terrain height at the chest.
+            cJSON *jexp = cJSON_GetObjectItem(e, "exposed");
+            if (jexp && cJSON_IsTrue(jexp)) {
+                if (c->structType != Treasure) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"exposed\" only applies to buried_treasure", c->id);
+                    goto done;
+                }
+                c->reqExposed = 1;
+            }
+            // "size" / "cracked": amethyst geode shape. getVariant reads the
+            // same draws the game makes, so both are exact. Size is the geode's
+            // generated radius parameter -- bigger means more amethyst, and the
+            // top of the range is rare enough to be worth ranking on.
+            cJSON *jsz = cJSON_GetObjectItem(e, "size");
+            if (jsz && cJSON_IsNumber(jsz)) {
+                if (c->structType != Geode) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"size\" only applies to geode", c->id);
+                    goto done;
+                }
+                c->geodeSize = jsz->valueint;
+                if (c->geodeSize < 0) c->geodeSize = 0;
+            }
+            // "cracked": true wants a geode broken open (95% of them, so barely
+            // a filter); FALSE wants the rare SEALED one -- 1 in 20, and the
+            // only kind that is still full of amethyst when you find it.
+            cJSON *jcr = cJSON_GetObjectItem(e, "cracked");
+            if (jcr && cJSON_IsBool(jcr)) {
+                if (c->structType != Geode) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"cracked\" only applies to geode", c->id);
+                    goto done;
+                }
+                c->reqCracked = cJSON_IsTrue(jcr) ? 1 : -1;
+            }
+            // "ship": end city that contains an end ship (guaranteed elytra).
+            cJSON *jship = cJSON_GetObjectItem(e, "ship");
+            if (jship && cJSON_IsTrue(jship)) {
+                if (c->structType != End_City) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"ship\" only applies to end_city", c->id);
+                    goto done;
+                }
+                c->reqShip = 1;
+            }
             // "count": N asks for a CLUSTER -- at least N viable instances of
             // this structure within the radius (triple village, huts near
             // spawn). Default 1 = an ordinary single-instance match.
             cJSON *jcnt = cJSON_GetObjectItem(e, "count");
             c->structMin = (jcnt && cJSON_IsNumber(jcnt)) ? jcnt->valueint : 1;
             if (c->structMin < 1) c->structMin = 1;
+            if (c->structMin > 1 && isPopulationFeature(c->structType)) {
+                // The cluster paths count instances from the 48-bit structure
+                // seed, which does not locate a population-seeded feature.
+                snprintf(err, errlen,
+                    "condition \"%s\": \"count\" clusters are not supported for %s "
+                    "(it is placed from the chunk population seed, not the region grid)",
+                    c->id, js->valuestring);
+                goto done;
+            }
             if (c->structMin > 1 && (c->surfaceOnly || c->reqAbandoned ||
                                      c->reqBasement || c->reqGiant)) {
                 snprintf(err, errlen,
@@ -442,6 +768,39 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         }
     }
     q->n = n;
+    q->rankIdx = -1;
+
+    // Optional leaderboard: {"rank": {"of": <cond id>, "by": <metric>, "top": K}}
+    cJSON *jrank = cJSON_GetObjectItem(root, "rank");
+    if (jrank && cJSON_IsObject(jrank)) {
+        cJSON *ro = cJSON_GetObjectItem(jrank, "of");
+        if (!ro || !cJSON_IsString(ro)) {
+            snprintf(err, errlen, "\"rank\" needs \"of\": the id of the condition to rank by");
+            goto done;
+        }
+        snprintf(q->rankOf, ID_LEN, "%s", ro->valuestring);
+        cJSON *rt = cJSON_GetObjectItem(jrank, "top");
+        q->rankTop = (rt && cJSON_IsNumber(rt)) ? rt->valueint : 10;
+        if (q->rankTop < 1)  q->rankTop = 1;
+        if (q->rankTop > 50) q->rankTop = 50;
+        q->rankBy = RANK_AUTO;
+        cJSON *rb = cJSON_GetObjectItem(jrank, "by");
+        if (rb && cJSON_IsString(rb)) {
+            const char *b = rb->valuestring;
+            if      (!strcmp(b, "height"))  q->rankBy = RANK_HEIGHT;
+            else if (!strcmp(b, "relief"))  q->rankBy = RANK_RELIEF;
+            else if (!strcmp(b, "vein"))    q->rankBy = RANK_VEIN;
+            else if (!strcmp(b, "count"))   q->rankBy = RANK_COUNT;
+            else if (!strcmp(b, "pct"))     q->rankBy = RANK_PCT;
+            else if (!strcmp(b, "size"))    q->rankBy = RANK_SIZE;
+            else if (!strcmp(b, "area"))    q->rankBy = RANK_AREA;
+            else if (strcmp(b, "auto")) {
+                snprintf(err, errlen,
+                    "\"rank\".\"by\" must be auto|height|relief|vein|count|pct|size|area, got \"%s\"", b);
+                goto done;
+            }
+        }
+    }
     rc = 0;
 done:
     cJSON_Delete(root);
@@ -482,12 +841,29 @@ int queryPlan(Query *q, char *err, size_t errlen)
     // reorder across that edge no matter what the cost model wants).
     int done[MAX_COND] = {0};
     q->ngeom = 0;
+    // Population-seeded features (geode & friends) have no 48-bit position, so
+    // they never enter pass 1. Marked done up front: the cycle check below must
+    // not flag them, and nothing may be measured FROM one, because pass 1 would
+    // then be filtering a radius around a position it cannot know.
+    for (int i = 0; i < q->n; i++) {
+        if (q->cond[i].type != CT_STRUCTURE) continue;
+        if (!isPopulationFeature(q->cond[i].structType)) continue;
+        if (q->cond[i].isParent) {
+            snprintf(err, errlen,
+                "condition \"%s\": a %s is located in pass 2, so nothing can be "
+                "measured from it -- put the radius on the other condition instead",
+                q->cond[i].id, struct2str(q->cond[i].structType));
+            return 1;
+        }
+        done[i] = 1;
+    }
     for (int iter = 0; iter < q->n + 1 && q->ngeom < q->n; iter++) {
         // among currently-schedulable geometry tasks, take the cheapest
         int best = -1; double bestc = 1e30;
         for (int i = 0; i < q->n; i++) {
             if (done[i] || (q->cond[i].type != CT_STRUCTURE
-                          && q->cond[i].type != CT_LOOT)) continue;
+                          && q->cond[i].type != CT_LOOT
+                          && q->cond[i].type != CT_OVERLAP)) continue;
             int p = q->cond[i].parent;
             if (p >= 0 && !done[p]) continue;          // parent not placed yet
             double c = geomCost(q, i);
@@ -500,7 +876,8 @@ int queryPlan(Query *q, char *err, size_t errlen)
 
     // any structure condition left unscheduled means a dependency cycle
     for (int i = 0; i < q->n; i++)
-        if ((q->cond[i].type == CT_STRUCTURE || q->cond[i].type == CT_LOOT) && !done[i]) {
+        if ((q->cond[i].type == CT_STRUCTURE || q->cond[i].type == CT_LOOT
+             || q->cond[i].type == CT_OVERLAP) && !done[i]) {
             snprintf(err, errlen, "dependency cycle involving \"%s\"", q->cond[i].id);
             return 1;
         }
@@ -586,9 +963,102 @@ int queryPlan(Query *q, char *err, size_t errlen)
             }
     }
 
+    // Leaderboard target. Ranking by a condition the query does not have is a
+    // typo, not a default -- say so rather than silently searching unranked.
+    q->rankIdx = -1;
+    if (q->rankTop > 0) {
+        q->rankIdx = findId(q, q->rankOf);
+        if (q->rankIdx < 0) {
+            snprintf(err, errlen, "\"rank\": no condition with id \"%s\"", q->rankOf);
+            return 1;
+        }
+        char lbl[32];
+        snprintf(lbl, sizeof lbl, "%s", queryScoreLabel(q));
+        if (!lbl[0]) {
+            snprintf(err, errlen,
+                     "\"rank\": condition \"%s\" has nothing to rank by", q->rankOf);
+            return 1;
+        }
+    }
+
     q->est_cost_ns = 0;
     for (int i = 0; i < q->ngeom; i++) q->est_cost_ns += geomCost(q, q->geom[i]);
     return 0;
+}
+
+// ------------------------------------------------------------ leaderboard
+//
+// The metric a ranked search sorts on. RANK_AUTO takes the condition's own
+// natural measurement, which is what "find the biggest one" means for every
+// condition type that has a magnitude at all.
+static int rankMetric(const Query *q)
+{
+    if (q->rankIdx < 0) return RANK_AUTO;
+    if (q->rankBy != RANK_AUTO) return q->rankBy;
+    switch (q->cond[q->rankIdx].type) {
+    case CT_HEIGHT:     return q->cond[q->rankIdx].reliefMin > 0 ? RANK_RELIEF : RANK_HEIGHT;
+    case CT_ORE:        return q->cond[q->rankIdx].veinMin > 0 ? RANK_VEIN : RANK_COUNT;
+    case CT_SLIME:      return RANK_COUNT;
+    case CT_STRUCTURE:  return q->cond[q->rankIdx].structType == Geode ? RANK_SIZE : RANK_COUNT;
+    case CT_LOOT:       return RANK_COUNT;
+    case CT_EYES:       return RANK_COUNT;
+    case CT_BIOME_AREA: return RANK_PCT;
+    case CT_ISLAND:     return RANK_PCT;
+    case CT_OVERLAP:    return RANK_AREA;
+    default:            return RANK_AUTO;
+    }
+}
+
+const char *queryScoreLabel(const Query *q)
+{
+    if (q->rankIdx < 0) return "";
+    const Cond *c = &q->cond[q->rankIdx];
+    switch (rankMetric(q)) {
+    case RANK_HEIGHT: return "peak Y";
+    case RANK_RELIEF: return "relief";
+    case RANK_VEIN:   return "vein";
+    case RANK_SIZE:   return "geode size";
+    case RANK_PCT:    return "percent";
+    case RANK_AREA:   return "overlap";
+    case RANK_COUNT:
+        switch (c->type) {
+        case CT_ORE:       return "ore blocks";
+        case CT_SLIME:     return "slime chunks";
+        case CT_STRUCTURE: return "structures";
+        case CT_LOOT:      return "items";
+        case CT_EYES:      return "eyes";
+        default:           return "count";
+        }
+    default: return "";
+    }
+}
+
+int queryScore(const Query *q, const Match *m)
+{
+    if (q->rankIdx < 0) return INT_MIN;
+    int k = q->rankIdx;
+    const Cond *c = &q->cond[k];
+    switch (rankMetric(q)) {
+    case RANK_HEIGHT: return m->peakHeight[k];
+    case RANK_RELIEF: return m->peakDrop[k];
+    case RANK_VEIN:   return m->veinMax[k];
+    case RANK_SIZE:   return m->geodeSize[k];
+    case RANK_AREA:   return m->overlapArea[k];
+    case RANK_PCT: {
+        int tot = m->areaTotal[k];
+        return tot > 0 ? (int)((int64_t)m->areaCells[k] * 100 / tot) : 0;
+    }
+    case RANK_COUNT:
+        switch (c->type) {
+        case CT_ORE:       return m->oreCount[k];
+        case CT_SLIME:     return m->slimeCount[k];
+        case CT_STRUCTURE: return m->structCount[k] > 0 ? m->structCount[k] : 1;
+        case CT_LOOT:      return m->lootCount[k];
+        case CT_EYES:      return m->eyes;
+        default:           return 0;
+        }
+    default: return INT_MIN;
+    }
 }
 
 const char *condDesc(const Query *q, int i, char *buf, size_t n)
@@ -607,8 +1077,19 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
     }
     if (c->type == CT_ORE) {
         int nm; const OreMaterial *tab = oreMaterials(&nm);
-        snprintf(buf, n, ">= %d %s ore within %d of %s",
-                 c->oreMin, tab[c->oreMat].name, c->within, c->ofId);
+        const char *exp = c->oreExposed ? " exposed" : "";
+        if (c->veinMin > 0)
+            snprintf(buf, n, ">= %d %s%s ore in ONE vein within %d of %s",
+                     c->veinMin, tab[c->oreMat].name, exp, c->within, c->ofId);
+        else
+            snprintf(buf, n, ">= %d %s%s ore within %d of %s",
+                     c->oreMin, tab[c->oreMat].name, exp, c->within, c->ofId);
+        return buf;
+    }
+    if (c->type == CT_OVERLAP) {
+        snprintf(buf, n, "%s and %s footprints meet%s (within %d of %s, nominal boxes)",
+                 struct2str(c->structType), struct2str(c->structType2),
+                 c->overlapPad > 0 ? "+pad" : "", c->within, c->ofId);
         return buf;
     }
     if (c->type == CT_SLIME) {
@@ -621,9 +1102,22 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
                  biome2str(q->mc, c->biomeId), c->areaPct, c->within, c->ofId);
         return buf;
     }
+    if (c->type == CT_ISLAND) {
+        snprintf(buf, n, "island: land at %s, ocean >= %d%% within %d",
+                 c->ofId, c->areaPct, c->within);
+        return buf;
+    }
     if (c->type == CT_HEIGHT) {
-        snprintf(buf, n, "~terrain height >= %d within %d of %s (approx)",
-                 c->heightMin, c->within, c->ofId);
+        const char *tag = c->exactTerrain ? "exact" : "approx";
+        if (c->reliefMin > 0 && c->heightMin > -64)
+            snprintf(buf, n, "%sterrain peak >= %d & relief >= %d within %d of %s (%s)",
+                     c->exactTerrain ? "" : "~", c->heightMin, c->reliefMin, c->within, c->ofId, tag);
+        else if (c->reliefMin > 0)
+            snprintf(buf, n, "%sterrain relief >= %d within %d of %s (%s)",
+                     c->exactTerrain ? "" : "~", c->reliefMin, c->within, c->ofId, tag);
+        else
+            snprintf(buf, n, "%sterrain height >= %d within %d of %s (%s)",
+                     c->exactTerrain ? "" : "~", c->heightMin, c->within, c->ofId, tag);
         return buf;
     }
     const char *what = (c->type == CT_STRUCTURE)
@@ -631,6 +1125,15 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
     const char *prec = c->type != CT_BIOME ? ""
                      : c->scanStep == SCAN_FAST  ? " [fast]"
                      : c->scanStep == SCAN_EXACT ? " [exact]" : " [fine]";
+    if (c->type == CT_STRUCTURE && c->structType == Geode &&
+        (c->geodeSize > 0 || c->reqCracked != 0)) {
+        char sz[24] = "";
+        if (c->geodeSize > 0) snprintf(sz, sizeof sz, " size >= %d", c->geodeSize);
+        snprintf(buf, n, "%sgeode%s within %d of %s",
+                 c->reqCracked > 0 ? "cracked " : c->reqCracked < 0 ? "sealed " : "",
+                 sz, c->within, c->ofId);
+        return buf;
+    }
     if (c->type == CT_STRUCTURE && c->structMin > 1) {
         if (c->spread > 0)
             snprintf(buf, n, ">= %d %s within %d of each other (searching %d of %s)",
@@ -672,8 +1175,11 @@ static inline int64_t d2(Pos a, Pos b) {
 // `reach` of `centre`. If `g` is non-NULL each candidate is biome-viability
 // checked (pass 2); if NULL only geometry is counted (pass 1, an over-admit).
 // The centroid of the counted instances is written to `*centroid` when found.
-static int countInstances(const Query *q, int k, uint64_t s48, Pos centre,
-                          int reach, Generator *g, Pos *centroid)
+static int placementOk(int mc, uint32_t gflags, uint64_t worldSeed, int stype, Pos p);
+static int hasPlacementRule(int mc, int stype);
+
+static int countInstances(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
+                          Pos centre, int reach, Generator *g, Pos *centroid)
 {
     const Cond *c = &q->cond[k];
     StructureConfig sc;
@@ -691,6 +1197,7 @@ static int countInstances(const Query *q, int k, uint64_t s48, Pos centre,
         if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
         if (d2(p, centre) > lim) continue;
         if (g && !isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
+        if (g && !placementOk(q->mc, queryGenFlags(q), worldSeed, c->structType, p)) continue;
         cnt++; sx += p.x; sz += p.z;
     }
     if (cnt > 0 && centroid) { centroid->x = (int)(sx / cnt); centroid->z = (int)(sz / cnt); }
@@ -704,8 +1211,8 @@ static int countInstances(const Query *q, int k, uint64_t s48, Pos centre,
 // to *anchor -- reporting a real instance (not a centroid) makes the result
 // exactly re-checkable: count viable instances within `spread` of it.
 #define TIGHT_MAX_DIM 64
-static int tightCluster(const Query *q, int k, uint64_t s48, Pos centre,
-                        int reach, Generator *g, Pos *anchor)
+static int tightCluster(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
+                        Pos centre, int reach, Generator *g, Pos *anchor)
 {
     const Cond *c = &q->cond[k];
     StructureConfig sc;
@@ -731,6 +1238,7 @@ static int tightCluster(const Query *q, int k, uint64_t s48, Pos centre,
         Pos p;
         if (!getStructurePos(c->structType, q->mc, s48, g0x + i, g0z + j, &p)) continue;
         if (g && !isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
+        if (g && !placementOk(q->mc, queryGenFlags(q), worldSeed, c->structType, p)) continue;
         grid[idx] = p; has[idx] = 1;
     }
 
@@ -752,6 +1260,133 @@ static int tightCluster(const Query *q, int k, uint64_t s48, Pos centre,
     return best;
 }
 
+// Find a pair of instances -- one of structType, one of structType2 -- whose
+// nominal footprints (see structHalfExtent), widened by `pad`, intersect. The
+// first structure must be within `reach` of `centre`; the second is wherever it
+// falls. Geometry-only when g == NULL (pass 1), viability-checked otherwise.
+// Writes the best (largest-intersection) pair found and returns its area.
+static int overlapFind(const Query *q, int k, uint64_t s48, Pos centre, int reach,
+                       Generator *g, Pos *aOut, Pos *bOut)
+{
+    const Cond *c = &q->cond[k];
+    StructureConfig sa, sb;
+    if (!getStructureConfig(c->structType,  q->mc, &sa)) return 0;
+    if (!getStructureConfig(c->structType2, q->mc, &sb)) return 0;
+    int ha = structHalfExtent(c->structType);
+    int hb = structHalfExtent(c->structType2);
+    int span = ha + hb + c->overlapPad;      // max centre separation that touches
+
+    double spanA = sa.regionSize * 16.0, spanB = sb.regionSize * 16.0;
+    int r0x = (int)floor((centre.x - reach) / spanA);
+    int r1x = (int)floor((centre.x + reach) / spanA);
+    int r0z = (int)floor((centre.z - reach) / spanA);
+    int r1z = (int)floor((centre.z + reach) / spanA);
+    int64_t lim = (int64_t)reach * reach;
+    int best = 0;
+
+    for (int rx = r0x; rx <= r1x; rx++)
+    for (int rz = r0z; rz <= r1z; rz++) {
+        Pos a;
+        if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &a)) continue;
+        if (d2(a, centre) > lim) continue;
+        if (g && !isViableStructurePos(c->structType, g, a.x, a.z, 0)) continue;
+
+        // Only the regions that could hold a second structure close enough.
+        int b0x = (int)floor((a.x - span) / spanB), b1x = (int)floor((a.x + span) / spanB);
+        int b0z = (int)floor((a.z - span) / spanB), b1z = (int)floor((a.z + span) / spanB);
+        for (int qx = b0x; qx <= b1x; qx++)
+        for (int qz = b0z; qz <= b1z; qz++) {
+            Pos b;
+            if (!getStructurePos(c->structType2, q->mc, s48, qx, qz, &b)) continue;
+            // Same type on both sides ("two villages in each other") must still
+            // be two different instances.
+            if (c->structType == c->structType2 && b.x == a.x && b.z == a.z) continue;
+            int ox = span - abs(b.x - a.x);
+            int oz = span - abs(b.z - a.z);
+            if (ox <= 0 || oz <= 0) continue;
+            int area = ox * oz;
+            if (area <= best) continue;
+            if (g && !isViableStructurePos(c->structType2, g, b.x, b.z, 0)) continue;
+            best = area;
+            if (aOut) *aOut = a;
+            if (bOut) *bOut = b;
+        }
+    }
+    return best;
+}
+
+// --------------------------------------------- 1.18+ surface placement checks
+//
+// cubiomes' isViableStructurePos models the biome rules but not the terrain
+// ones, and from 1.18 three structures also refuse to generate on ground that
+// is too low. Its own README says so; the effect is reported structures that do
+// not exist in game. These are the real rules, read out of the shipped 1.21
+// classes rather than inferred:
+//
+//   SinglePieceStructure.findGenerationPoint (desert pyramid 21x21,
+//   jungle temple 12x15):  getLowestY(ctx, w, d) < seaLevel -> no structure.
+//   getLowestY takes the WORLD_SURFACE_WG height at four corners of the chunk's
+//   min block plus (0|w, 0|d) and returns the minimum.
+//
+//   WoodlandMansionStructure.findGenerationPoint:
+//   getLowestYIn5by5BoxOffset7Blocks(ctx, rot).getY() < 60 -> no mansion.
+//   The box is 5x5 anchored at chunk min + 7, its sign flipped per rotation,
+//   and the rotation is the first draw of the chunk's structure RNG.
+//
+// WATER, and why this errs one way. Minecraft's WORLD_SURFACE_WG counts water,
+// so a submerged corner reads as the water surface; we use solid ground. For
+// the two sea-level checks that makes no difference to the verdict: a submerged
+// corner has water at 62, which fails ">= 63" exactly as the seabed below it
+// does. For the mansion's lower bar of 60 it can differ, and we take the
+// conservative side -- we may reject a mansion vanilla would allow beside
+// water, never accept one it would refuse.
+static int lowestCorner(int mc, uint32_t gflags, uint64_t ws, int x0, int z0, int w, int d, int *out)
+{
+    int lo = INT_MAX;
+    for (int i = 0; i < 4; i++) {
+        int ok = 0;
+        int y = terrainSurfaceY(mc, ws, gflags, x0 + ((i & 1) ? w : 0),
+                                z0 + ((i & 2) ? d : 0), &ok);
+        if (!ok) return 0;
+        if (y < lo) lo = y;
+    }
+    *out = lo;
+    return 1;
+}
+
+static int placementOk(int mc, uint32_t gflags, uint64_t worldSeed, int stype, Pos p)
+{
+    if (mc < MC_1_18) return 1;      // the rule arrived with the new terrain
+    int x0 = p.x & ~15, z0 = p.z & ~15, lo;
+    switch (stype) {
+    case Desert_Pyramid:
+        if (!lowestCorner(mc, gflags, worldSeed, x0, z0, 21, 21, &lo)) return 1;
+        return lo >= SEA_LEVEL;
+    case Jungle_Pyramid:
+        if (!lowestCorner(mc, gflags, worldSeed, x0, z0, 12, 15, &lo)) return 1;
+        return lo >= SEA_LEVEL;
+    case Mansion: {
+        // Rotation first: nextInt(4) off the chunk's structure RNG, the same
+        // draw the game makes before it measures the ground.
+        uint64_t rnd = chunkGenerateRnd(worldSeed, p.x >> 4, p.z >> 4);
+        int rot = nextInt(&rnd, 4);          // 0 none, 1 cw90, 2 cw180, 3 ccw90
+        int w = (rot == 1 || rot == 2) ? -5 : 5;
+        int d = (rot == 2 || rot == 3) ? -5 : 5;
+        if (!lowestCorner(mc, gflags, worldSeed, x0 + 7, z0 + 7, w, d, &lo)) return 1;
+        return lo >= 60;
+    }
+    default:
+        return 1;
+    }
+}
+
+// Does this structure type pay for a terrain check on this version?
+static int hasPlacementRule(int mc, int stype)
+{
+    return mc >= MC_1_18 && (stype == Desert_Pyramid || stype == Jungle_Pyramid ||
+                             stype == Mansion);
+}
+
 int queryStage1(const Query *q, uint64_t s48, Match *m)
 {
     // Zero it: callers declare Match on the stack, and haveSpawn/haveEyes must
@@ -766,13 +1401,24 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
         // SPAWN_MARGIN. Over-admits; pass 2 then checks it exactly.
         int reach = c->within + (c->parent == PARENT_SPAWN ? SPAWN_MARGIN : 0);
 
+        // Footprint collision: a rare pairing, so filtering it here on pure
+        // geometry kills the overwhelming majority of seeds before any biome
+        // work happens. Pass 2 re-runs it with viability checks.
+        if (c->type == CT_OVERLAP) {
+            Pos a, b;
+            int area = overlapFind(q, k, s48, centre, reach, NULL, &a, &b);
+            if (area <= 0) return 0;
+            m->pos[k] = a; m->partner[k] = b; m->overlapArea[k] = area;
+            continue;
+        }
+
         // Cluster: at least structMin instances within reach. Pass 1 counts
         // geometry only (no biome generator yet); pass 2 re-counts viability.
         if (c->structMin > 1) {
             Pos cen;
             int got = (c->spread > 0)
-                ? tightCluster(q, k, s48, centre, reach, NULL, &cen)
-                : countInstances(q, k, s48, centre, reach, NULL, &cen);
+                ? tightCluster(q, k, s48, 0, centre, reach, NULL, &cen)
+                : countInstances(q, k, s48, 0, centre, reach, NULL, &cen);
             if (got < c->structMin) return 0;
             m->pos[k] = cen;
             continue;
@@ -931,15 +1577,38 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             continue;
         }
 
+        if (c->type == CT_OVERLAP) {
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
+            // Re-run the pair search with the biome generator: pass 1 only knew
+            // the two structures would be ATTEMPTED there, not that either
+            // actually generates. A pair where one half fails viability is not
+            // an overlap at all.
+            Pos a, b;
+            int area = overlapFind(q, k, s48, centre, c->within, g, &a, &b);
+            if (area <= 0) return 0;
+            fixed->pos[k] = a;
+            fixed->partner[k] = b;
+            fixed->overlapArea[k] = area;
+            continue;
+        }
+
         if (c->type == CT_ORE) {
             Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
             if (!haveSN) { initSurfaceNoise(&sn, dim, worldSeed); haveSN = 1; }
             int nm; const OreMaterial *tab = oreMaterials(&nm);
-            int cnt = oreCountMaterial(g, &sn, q->mc, &tab[c->oreMat],
-                                       centre.x, centre.z, c->within);
+            int vein = 0;
+            // Vein connectivity costs a sort plus a flood fill, so only compute
+            // it when something asks: a threshold, or a leaderboard on it.
+            int wantVein = c->veinMin > 0 ||
+                           (q->rankIdx == k && rankMetric(q) == RANK_VEIN);
+            int cnt = oreScan(g, &sn, q->mc, queryGenFlags(q), &tab[c->oreMat],
+                              centre.x, centre.z, c->within,
+                              c->oreExposed, wantVein ? &vein : NULL);
             if (cnt < c->oreMin) return 0;
+            if (c->veinMin > 0 && vein < c->veinMin) return 0;
             fixed->pos[k] = centre;
             fixed->oreCount[k] = cnt;
+            fixed->veinMax[k] = vein;
             continue;
         }
 
@@ -960,6 +1629,30 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             if (cnt < c->slimeMin) return 0;
             fixed->pos[k] = centre;
             fixed->slimeCount[k] = cnt;
+            continue;
+        }
+
+        if (c->type == CT_ISLAND) {
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
+            // The reference must be LAND, and ocean must cover >= pct% of the
+            // disc: a small island in open water. Same surface probe as biomes.
+            int cid = getBiomeAt(g, 0, (centre.x>>4)*4 + 2, 319 >> 2, (centre.z>>4)*4 + 2);
+            if (isOceanic(cid)) return 0;                 // spawn itself is water
+            int64_t lim = (int64_t)c->within * c->within;
+            int step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
+            int total = 0, ocean = 0;
+            for (int dx = -c->within; dx <= c->within; dx += step)
+            for (int dz = -c->within; dz <= c->within; dz += step) {
+                if ((int64_t)dx*dx + (int64_t)dz*dz > lim) continue;
+                int bx = centre.x + dx, bz = centre.z + dz;
+                total++;
+                if (isOceanic(getBiomeAt(g, 0, (bx>>4)*4 + 2, 319 >> 2, (bz>>4)*4 + 2))) ocean++;
+            }
+            if (total <= 0 || (int64_t)ocean * 100 < (int64_t)c->areaPct * total)
+                return 0;
+            fixed->pos[k] = centre;
+            fixed->areaCells[k] = ocean;
+            fixed->areaTotal[k] = total;
             continue;
         }
 
@@ -990,6 +1683,20 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
 
         if (c->type == CT_HEIGHT) {
             Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
+            if (c->exactTerrain) {
+                // Real block-level terrain under the footprint -- the true cliff
+                // signal. Only reachable for survivors of every cheaper filter
+                // (the planner sorts this dead last), so the ~ms cost is paid rarely.
+                int peak, relief;
+                if (!exactFootprint(q->mc, queryGenFlags(q), worldSeed, centre, c->within, &peak, &relief))
+                    return 0;
+                if (peak < c->heightMin) return 0;
+                if (c->reliefMin > 0 && relief < c->reliefMin) return 0;
+                fixed->pos[k] = centre;
+                fixed->peakHeight[k] = peak;
+                fixed->peakDrop[k] = relief;
+                continue;
+            }
             // mapApproxHeight needs SurfaceNoise only between Beta 1.8 and 1.18;
             // 1.18+ derives height from the biome noise directly. Reuse the ore
             // pass's sn (inited once per dim).
@@ -1001,6 +1708,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             int64_t lim = (int64_t)c->within * c->within;
             int step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
             int peak = -64; Pos peakPos = centre; int found = 0;
+            int valley = 4096;   // track the lowest surface too, for relief
             for (int dx = -c->within; dx <= c->within; dx += step)
             for (int dz = -c->within; dz <= c->within; dz += step) {
                 if ((int64_t)dx*dx + (int64_t)dz*dz > lim) continue;
@@ -1010,10 +1718,13 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 int h = (int)y;
                 found = 1;
                 if (h > peak) { peak = h; peakPos = (Pos){bx, bz}; }
+                if (h < valley) valley = h;
             }
             if (!found || peak < c->heightMin) return 0;
+            if (c->reliefMin > 0 && (peak - valley) < c->reliefMin) return 0;
             fixed->pos[k] = peakPos;
             fixed->peakHeight[k] = peak;
+            fixed->peakDrop[k] = found ? (peak - valley) : 0;
             continue;
         }
 
@@ -1062,8 +1773,8 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
         if (c->type == CT_STRUCTURE && c->structMin > 1) {
             Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
             Pos cen; int cnt = (c->spread > 0)
-                ? tightCluster(q, k, s48, centre, c->within, g, &cen)
-                : countInstances(q, k, s48, centre, c->within, g, &cen);
+                ? tightCluster(q, k, s48, worldSeed, centre, c->within, g, &cen)
+                : countInstances(q, k, s48, worldSeed, centre, c->within, g, &cen);
             if (cnt < c->structMin) return 0;
             fixed->pos[k] = cen;
             fixed->structCount[k] = cnt;
@@ -1079,9 +1790,52 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             fixed->pos[k] = p;
         }
 
+        // Population-seeded feature: pass 1 could not place it, so find it here
+        // with the full world seed. Nearest instance to the reference wins.
+        if (c->type == CT_STRUCTURE && isPopulationFeature(c->structType)) {
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
+            StructureConfig sc;
+            if (!getStructureConfig(c->structType, q->mc, &sc)) return 0;
+            double span = sc.regionSize * 16.0;
+            int r0x = (int)floor((centre.x - c->within) / span);
+            int r1x = (int)floor((centre.x + c->within) / span);
+            int r0z = (int)floor((centre.z - c->within) / span);
+            int r1z = (int)floor((centre.z + c->within) / span);
+            int64_t lim = (int64_t)c->within * c->within, best = INT64_MAX;
+            Pos bp = {0,0}; int found = 0; int bestSize = 0;
+            for (int rx = r0x; rx <= r1x; rx++)
+            for (int rz = r0z; rz <= r1z; rz++) {
+                Pos p;
+                if (!getStructurePos(c->structType, q->mc, worldSeed, rx, rz, &p)) continue;
+                int64_t d = d2(p, centre);
+                if (d > lim || d >= best) continue;
+                if (!isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
+                if (c->structType == Geode &&
+                    (c->geodeSize > 0 || c->reqCracked != 0 ||
+                     (q->rankIdx == k && rankMetric(q) == RANK_SIZE))) {
+                    StructureVariant sv;
+                    int biome = getBiomeAt(g, 0, (p.x>>4)*4+2, 319>>2, (p.z>>4)*4+2);
+                    if (!getVariant(&sv, Geode, q->mc, worldSeed, p.x, p.z, biome)) continue;
+                    if (c->reqCracked > 0 && !sv.cracked) continue;
+                    if (c->reqCracked < 0 &&  sv.cracked) continue;
+                    if (sv.size < c->geodeSize) continue;
+                    bestSize = sv.size;
+                }
+                best = d; bp = p; found = 1;
+            }
+            if (!found) return 0;
+            fixed->pos[k] = bp;
+            fixed->geodeSize[k] = bestSize;
+            continue;
+        }
+
         if (c->type == CT_STRUCTURE) {
             Pos p = (c->parent == PARENT_SPAWN) ? fixed->pos[k] : m->pos[k];
             if (!isViableStructurePos(c->structType, g, p.x, p.z, 0))
+                return 0;
+            // Terrain rules the engine does not model (1.18+). Runs after the
+            // biome check because it is orders of magnitude more expensive.
+            if (!placementOk(q->mc, queryGenFlags(q), worldSeed, c->structType, p))
                 return 0;
             if (c->surfaceOnly || c->reqAbandoned || c->reqBasement || c->reqGiant) {
                 // Variant checks. Each reads the exact RNG decision the game
@@ -1095,6 +1849,34 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 if (c->reqAbandoned && !sv.abandoned)  return 0;
                 if (c->reqBasement  && !sv.basement)   return 0;
                 if (c->reqGiant     && !sv.giant)      return 0;
+            }
+            if (c->reqExposed) {
+                // The buried-treasure chest sits at chunk-local (9,9) on the solid
+                // surface. If that surface is at/above sea level it's a dry-land
+                // (exposed/reachable) treasure; below = submerged. Exact terrain
+                // on 1.18+, the smoothed estimate on older versions.
+                int cx = (p.x & ~15) + 9, cz = (p.z & ~15) + 9, surf;
+                if (q->mc >= MC_1_18) {
+                    int rel;
+                    if (!exactFootprint(q->mc, queryGenFlags(q), worldSeed, (Pos){cx, cz}, 0, &surf, &rel))
+                        return 0;
+                } else {
+                    if (!haveSN) { initSurfaceNoise(&sn, dim, worldSeed); haveSN = 1; }
+                    float y = 0;
+                    mapApproxHeight(&y, NULL, g, &sn, cx >> 2, cz >> 2, 1, 1);
+                    surf = (int)y;
+                }
+                if (surf < SEA_LEVEL) return 0;
+            }
+            if (c->reqShip) {
+                // Enumerate the end city's jigsaw and require an END_SHIP piece
+                // (the guaranteed-elytra ship). Exact -- reads the real assembly.
+                Piece pieces[END_CITY_PIECES_MAX];
+                int np = getEndCityPieces(pieces, worldSeed, p.x >> 4, p.z >> 4);
+                int hasShip = 0;
+                for (int pi = 0; pi < np; pi++)
+                    if (pieces[pi].type == END_SHIP) { hasShip = 1; break; }
+                if (!hasShip) return 0;
             }
             fixed->pos[k] = p;
         } else {

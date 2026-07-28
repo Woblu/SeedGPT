@@ -11,6 +11,7 @@
 #include "util.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include <inttypes.h>
 
@@ -35,9 +36,10 @@ int main(int argc, char **argv)
     int mc = (argc > 2) ? str2mc(argv[2]) : MC_1_21;
     if (mc < 0) { fprintf(stderr, "unknown version %s\n", argv[2]); return 2; }
     int radius = (argc > 3) ? atoi(argv[3]) : 2000;
+    int large  = (argc > 4) && !strcmp(argv[4], "large");
 
     Generator g;
-    setupGenerator(&g, mc, 0);
+    setupGenerator(&g, mc, large ? LARGE_BIOMES : 0);
     applySeed(&g, DIM_OVERWORLD, seed);
 
     Pos spawn = getSpawn(&g);

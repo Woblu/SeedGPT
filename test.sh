@@ -36,7 +36,7 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkbiomearea.c >/tmp/sc_test/b15 2>&1 \
 && ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1 \
 && ./build.sh tools/checkcluster.c >/tmp/sc_test/b17 2>&1 \
-&& ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1; then
+&& ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1 \n&& ./build.sh tools/checkplacement.c >/tmp/sc_test/b19 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -660,6 +660,227 @@ if python tools/checkpng.py build/tmp/test.png >/tmp/sc_test/png.log 2>&1; then
 else
   bad "PNG malformed" "$(cat /tmp/sc_test/png.log)"
 fi
+
+# Exact terrain reports REAL block heights, and cubiomes returns those as column
+# indices (0 = world Y -64, plus one for the air block above). If that
+# conversion is ever dropped, exact and approximate heights diverge by ~65 while
+# both still look like plausible mountain heights -- so compare the two.
+section "exact terrain height"
+cat > /tmp/sc_test/exact.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"pk","height":200,"within":32,"of":"origin","exact":true}]}
+EOF
+./build/find.exe /tmp/sc_test/exact.json 4000 16 2>/dev/null > /tmp/sc_test/exact.out
+ex_n=0; ex_low=0; : > /tmp/sc_test/exact.diffs
+while read -r eseed epk; do
+  ex_n=$((ex_n+1))
+  [ "$epk" -lt 200 ] && ex_low=$((ex_low+1))
+  app=$(./build/checkheight.exe "$eseed" 1.21 0 0 32 fine 2>/dev/null | grep -oE 'peak=-?[0-9]+' | cut -d= -f2)
+  d=$((epk - app)); [ "$d" -lt 0 ] && d=$(( -d ))
+  echo "$d" >> /tmp/sc_test/exact.diffs
+done < <(awk '/^SEED/{s=$2} /peak within/ && /x=/{gsub(/x=|z=|~/,""); print s, $4}' /tmp/sc_test/exact.out | head -8)
+# The approximation is a smoothed estimator on a 16-block lattice and reads LOW
+# on sharp peaks -- usually by ~15-35 blocks, occasionally by over 100. So a
+# single sample proves nothing; what a lost index-to-world-Y conversion looks
+# like is EVERY sample shifted by a further 65, which moves the median.
+ex_med=$(sort -n /tmp/sc_test/exact.diffs | awk '{a[NR]=$1} END{print (NR? a[int((NR+1)/2)] : 999)}')
+[ "$ex_n" -ge 3 ] && [ "$ex_med" -lt 50 ] \
+  && ok "exact terrain heights are world Y (median drift ${ex_med} blocks over $ex_n seeds)" \
+  || bad "exact terrain height drifted from the approximation" "checked=$ex_n median=$ex_med"
+[ "$ex_low" -eq 0 ] \
+  && ok "every exact-terrain result clears the requested peak" \
+  || bad "exact-terrain result below threshold" "under=$ex_low"
+
+# Leaderboard mode ranks a whole range instead of stopping at the first hits.
+# Two properties matter: the table is really sorted, and the top entry's score
+# reproduces independently (checkheight re-samples the same lattice).
+section "leaderboard (ranked search)"
+check_err "rank of an unknown condition rejected" \
+  '{"version":"1.21","conditions":[{"id":"pk","height":0,"within":200}],"rank":{"of":"nope","top":5}}' \
+  "no condition with id"
+cat > /tmp/sc_test/rank.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"pk","height":0,"within":200,"of":"origin"}],
+ "rank":{"of":"pk","by":"height","top":5}}
+EOF
+./build/find.exe /tmp/sc_test/rank.json 6000 16 2>/dev/null > /tmp/sc_test/rank.out
+rk_n=$(grep -c '^SEED' /tmp/sc_test/rank.out)
+rk_sorted=$(awk '/^SEED/{v=$NF; if (NR>1 && prev!="" && v>prev) {print "no"; exit} prev=v} END{print "yes"}' \
+            <(grep '^SEED' /tmp/sc_test/rank.out))
+[ "$rk_n" -eq 5 ] && [ "$rk_sorted" = "yes" ] \
+  && ok "leaderboard returns exactly the requested top 5, best first" \
+  || bad "leaderboard order or size wrong" "n=$rk_n sorted=$rk_sorted"
+rk_seed=$(grep -m1 '^SEED' /tmp/sc_test/rank.out | awk '{print $2}')
+rk_score=$(grep -m1 '^SEED' /tmp/sc_test/rank.out | awk '{print $NF}')
+rk_chk=$(./build/checkheight.exe "$rk_seed" 1.21 0 0 200 fine 2>/dev/null | grep -oE 'peak=-?[0-9]+' | cut -d= -f2)
+[ "$rk_score" = "$rk_chk" ] \
+  && ok "the top-ranked score reproduces independently ($rk_score)" \
+  || bad "top-ranked score disagreed with checkheight" "reported=$rk_score check=$rk_chk"
+
+# Ore veins: the largest FACE-CONNECTED blob, and exposure against real terrain.
+# Both must reproduce under checkore, which re-runs the scan from scratch.
+section "ore veins and exposure"
+check_err "exposed ore rejected before 1.18" \
+  '{"version":"1.17","conditions":[{"id":"d","ore":"diamond","count":1,"exposed":true,"within":48}]}' \
+  "1.18"
+cat > /tmp/sc_test/vein.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"d","ore":"diamond","count":1,"vein":18,"within":64,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/vein.json 4000 16 2>/dev/null > /tmp/sc_test/vein.out
+vn_n=0; vn_bad=0; vn_low=0
+while read -r vseed vx vz vvein; do
+  vn_n=$((vn_n+1))
+  [ "$vvein" -lt 18 ] && vn_low=$((vn_low+1))
+  chk=$(./build/checkore.exe "$vseed" diamond 1.21 "$vx" "$vz" 64 2>/dev/null | grep -oE 'vein=[0-9]+' | cut -d= -f2)
+  [ "$vvein" != "$chk" ] && vn_bad=$((vn_bad+1))
+done < <(awk '/^SEED/{s=$2} /biggest vein/ && /x=/{gsub(/x=|z=/,""); print s, $2, $3, $NF}' /tmp/sc_test/vein.out | head -6)
+[ "$vn_n" -ge 3 ] && [ "$vn_bad" -eq 0 ] \
+  && ok "largest-vein sizes reproduce exactly under independent re-count ($vn_n checked)" \
+  || bad "vein size disagreed with checkore" "checked=$vn_n mismatch=$vn_bad"
+[ "$vn_low" -eq 0 ] \
+  && ok "every vein result clears the requested vein size" \
+  || bad "vein result below threshold" "under=$vn_low"
+
+cat > /tmp/sc_test/exposed.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"d","ore":"diamond","count":150,"exposed":true,"within":48,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/exposed.json 120 16 2>/dev/null > /tmp/sc_test/exposed.out
+xp_n=0; xp_bad=0; xp_over=0
+while read -r xseed xx xz xcnt; do
+  xp_n=$((xp_n+1))
+  chk=$(./build/checkore.exe "$xseed" diamond 1.21 "$xx" "$xz" 48 exposed 2>/dev/null | grep -oE 'count=[0-9]+' | cut -d= -f2)
+  [ "$xcnt" != "$chk" ] && xp_bad=$((xp_bad+1))
+  # Exposed is a SUBSET of the total; more exposed than total means the filter
+  # is counting something that is not there.
+  tot=$(./build/checkore.exe "$xseed" diamond 1.21 "$xx" "$xz" 48 2>/dev/null | grep -oE 'count=[0-9]+' | cut -d= -f2)
+  [ "$xcnt" -gt "$tot" ] && xp_over=$((xp_over+1))
+done < <(awk '/^SEED/{s=$2} /exposed ore/ && /x=/{gsub(/x=|z=/,""); print s, $2, $3, $4}' /tmp/sc_test/exposed.out | head -4)
+[ "$xp_n" -ge 2 ] && [ "$xp_bad" -eq 0 ] && [ "$xp_over" -eq 0 ] \
+  && ok "exposed-ore counts reproduce and stay a subset of the total ($xp_n checked)" \
+  || bad "exposed-ore count wrong" "checked=$xp_n mismatch=$xp_bad over=$xp_over"
+
+# Structure overlap: the reported pair must actually sit within the sum of the
+# two nominal footprints, and both halves must be real (a village that fails its
+# biome check is not overlapping anything).
+section "structure overlap"
+check_err "cross-dimension overlap rejected" \
+  '{"version":"1.21","conditions":[{"id":"x","overlap":["village","fortress"],"within":2000}]}' \
+  "different dimensions"
+cat > /tmp/sc_test/overlap.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"ov","overlap":["village","ruined_portal"],"within":2000,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/overlap.json 200000 16 2>/dev/null > /tmp/sc_test/overlap.out
+ov_n=0; ov_far=0; ov_unviable=0
+while read -r oseed ax az bx bz; do
+  ov_n=$((ov_n+1))
+  # village half-extent 32 + ruined portal 8 = 40 blocks on each axis
+  dx=$((ax - bx)); [ "$dx" -lt 0 ] && dx=$(( -dx ))
+  dz=$((az - bz)); [ "$dz" -lt 0 ] && dz=$(( -dz ))
+  { [ "$dx" -ge 40 ] || [ "$dz" -ge 40 ]; } && ov_far=$((ov_far+1))
+  # Independent confirmation that the first half really generates there:
+  # checkcluster counts VIABLE instances in a tiny radius around the report.
+  vb=$(./build/checkcluster.exe "$oseed" village 1.21 "$ax" "$az" 16 2>/dev/null | grep -oE 'count=[0-9]+' | cut -d= -f2)
+  [ "${vb:-0}" -lt 1 ] && ov_unviable=$((ov_unviable+1))
+done < <(awk '/^SEED/{s=$2} /   ov  /{gsub(/x=|z=/,""); a=$2; b=$3; getline; gsub(/x=|z=/,""); print s, a, b, $1, $2}' \
+         /tmp/sc_test/overlap.out | head -6)
+[ "$ov_n" -ge 3 ] && [ "$ov_far" -eq 0 ] \
+  && ok "every overlap pair is inside the summed footprints ($ov_n checked)" \
+  || bad "overlap pair too far apart to touch" "checked=$ov_n far=$ov_far"
+[ "$ov_unviable" -eq 0 ] \
+  && ok "both halves of every overlap independently confirmed to generate" \
+  || bad "overlap reported a structure that does not generate" "bad=$ov_unviable"
+
+# Geodes are placed from the chunk POPULATION seed, so they need the full 64-bit
+# world seed -- filtering them on the 48-bit structure seed reports geodes that
+# are not in the world. checkvariant re-reads size/cracked from scratch.
+section "geode shape"
+check_err "geode cluster count rejected" \
+  '{"version":"1.21","conditions":[{"id":"g","structure":"geode","count":3,"within":500}]}' \
+  "count"
+cat > /tmp/sc_test/geode.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"g","structure":"geode","size":4,"cracked":false,"within":300,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/geode.json 40000 16 2>/dev/null > /tmp/sc_test/geode.out
+gd_n=0; gd_bad=0
+while read -r gseed gx gz; do
+  gd_n=$((gd_n+1))
+  line=$(./build/checkvariant.exe "$gseed" geode 1.21 --at "$gx" "$gz" 2>/dev/null)
+  echo "$line" | grep -q "size=4 cracked=0" || gd_bad=$((gd_bad+1))
+done < <(awk '/^SEED/{s=$2} /   g  /{gsub(/x=|z=/,""); print s, $2, $3}' /tmp/sc_test/geode.out | head -6)
+[ "$gd_n" -ge 3 ] && [ "$gd_bad" -eq 0 ] \
+  && ok "every geode is independently confirmed sealed and size 4 ($gd_n checked)" \
+  || bad "geode variant disagreed with checkvariant" "checked=$gd_n mismatch=$gd_bad"
+
+# From 1.18 three structures also refuse to generate on ground that is too low,
+# a rule cubiomes' biome-only viability check does not model -- so the finder
+# used to report structures that are not in the world. Measured against the real
+# MC 1.21.1 generator over 110 positions: 0 false positives, 5 false negatives
+# (cubiomes' terrain differs from the game's by a block or two, and a corner
+# under water reads higher in game than the solid ground we measure).
+section "1.18+ structure surface rules"
+cat > /tmp/sc_test/place.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"p","structure":"desert_pyramid","within":600,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/place.json 60000 16 2>/dev/null > /tmp/sc_test/place.out
+pl_n=0; pl_bad=0
+while read -r pseed px pz; do
+  pl_n=$((pl_n+1))
+  ./build/checkplacement.exe "$pseed" desert_pyramid 1.21 "$px" "$pz" >/dev/null 2>&1 \
+    || pl_bad=$((pl_bad+1))
+done < <(awk '/^SEED/{s=$2} /   p  / && /x=/{gsub(/x=|z=/,""); print s, $2, $3}' /tmp/sc_test/place.out | head -8)
+[ "$pl_n" -ge 5 ] && [ "$pl_bad" -eq 0 ] \
+  && ok "every reported desert pyramid passes the surface rule independently ($pl_n checked)" \
+  || bad "a reported pyramid fails its own surface rule" "checked=$pl_n bad=$pl_bad"
+
+# And the rule must actually reject something -- a gate that passes everything
+# is indistinguishable from no gate at all.
+cat > /tmp/sc_test/place2.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"p","structure":"desert_pyramid","within":600,"of":"origin"}]}
+EOF
+pl_seen=$(grep -c '^SEED' /tmp/sc_test/place.out)
+pl_rej=0
+for s in 37 53 118 131; do
+  ./build/checkplacement.exe "$s" desert_pyramid 1.21 240 -400 >/dev/null 2>&1 || pl_rej=$((pl_rej+1))
+done
+[ "$pl_rej" -ge 1 ] \
+  && ok "the surface rule rejects low ground (known-bad position confirmed)" \
+  || bad "the surface rule accepts everything" "rejections=$pl_rej"
+
+# Large Biomes is the same generator at a different biome scale, so it must
+# change results -- and every reported hit has to reproduce in THAT world, not
+# the default one. checkbiome re-samples with the same preset.
+section "large biomes world"
+cat > /tmp/sc_test/lb.json <<'EOF'
+{"version":"1.21","large_biomes":true,
+ "conditions":[{"id":"m","biome":"mushroom_fields","within":1500,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/lb.json 40000 16 2>/dev/null > /tmp/sc_test/lb.out
+lb_n=0; lb_bad=0; lb_same=0
+while read -r bseed bx bz; do
+  lb_n=$((lb_n+1))
+  ./build/checkbiome.exe "$bseed" 1.21 "$bx" "$bz" mushroom_fields large 2>/dev/null | grep -qE ' MATCH$' \
+    || lb_bad=$((lb_bad+1))
+  # The same point in the DEFAULT world is almost never the same biome; if it
+  # always were, the flag would not be reaching the generator at all.
+  # Anchored on " MATCH$" because a bare MATCH also matches the word MISMATCH.
+  ./build/checkbiome.exe "$bseed" 1.21 "$bx" "$bz" mushroom_fields 2>/dev/null | grep -qE ' MATCH$' \
+    && lb_same=$((lb_same+1))
+done < <(awk '/^SEED/{s=$2} /   m / && /x=/{gsub(/x=|z=/,""); print s, $2, $3}' /tmp/sc_test/lb.out | head -6)
+[ "$lb_n" -ge 3 ] && [ "$lb_bad" -eq 0 ] \
+  && ok "large-biomes hits reproduce in the large-biomes world ($lb_n checked)" \
+  || bad "a large-biomes hit did not reproduce" "checked=$lb_n bad=$lb_bad"
+[ "$lb_same" -lt "$lb_n" ] \
+  && ok "the preset really changes the world (${lb_same}/${lb_n} also match by chance in default)" \
+  || bad "large biomes made no difference -- flag not reaching the generator" "same=$lb_same"
+
+# The map is the only way to check a result by eye, and the finder searches all
+# three dimensions -- so all three have to render. A blank or malformed PNG for
+# the nether would silently show an overworld-shaped lie.
+section "map dimensions"
+mapdim_bad=0
+for d in "" nether end; do
+  ./build/map.exe 1 1.21 2000 256 build/tmp/dim.png 0 0 - $d >/dev/null 2>&1
+  python tools/checkpng.py build/tmp/dim.png >/dev/null 2>&1 || mapdim_bad=$((mapdim_bad+1))
+done
+[ "$mapdim_bad" -eq 0 ]   && ok "overworld, nether and end all render a valid map"   || bad "a dimension failed to render" "bad=$mapdim_bad"
 
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"

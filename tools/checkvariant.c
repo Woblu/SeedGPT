@@ -16,6 +16,7 @@ static int name2struct(const char *s)
     if (!strcmp(s, "village"))       return Village;
     if (!strcmp(s, "igloo"))         return Igloo;
     if (!strcmp(s, "ruined_portal")) return Ruined_Portal;
+    if (!strcmp(s, "geode"))         return Geode;
     return -1;
 }
 
@@ -24,7 +25,7 @@ int main(int argc, char **argv)
     if (argc < 3) {
         fprintf(stderr,
             "usage: checkvariant <seed> <structure> [version] --at <x> <z>\n"
-            "       structures with variants: village igloo ruined_portal\n");
+            "       structures with variants: village igloo ruined_portal geode\n");
         return 2;
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
@@ -43,6 +44,13 @@ int main(int argc, char **argv)
     int biomeID = getBiomeAt(&g, 0, (x>>4)*4+2, 319>>2, (z>>4)*4+2);
     StructureVariant sv;
     getVariant(&sv, st, mc, seed, x, z, biomeID);
+    if (st == Geode) {
+        // A geode's size is its distribution-point count (3 or 4) and "cracked"
+        // is the 95% draw that opens it up; a sealed geode is the rare one.
+        printf("%lld geode x=%d z=%d biome=%s size=%d cracked=%d\n",
+               (long long)seed, x, z, biome2str(mc, biomeID), sv.size, sv.cracked);
+        return 0;
+    }
     printf("%lld %s x=%d z=%d biome=%s abandoned=%d basement=%d giant=%d underground=%d\n",
            (long long)seed, struct2str(st), x, z, biome2str(mc, biomeID),
            sv.abandoned, sv.basement, sv.giant, sv.underground);

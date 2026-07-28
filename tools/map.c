@@ -171,13 +171,25 @@ int main(int argc, char **argv)
     int radius = (argc > 3) ? atoi(argv[3]) : 2000;
     int px     = (argc > 4) ? atoi(argv[4]) : 512;
     const char *outpath = (argc > 5) ? argv[5] : NULL;
+    int cx     = (argc > 6) ? atoi(argv[6]) : 0;   // map centre (blocks)
+    int cz     = (argc > 7) ? atoi(argv[7]) : 0;
+    // The world preset has to reach the renderer too: a Large Biomes result
+    // drawn with the default generator is a picture of a different world.
+    int large  = (argc > 8) && !strcmp(argv[8], "large");
+    // Which dimension to draw. The finder searches all three, so a viewer that
+    // can only show the overworld cannot check half of what it reports.
+    int dim = DIM_OVERWORLD;
+    for (int i = 8; i < argc; i++) {
+        if (!strcmp(argv[i], "nether")) dim = DIM_NETHER;
+        else if (!strcmp(argv[i], "end")) dim = DIM_END;
+    }
     if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
     if (px < 64) px = 64;
     if (px > 2048) px = 2048;
 
     Generator g;
-    setupGenerator(&g, mc, 0);
-    applySeed(&g, DIM_OVERWORLD, seed);
+    setupGenerator(&g, mc, large ? LARGE_BIOMES : 0);
+    applySeed(&g, dim, seed);
 
     // One biome cell per output pixel. scale must be a valid cubiomes scale,
     // so pick the coarsest that still fills the image.
@@ -188,7 +200,10 @@ int main(int argc, char **argv)
     if (cells < 1) cells = 1;
     if (cells > px) cells = px;
 
-    Range r = {scale, (-radius) / scale, (-radius) / scale, cells, cells, 319 >> 2, 1};
+    // Nether biomes are 3D and its "surface" probe has to sit inside the roof;
+    // the overworld/end sample at build height like every other check here.
+    int probeY = (dim == DIM_NETHER) ? (64 >> 2) : (319 >> 2);
+    Range r = {scale, (cx - radius) / scale, (cz - radius) / scale, cells, cells, probeY, 1};
     int *cache = allocCache(&g, r);
     if (!cache) { fprintf(stderr, "alloc failed\n"); return 1; }
     if (genBiomes(&g, cache, r)) { fprintf(stderr, "genBiomes failed\n"); return 1; }
@@ -202,8 +217,9 @@ int main(int argc, char **argv)
     if (!img) { fprintf(stderr, "alloc failed\n"); return 1; }
     biomesToImage(img, colors, cache, cells, cells, scalePx, 1);
 
-    // block -> pixel
-    #define PX(bx) (int)(((double)((bx) + radius) / span) * w)
+    // block -> pixel (relative to the map centre cx/cz)
+    #define PX(bx) (int)(((double)((bx) - (cx - radius)) / span) * w)
+    #define PZ(bz) (int)(((double)((bz) - (cz - radius)) / span) * h)
 
     // Structures, drawn over the biomes.
     // Landmarks only. Trial chambers and ruined portals are dense enough
@@ -214,6 +230,9 @@ int main(int argc, char **argv)
         {"outpost",       255, 140,  40}, {"desert_pyramid", 250, 240, 160},
         {"jungle_temple", 120, 220, 120}, {"swamp_hut",      150, 110, 200},
         {"igloo",         230, 245, 255},
+        // nether + end landmarks, drawn when those dimensions are shown
+        {"fortress",      220,  60,  60}, {"bastion",        120,  90, 160},
+        {"end_city",      210, 200, 120},
     };
     int nstyle = (int)(sizeof(style)/sizeof(style[0]));
 
@@ -222,28 +241,31 @@ int main(int argc, char **argv)
         int type = queryStructureType(i);
         StructureConfig sc;
         if (!getStructureConfig(type, mc, &sc)) continue;
-        if (sc.dim != DIM_OVERWORLD) continue;
+        if (sc.dim != dim) continue;
 
         int si = -1;
         for (int k = 0; k < nstyle; k++) if (!strcmp(style[k].n, name)) si = k;
         if (si < 0) continue;               // only mark the notable ones
 
         double sp = sc.regionSize * 16.0;
-        int rr = (int)(radius / sp) + 1;
-        for (int rx = -rr; rx <= rr; rx++)
-        for (int rz = -rr; rz <= rr; rz++) {
+        int rx0 = (int)((cx - radius) / sp) - 1, rx1 = (int)((cx + radius) / sp) + 1;
+        int rz0 = (int)((cz - radius) / sp) - 1, rz1 = (int)((cz + radius) / sp) + 1;
+        for (int rx = rx0; rx <= rx1; rx++)
+        for (int rz = rz0; rz <= rz1; rz++) {
             Pos p;
             if (!getStructurePos(type, mc, seed, rx, rz, &p)) continue;
-            if (p.x < -radius || p.x > radius || p.z < -radius || p.z > radius) continue;
+            if (p.x < cx-radius || p.x > cx+radius || p.z < cz-radius || p.z > cz+radius) continue;
             if (!isViableStructurePos(type, &g, p.x, p.z, 0)) continue;
-            marker(img, w, h, PX(p.x), PX(p.z), 4,
+            marker(img, w, h, PX(p.x), PZ(p.z), 4,
                    style[si].rr, style[si].gg, style[si].bb);
         }
     }
 
-    Pos spawn = getSpawn(&g);
-    if (spawn.x >= -radius && spawn.x <= radius && spawn.z >= -radius && spawn.z <= radius)
-        crosshair(img, w, h, PX(spawn.x), PX(spawn.z));
+    // Only the overworld has a world spawn; drawing one elsewhere would be a
+    // crosshair over a place that means nothing.
+    Pos spawn = (dim == DIM_OVERWORLD) ? getSpawn(&g) : (Pos){INT32_MIN, INT32_MIN};
+    if (spawn.x >= cx-radius && spawn.x <= cx+radius && spawn.z >= cz-radius && spawn.z <= cz+radius)
+        crosshair(img, w, h, PX(spawn.x), PZ(spawn.z));
 
     FILE *f = stdout;
     if (outpath) {

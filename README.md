@@ -28,11 +28,17 @@ python serve.py        # opens http://127.0.0.1:8777
 ```
 
 The main screen is a single rounded prompt box: **describe the world you want**
-in plain English and press Enter. While it searches, the **seeds it's testing
-scroll past live**; matches appear below, each clickable for a **biome map** of
-that world — structures marked, spawn crosshaired, zoomable from 500 to 8,000
-blocks. Binds to loopback only — the search is a native binary, so this cannot
-be a hosted page; the server exists to bridge the browser to `build/find.exe`.
+in plain English and press Enter. Asking replaces what came before, the way a
+chat does — the previous results clear and the box empties — and a **stop**
+button sits beside the live scan, which kills the search process itself rather
+than just walking away from it. While it searches, the **seeds it's testing
+scroll past live**; matches appear below, and **every coordinate in a result is
+clickable**: it opens the **biome map** centred on that exact spot, in that
+structure's own dimension. The map covers **overworld, nether and end**, with
+structures marked and spawn crosshaired, zoomable from 200 to 20,000 blocks, and
+switching to the nether divides the coordinates by 8 the way a portal would.
+Binds to loopback only — the search is a native binary, so this cannot be a
+hosted page; the server exists to bridge the browser to `build/find.exe`.
 
 The **⚙ dot** by the prompt opens settings and the full **manual builder** —
 click conditions together by hand if you'd rather not use AI (it needs no key).
@@ -219,6 +225,59 @@ this happens. Loose proximity constraints are weak filters: "mansion within 2000
 blocks" is true of nearly every seed, because mansion regions are only 1280
 blocks wide.
 
+## Leaderboard: records, not matches
+
+Every condition above is a **filter**: pass or fail, and the search stops once it
+has enough hits. That answers "find me a seed with a tall mountain". It cannot
+answer "find me the *tallest* mountain", which is a different question — and the
+question the famous record hunts (Minecraft@Home's tallest cactus, biggest ore
+vein) actually ask.
+
+Add a `rank` block next to `conditions` and the finder becomes an optimiser:
+
+```json
+{
+  "version": "1.21",
+  "conditions": [ { "id": "pk", "height": 0, "within": 200, "of": "origin" } ],
+  "rank": { "of": "pk", "by": "height", "top": 10 }
+}
+```
+
+```
+ranking the top 10 by peak Y over 2000000 structure seeds (the full range is scanned -- no early stop)
+
+--- leaderboard: top 10 by peak Y ---
+
+SEED -6648438949905690143   peak Y = 251
+   peak           x=  -184 z=    72   ~251 peak within 200
+```
+
+`by` is optional — `auto` takes the ranked condition's own natural measurement,
+which is almost always what you want. The explicit metrics are `height`,
+`relief`, `vein`, `count`, `pct`, `size`, and `area` (overlap intersection).
+Rankable conditions are the ones that *measure* something: terrain height, ore,
+slime chunks, biome area, island, end-portal eyes, structure clusters, geode
+size, and overlap.
+
+Two things to know, because they change how you write the query:
+
+- **The whole range is scanned.** There is no early stop, because "the best of
+  the first twelve hits" is not a record. The range therefore sets the runtime
+  directly, and "best" means best *of exactly that many seeds* — the header line
+  says so, and you should quote it alongside any result. A query with **no
+  structure conditions** (terrain, ore, slime, biome area) has no 48-bit
+  geometry to filter on, so the finder walks **world seeds** directly instead of
+  structure seeds: one seed scanned is then one world evaluated, spread across
+  the whole 64-bit space by a bijection rather than counting up from zero. The
+  funnel says which mode ran.
+- **Set the ranked condition's threshold LOW.** `{"height": 0}` ranked by height
+  beats `{"height": 200}` ranked by height: the threshold still filters, so a
+  tight one just starves the leaderboard of candidates.
+
+Ranked results carry their score into the UI and the CSV/JSON export, and the
+score is reproducible — the suite re-derives the top entry's value with
+`tools/checkheight` and requires an exact match.
+
 ## Verification
 
 Nothing here is trusted without an independent check.
@@ -347,6 +406,80 @@ condition it will crawl, so pair it with a structure. `tools/checkore` re-counts
 independently, and the test suite confirms every reported count reproduces
 exactly (`find` == `checkore`) and clears the requested threshold.
 
+### Veins, and ore you can actually see
+
+Two extra measurements turn ore density into a record hunt:
+
+```json
+{ "id": "dia", "ore": "diamond", "count": 1, "vein": 14, "within": 64 }
+{ "id": "dia", "ore": "diamond", "count": 150, "exposed": true, "within": 48 }
+```
+
+`"vein": N` requires at least **N blocks in one face-connected blob** — the vein
+you mine in a single sitting, rather than a scattered total across the disc.
+Placements that happen to overlap merge into one larger vein, which is where the
+big numbers come from. A 64-block disc typically holds ~1,500 diamond blocks in
+total but a largest vein of only ~10; 24+ is rare.
+
+`"exposed": true` counts only ore with a **non-solid neighbour in Minecraft's
+real block terrain** — ore sitting in a cave or ravine wall, not sealed in stone.
+It generates actual terrain columns for every chunk that holds the ore, so it is
+the slowest filter in the tool: 1.18+ overworld only, radius capped at 48, and
+worth pairing with something cheap. Two honest caveats: the terrain model is
+solid/not-solid, so a water- or lava-filled pocket counts as "open" the same as
+air; and a neighbour in the *next chunk* is treated as solid, which can miss an
+exposed block at a chunk border but never invents one.
+
+`tools/checkore <seed> <material> <version> <x> <z> <radius> [exposed]` reports
+both figures independently, and the suite checks that finder and checker agree
+and that the exposed count is always a subset of the total.
+
+## Structure overlap
+
+Two structures generating into the same ground — a ruined portal inside a
+village, a shipwreck through a monument:
+
+```json
+{ "id": "ov", "overlap": ["village", "ruined_portal"], "within": 2000, "pad": 0 }
+```
+
+`within` is how far from the reference the **pair** may be; how close the two
+structures are to *each other* is the footprint test, not a radius. `pad` adds
+slack in blocks for "practically touching". Both halves are biome-viability
+checked, so a pair where one structure would not generate is rejected.
+
+> ⚠️ **Footprints are nominal.** cubiomes models where a structure is *placed*
+> exactly, but not the full extent it assembles into (`getVariant` sizes cover
+> only the starting piece of a jigsaw structure, and nothing at all for several
+> others). The boxes used here are per-structure approximations — village 64×64,
+> ruined portal 16×16, ancient city 128×128, and so on — so **a hit is a strong
+> candidate for a real collision, not a proof**. Sprawling structures (village,
+> mineshaft, fortress) reach well past their nominal box. Load the seed and look.
+
+The suite checks that every reported pair really sits inside the summed
+footprints and that both halves independently confirm as viable
+(`tools/checkcluster` re-counts them from scratch).
+
+## Amethyst geodes
+
+```json
+{ "id": "g", "structure": "geode", "size": 4, "cracked": false, "within": 300 }
+```
+
+`size` is the geode's distribution-point count — **3 or 4**, with 4 the big one.
+`cracked` is the 95% draw that breaks a geode open, so `"cracked": true` barely
+filters anything and **`"cracked": false` is the interesting ask**: the 1-in-20
+sealed geode that is still intact when you find it. Both come from `getVariant`,
+which reads the same draws the game makes, so they are exact.
+
+Geodes are placed from the **chunk population seed**, not the region-based
+structure grid. On 1.18+ that seed is derived from all 64 bits, so a geode
+cannot be located in pass 1 (which only knows the lower 48) — the finder places
+it in pass 2 with the full world seed instead. Two consequences: nothing can be
+measured *from* a geode (`"of": "g"` is rejected rather than silently wrong), and
+`count` clusters are not supported for it. `tools/checkvariant <seed> geode
+<version> --at <x> <z>` re-reads size and crack independently.
+
 ## Slime chunks
 
 Find a dense cluster of slime chunks near a point — the site for a slime farm:
@@ -464,6 +597,14 @@ structure," measure from one with a small radius: `{ "height": 130, "within": 48
 > leading `~` and the plan/UI label it "approx". `tools/checkheight` re-samples
 > the same estimate (confirming the finder reproduces it, not that the estimate
 > matches a real world), and the suite checks that.
+
+Adding `"exact": true` switches to cubiomes' **real block-level terrain**
+(`generateColumn`), which is a measurement rather than an estimate — at the cost
+of a heavy noise column per 4×4 cell, so the radius is capped at 48 and the
+planner runs it dead last. Pair it with `"relief": D` (peak minus valley) to find
+a structure on a genuine cliff edge rather than merely on high ground. Exact
+heights are reported in **world Y**, the same scale as the estimate; the suite
+compares the two so the column-index conversion cannot silently drift back.
 
 ## Biome area
 
@@ -654,8 +795,58 @@ This is a limitation of the engine's world model, not of the search: the
 coordinates are right, but whether the game populates that spot is unmodelled.
 Prefer biome-checked structures when you intend to visit the result.
 
+## World types
+
+```json
+{ "version": "1.21", "large_biomes": true, "conditions": [ ... ] }
+```
+
+`large_biomes` selects the Large Biomes world preset: the same generator with
+the biome scale multiplied, so structures, ores and terrain all still work —
+they just land in a differently shaped world. It is a property of the world, not
+of a condition, so it sits next to `conditions` and every generator the query
+builds is told about it. The UI carries it through search, **map and describe**
+alike; a Large Biomes result drawn with the default generator is a picture of a
+different world. `tools/checkbiome` and `tools/checkore` take a trailing `large`
+argument so results stay re-checkable in the world that produced them.
+
+Amplified, superflat and single-biome presets are **not** supported.
+
+## 1.18+ structure placement
+
+From 1.18, three structures refuse to generate on ground that is too low, and
+cubiomes' `isViableStructurePos` models the biome rules but not that one. The
+finder therefore used to report structures that are not in the world. The rules
+are now applied, read out of the shipped 1.21 classes rather than guessed:
+
+| structure | rule |
+|---|---|
+| desert pyramid | lowest of four corner heights across 21×21 from the chunk min ≥ 63 |
+| jungle temple | same across 12×15 ≥ 63 |
+| woodland mansion | a 5×5 box at chunk min + 7, signs flipped by the rotation the chunk's structure RNG draws first, ≥ 60 |
+
+Measured effect on what the finder reports: **45% of biome-viable desert
+pyramids, 26% of jungle temples and 7% of mansions were phantom** and are now
+rejected. Validated against the real MC 1.21.1 generator over 110 positions —
+**0 false positives**, 5 false negatives.
+
+Those false negatives are the deliberate direction. Minecraft's
+`WORLD_SURFACE_WG` counts water, we measure solid ground, and cubiomes' terrain
+differs from the game's by a block or two — so a structure sitting exactly on the
+threshold, or with a corner under water, can be rejected when the game would
+allow it. `tools/checkplacement <seed> <structure> <version> <x> <z>` re-derives
+the corners and prints the verdict.
+
 ## Known limitations
 
+- **Structure overlap uses nominal footprints.** The per-structure boxes are
+  approximations of assembled extent, not generated geometry, so an overlap hit
+  is a strong candidate rather than a proof — and a sprawling village can collide
+  with something outside its box without being reported. See
+  [Structure overlap](#structure-overlap).
+- **A leaderboard is only as good as its range.** "Best in 2 million seeds" is
+  the honest claim; nothing here searches the whole 2⁶⁴ space, and the ranked
+  header prints the range for exactly that reason.
 - **Biome conditions sample a lattice, so recall is below 100%.** Measured
   against an exhaustive quart-resolution scan (`tools/biomerecall.c`): at radius
   400, `fast` (64-block) recovers 90.4% of matching seeds and `fine` (16-block,

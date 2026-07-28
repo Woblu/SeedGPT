@@ -79,7 +79,7 @@ static DWORD WINAPI workerB(LPVOID arg)
 {
     PhaseB *s = (PhaseB*)arg;
     Generator g;
-    setupGenerator(&g, s->q->mc, 0);
+    setupGenerator(&g, s->q->mc, queryGenFlags(s->q));
     LootCache *lc = lootCacheNew();
     LARGE_INTEGER t;
     for (int i = 0; i < s->nseeds; i++)

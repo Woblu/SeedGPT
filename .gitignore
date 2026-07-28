@@ -29,3 +29,17 @@ tier2/out/
 tier2/cp.txt
 build/fu/
 tier2/logs/
+logs/
+# Harvested oracle data: reproducible by re-running the collectors, and large.
+tier3-bedrock/*.jsonl
+tier3-bedrock/obs_*.txt
+# Bedrock Dedicated Server: Mojang's binaries and the throwaway worlds the
+# oracle generates. The harness that drives it IS tracked; the server is not.
+tier3-bedrock/server/
+tier3-bedrock/bds.zip
+tier3-bedrock/out/
+tier2-outpost/.gradle/
+tier2-outpost/build/
+tier2-outpost/out/
+tier2-outpost/cp.txt
+tier2-outpost/logs/
