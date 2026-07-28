@@ -44,6 +44,20 @@ ROOT = Path(__file__).parent.parent
 SURFACE = ROOT / "build" / "surface.exe"
 
 
+def box_drop(seed, version, x, z, half=16):
+    """Ground low/high/drop around a position in ONE call to the C engine.
+
+    Ranking outposts this way costs a single subprocess each instead of one per
+    column, which is what makes it affordable to sweep a wide area and then
+    probe only the extreme tail. A tall foundation cannot exist without a tall
+    drop, so this is a necessary condition and a very cheap one.
+    """
+    p = subprocess.run([str(SURFACE), str(seed), version, str(x), str(z), str(half)],
+                       capture_output=True, text=True)
+    m = re.search(r"low=(-?\d+) high=(-?\d+) drop=(-?\d+)", p.stdout)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
 def ground(seed, version, x, z):
     p = subprocess.run([str(SURFACE), str(seed), version, str(x), str(z), "0"],
                        capture_output=True, text=True)
@@ -96,16 +110,28 @@ def cobble_column(bds, x, z, y0, y1):
     return best, run_top, run_bot
 
 
-def hunt_seed(bds, seed, version, reach, step, min_drop, min_cobble, verbose=False):
+def hunt_seed(bds, seed, version, reach, step, min_drop, min_cobble,
+              top_by_drop=2, verbose=False):
     finds = []
     outposts = sweep(bds, "pillager_outpost", reach, step)
-    for (x, z) in sorted(outposts):
+    # Rank every outpost by the ground drop around it -- one cheap C call each --
+    # and probe only the most extreme. Probing is the expensive stage, so it
+    # should be spent where a tall foundation is even possible.
+    ranked = []
+    for (x, z) in outposts:
+        d = box_drop(seed, version, x, z)
+        if d:
+            ranked.append((d[2], x, z))
+    ranked.sort(reverse=True)
+    if verbose and ranked:
+        print(f"    {len(ranked)} outposts, biggest drops "
+              f"{[r[0] for r in ranked[:5]]}", file=sys.stderr)
+    for (drop, x, z) in ranked[:top_by_drop]:
+        if drop < min_drop:
+            break                           # flat ground cannot hide a foundation
         cols = column_grid(seed, version, x, z)
         if not cols:
             continue
-        drop = cols[-1][0] - cols[0][0]
-        if drop < min_drop:
-            continue                        # flat ground cannot hide a foundation
         bds.command(f"tickingarea add circle {x} 64 {z} 4 hunt", timeout=20)
         time.sleep(2.5)
         try:
@@ -144,8 +170,10 @@ def main():
     ap.add_argument("--seeds", help="comma-separated seeds")
     ap.add_argument("--random", type=int, help="hunt this many random 32-bit seeds")
     ap.add_argument("--version", default="1.21", help="Java version for the terrain engine")
-    ap.add_argument("--reach", type=int, default=2500)
+    ap.add_argument("--reach", type=int, default=6000)
     ap.add_argument("--step", type=int, default=800)
+    ap.add_argument("--top-by-drop", type=int, default=2,
+                    help="probe only this many outposts per seed, steepest first")
     ap.add_argument("--min-drop", type=int, default=12,
                     help="ground variation nearby before an outpost is worth probing")
     ap.add_argument("--min-cobble", type=int, default=8,
@@ -174,7 +202,8 @@ def main():
         try:
             with Bds(seed) as bds:
                 finds = hunt_seed(bds, seed, a.version, a.reach, a.step,
-                                  a.min_drop, a.min_cobble, a.verbose)
+                                  a.min_drop, a.min_cobble, a.top_by_drop,
+                                  a.verbose)
         except Exception as e:                        # noqa: BLE001
             print(f"[{i}/{len(seeds)}] seed {seed}: FAILED {e}", file=sys.stderr)
             continue
