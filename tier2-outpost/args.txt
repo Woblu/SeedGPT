@@ -1,3 +1,0 @@
--cp ""
--d out
-src/main/java/OutpostWorldgen.java
