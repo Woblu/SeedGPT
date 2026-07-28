@@ -192,6 +192,13 @@ int  queryParse(Query *q, const char *json, char *err, size_t errlen);
 // Returns 0 on success (cycles / unknown parents are errors).
 int  queryPlan(Query *q, char *err, size_t errlen);
 
+// Can any seed satisfy this at all? Returns non-zero and explains when the
+// answer is provably no -- an outpost inside a village, two of the same
+// structure closer than the placement grid allows. Rarity is NOT judged here:
+// "12-eye portal" is possible and `--explain` estimates it honestly. Called by
+// queryPlan, so a search refuses up front instead of running forever.
+int  queryFeasible(const Query *q, char *err, size_t errlen);
+
 // Human-readable plan, so the ordering is auditable rather than implicit.
 void queryPrintPlan(const Query *q, FILE *f);
 

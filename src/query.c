@@ -69,6 +69,12 @@ static int exactFootprint(int mc, uint32_t gflags, uint64_t ws, Pos centre, int 
 }
 
 static int isPopulationFeature(int stype);   // defined with the vocabulary
+static int placementAllowed(int mc, uint64_t s48, int stype, Pos p);
+
+// Minecraft refuses to place a pillager outpost within this many chunks of a
+// village placement site (pillager_outposts.json: exclusion_zone). Declared
+// here because both the feasibility check and the placement rule need it.
+#define OUTPOST_VILLAGE_CHUNKS 10
 static int hasPlacementRule(int mc, int stype);   // 1.18+ surface rules, below
 
 static double geomCost(const Query *q, int i)
@@ -816,6 +822,98 @@ static int findId(const Query *q, const char *id)
     return -1;
 }
 
+// ------------------------------------------------------------- feasibility
+//
+// Some queries cannot be satisfied by ANY seed, and searching for them is not
+// merely slow -- it never ends. The two the engine can prove are the ones that
+// come from Minecraft's placement rules rather than from rarity:
+//
+//   * a structure inside another structure's exclusion zone (an outpost within
+//     10 chunks of a village -- see placementAllowed above)
+//   * two structures of the same type closer together than their grid can put
+//     them: offsets within a region span `chunkRange`, so two instances in
+//     adjacent regions are at least (spacing - chunkRange + 1) chunks apart
+//
+// Rarity is deliberately NOT judged here. "12-eye portal" is astronomically
+// unlikely but possible, and `--explain` already estimates that honestly; only
+// genuinely impossible things are refused, or the tool would be lying about
+// what it cannot do.
+static int minSameTypeGapBlocks(const Query *q, int stype)
+{
+    StructureConfig sc;
+    if (!getStructureConfig(stype, q->mc, &sc)) return 0;
+    if (sc.regionSize <= 0 || sc.chunkRange <= 0) return 0;
+    int gapChunks = sc.regionSize - sc.chunkRange + 1;
+    return gapChunks > 0 ? gapChunks * 16 : 0;
+}
+
+static int pairsOutpostAndVillage(const Cond *a, const Cond *b)
+{
+    return (a->structType == Outpost && b->structType == Village) ||
+           (a->structType == Village && b->structType == Outpost);
+}
+
+int queryFeasible(const Query *q, char *err, size_t errlen)
+{
+    const int OUTPOST_VILLAGE_MIN = (OUTPOST_VILLAGE_CHUNKS + 1) * 16;   // 176
+
+    for (int i = 0; i < q->n; i++) {
+        const Cond *c = &q->cond[i];
+
+        // An overlap condition naming both is impossible outright: their
+        // footprints can never meet if they are 11 chunks apart at best.
+        if (c->type == CT_OVERLAP && q->mc >= MC_1_14 &&
+            ((c->structType == Outpost && c->structType2 == Village) ||
+             (c->structType == Village && c->structType2 == Outpost))) {
+            snprintf(err, errlen,
+                "impossible: a pillager outpost never generates within %d chunks of a "
+                "village, so the two can never overlap. Minecraft's own placement data "
+                "excludes it (pillager_outposts.json: exclusion_zone, other_set=villages), "
+                "which also rules out an outpost inside a village",
+                OUTPOST_VILLAGE_CHUNKS);
+            return 1;
+        }
+
+        // A tight cluster closer than the grid allows.
+        if (c->type == CT_STRUCTURE && c->structMin > 1 && c->spread > 0) {
+            int gap = minSameTypeGapBlocks(q, c->structType);
+            if (gap > 0 && c->spread < gap) {
+                snprintf(err, errlen,
+                    "impossible: two %s can never be closer than %d blocks (the "
+                    "placement grid puts them in different regions), but this asks for "
+                    "%d of them within %d",
+                    struct2str(c->structType), gap, c->structMin, c->spread);
+                return 1;
+            }
+        }
+
+        // A structure measured from another structure, closer than allowed.
+        int p = c->parent;
+        if (c->type != CT_STRUCTURE || p < 0 || q->cond[p].type != CT_STRUCTURE)
+            continue;
+        if (q->mc >= MC_1_14 && pairsOutpostAndVillage(c, &q->cond[p]) &&
+            c->within < OUTPOST_VILLAGE_MIN) {
+            snprintf(err, errlen,
+                "impossible: a pillager outpost never generates within %d chunks (%d "
+                "blocks) of a village -- Minecraft's placement data excludes it. Ask "
+                "for %d blocks or more",
+                OUTPOST_VILLAGE_CHUNKS, OUTPOST_VILLAGE_MIN, OUTPOST_VILLAGE_MIN);
+            return 1;
+        }
+        if (c->structType == q->cond[p].structType) {
+            int gap = minSameTypeGapBlocks(q, c->structType);
+            if (gap > 0 && c->within < gap) {
+                snprintf(err, errlen,
+                    "impossible: two %s are never closer than %d blocks, but this asks "
+                    "for one within %d of another",
+                    struct2str(c->structType), gap, c->within);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 int queryPlan(Query *q, char *err, size_t errlen)
 {
     // resolve parents
@@ -962,6 +1060,8 @@ int queryPlan(Query *q, char *err, size_t errlen)
                 return 1;
             }
     }
+
+    if (queryFeasible(q, err, errlen)) return 1;
 
     // Leaderboard target. Ranking by a condition the query does not have is a
     // typo, not a default -- say so rather than silently searching unranked.
@@ -1196,6 +1296,7 @@ static int countInstances(const Query *q, int k, uint64_t s48, uint64_t worldSee
         Pos p;
         if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
         if (d2(p, centre) > lim) continue;
+        if (!placementAllowed(q->mc, s48, c->structType, p)) continue;
         if (g && !isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
         if (g && !placementOk(q->mc, queryGenFlags(q), worldSeed, c->structType, p)) continue;
         cnt++; sx += p.x; sz += p.z;
@@ -1237,6 +1338,7 @@ static int tightCluster(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
         int idx = j * W + i; has[idx] = 0;
         Pos p;
         if (!getStructurePos(c->structType, q->mc, s48, g0x + i, g0z + j, &p)) continue;
+        if (!placementAllowed(q->mc, s48, c->structType, p)) continue;
         if (g && !isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
         if (g && !placementOk(q->mc, queryGenFlags(q), worldSeed, c->structType, p)) continue;
         grid[idx] = p; has[idx] = 1;
@@ -1289,6 +1391,7 @@ static int overlapFind(const Query *q, int k, uint64_t s48, Pos centre, int reac
         Pos a;
         if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &a)) continue;
         if (d2(a, centre) > lim) continue;
+        if (!placementAllowed(q->mc, s48, c->structType, a)) continue;
         if (g && !isViableStructurePos(c->structType, g, a.x, a.z, 0)) continue;
 
         // Only the regions that could hold a second structure close enough.
@@ -1306,6 +1409,7 @@ static int overlapFind(const Query *q, int k, uint64_t s48, Pos centre, int reac
             if (ox <= 0 || oz <= 0) continue;
             int area = ox * oz;
             if (area <= best) continue;
+            if (!placementAllowed(q->mc, s48, c->structType2, b)) continue;
             if (g && !isViableStructurePos(c->structType2, g, b.x, b.z, 0)) continue;
             best = area;
             if (aOut) *aOut = a;
@@ -1387,6 +1491,56 @@ static int hasPlacementRule(int mc, int stype)
                              stype == Mansion);
 }
 
+// ------------------------------------------------- placement exclusion zones
+//
+// Some structures refuse to generate near another KIND of structure, and
+// cubiomes does not model it. From Minecraft's own placement data
+// (data/minecraft/worldgen/structure_set/pillager_outposts.json):
+//
+//     "exclusion_zone": { "chunk_count": 10, "other_set": "minecraft:villages" }
+//
+// and ExclusionZone.isPlacementForbidden -> hasStructureChunkInRange scans the
+// square of chunks within +-10 and asks whether any of them is a village
+// PLACEMENT chunk. Placement, not viability: a village that would fail its own
+// biome check still blocks the outpost. So this is pure 48-bit geometry and
+// belongs in pass 1, where it costs a couple of getStructurePos calls and kills
+// the candidate before any biome work.
+//
+// Consequence for the user: an outpost and a village can never be closer than
+// 11 chunks, which is what makes "an outpost inside a village" impossible
+// rather than merely rare.
+static int outpostBlockedByVillage(int mc, uint64_t s48, Pos p)
+{
+    StructureConfig vc;
+    if (!getStructureConfig(Village, mc, &vc)) return 0;
+    int cx = p.x >> 4, cz = p.z >> 4;
+    double span = vc.regionSize * 16.0;
+    // Village regions that could hold a placement chunk inside the square.
+    int r0x = (int)floor((double)((cx - OUTPOST_VILLAGE_CHUNKS) * 16) / span);
+    int r1x = (int)floor((double)((cx + OUTPOST_VILLAGE_CHUNKS) * 16) / span);
+    int r0z = (int)floor((double)((cz - OUTPOST_VILLAGE_CHUNKS) * 16) / span);
+    int r1z = (int)floor((double)((cz + OUTPOST_VILLAGE_CHUNKS) * 16) / span);
+    for (int rx = r0x; rx <= r1x; rx++)
+    for (int rz = r0z; rz <= r1z; rz++) {
+        Pos v;
+        if (!getStructurePos(Village, mc, s48, rx, rz, &v)) continue;
+        int vcx = v.x >> 4, vcz = v.z >> 4;
+        if (abs(vcx - cx) <= OUTPOST_VILLAGE_CHUNKS &&
+            abs(vcz - cz) <= OUTPOST_VILLAGE_CHUNKS)
+            return 1;                       // the game would refuse this outpost
+    }
+    return 0;
+}
+
+// Is this candidate position allowed by the placement rules cubiomes omits?
+// 48-bit only, so it is usable from either pass.
+static int placementAllowed(int mc, uint64_t s48, int stype, Pos p)
+{
+    if (stype == Outpost && mc >= MC_1_14)
+        return !outpostBlockedByVillage(mc, s48, p);
+    return 1;
+}
+
 int queryStage1(const Query *q, uint64_t s48, Match *m)
 {
     // Zero it: callers declare Match on the stack, and haveSpawn/haveEyes must
@@ -1444,6 +1598,7 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
             // match two DIFFERENT instances. Without this, "swamp_hut within
             // 140 of swamp_hut" is satisfied by the same hut at distance 0,
             // and multi-instance constellations (quad huts) never filter.
+            if (!placementAllowed(q->mc, s48, c->structType, p)) continue;
             int taken = 0;
             for (int j = 0; j < i && !taken; j++) {
                 int o = q->geom[j];
@@ -1500,6 +1655,7 @@ static int refind(const Query *q, int k, uint64_t s48, Pos centre,
         if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
         int64_t d = d2(p, centre);
         if (d > lim || d >= best) continue;
+        if (!placementAllowed(q->mc, s48, c->structType, p)) continue;
         // Same distinctness rule pass 1 applies: two conditions of the same
         // structure type must resolve to two different instances.
         int clash = 0;

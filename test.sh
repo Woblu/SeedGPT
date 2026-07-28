@@ -882,6 +882,40 @@ for d in "" nether end; do
 done
 [ "$mapdim_bad" -eq 0 ]   && ok "overworld, nether and end all render a valid map"   || bad "a dimension failed to render" "bad=$mapdim_bad"
 
+# Some queries no seed can satisfy. Minecraft's own placement data excludes a
+# pillager outpost within 10 chunks of a village, and the placement grid keeps
+# two of the same structure apart -- so those searches would run forever. They
+# must be refused up front, with the reason, and possible queries must NOT be.
+section "impossible queries"
+check_err "outpost inside a village rejected"   '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":500},{"id":"o","structure":"outpost","within":80,"of":"v"}]}'   "impossible"
+check_err "outpost/village overlap rejected"   '{"version":"1.21","conditions":[{"id":"x","overlap":["outpost","village"],"within":3000}]}'   "never generates within 10 chunks"
+check_err "impossibly tight cluster rejected"   '{"version":"1.21","conditions":[{"id":"h","structure":"swamp_hut","count":4,"spread":50,"within":2000}]}'   "never be closer than"
+cat > /tmp/sc_test/possible.json <<'EOF'
+{"version":"1.21","conditions":[
+  {"id":"v","structure":"village","within":500,"of":"origin"},
+  {"id":"o","structure":"outpost","within":400,"of":"v"}]}
+EOF
+if ./build/find.exe /tmp/sc_test/possible.json 1 1 2>&1 | grep -qi "impossible"; then
+  bad "a legal outpost/village distance was refused"
+else
+  ok "an outpost 400 blocks from a village is still allowed"
+fi
+
+# The exclusion is a real placement rule, so it must also FILTER: every outpost
+# the finder reports has to be at least 11 chunks from any village placement.
+cat > /tmp/sc_test/excl.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"o","structure":"outpost","within":800,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/excl.json 200000 16 2>/dev/null > /tmp/sc_test/excl.out
+ex_n=0; ex_bad=0
+while read -r oseed ox oz; do
+  ex_n=$((ex_n+1))
+  near=$(./build/nearest.exe "$oseed" 1.21 list village 0 0 3000 2>/dev/null |     awk -v cx=$((ox/16)) -v cz=$((oz/16)) '{dx=$2-cx; dz=$3-cz;
+      if (dx<0) dx=-dx; if (dz<0) dz=-dz; if (dx<=10 && dz<=10) n++} END{print n+0}')
+  [ "$near" -gt 0 ] && ex_bad=$((ex_bad+1))
+done < <(awk '/^SEED/{s=$2} /   o / && /x=/{gsub(/x=|z=/,""); print s, $2, $3}' /tmp/sc_test/excl.out | head -8)
+[ "$ex_n" -ge 5 ] && [ "$ex_bad" -eq 0 ]   && ok "no reported outpost sits inside a village exclusion zone ($ex_n checked)"   || bad "an outpost was reported inside a village exclusion zone" "checked=$ex_n bad=$ex_bad"
+
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

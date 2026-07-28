@@ -849,6 +849,45 @@ threshold, or with a corner under water, can be rejected when the game would
 allow it. `tools/checkplacement <seed> <structure> <version> <x> <z>` re-derives
 the corners and prints the verdict.
 
+## Impossible queries are refused, not searched
+
+Some requests no seed can satisfy, and searching for them does not fail — it
+runs forever. The engine proves the ones that come from Minecraft's placement
+rules and refuses up front, with the reason:
+
+```
+$ find outpost-in-village.json
+plan error: impossible: a pillager outpost never generates within 10 chunks
+(176 blocks) of a village -- Minecraft's placement data excludes it. Ask for
+176 blocks or more
+```
+
+That rule is real and comes from the game's own data
+(`data/minecraft/worldgen/structure_set/pillager_outposts.json`):
+
+```json
+"exclusion_zone": { "chunk_count": 10, "other_set": "minecraft:villages" }
+```
+
+`ExclusionZone.isPlacementForbidden` scans the ±10-chunk square for a village
+**placement** chunk — placement, not viability, so a village that would fail its
+own biome check still blocks the outpost. cubiomes does not model this, so the
+finder used to report outposts the game will not build; it is now applied in
+pass 1, where it is pure 48-bit math.
+
+Currently proven impossible:
+
+- a pillager outpost within 176 blocks of a village (so "an outpost inside a
+  village", or on a building in one, cannot happen at all)
+- two of the same structure closer than the placement grid allows — villages
+  and swamp huts are never within ~144 blocks of each other, so a tighter
+  cluster is impossible
+
+**Rarity is deliberately not judged.** A 12-eye portal is astronomically
+unlikely but possible, and `--explain` estimates that honestly. Only genuinely
+impossible things are refused, or the tool would be lying about what it cannot
+do.
+
 ## Known limitations
 
 - **Structure overlap uses nominal footprints.** The per-structure boxes are

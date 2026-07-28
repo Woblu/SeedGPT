@@ -602,6 +602,25 @@ stopping at the first match, so set that condition's THRESHOLD LOW (e.g.
 {"height":0} ranked by height) -- a tight threshold starves the leaderboard.
 Use rank ONLY for superlatives; an ordinary request wants a plain filter.
 
+IMPOSSIBLE COMBINATIONS -- say so, do not emit a search:
+- A pillager outpost NEVER generates within 10 chunks (176 blocks) of a village.
+  Minecraft's placement data excludes it (pillager_outposts.json exclusion_zone),
+  so "an outpost in/on/next to a village", "an outpost on a village house/church",
+  and anything pairing them closer than 176 blocks is IMPOSSIBLE. Put that in
+  notes and emit the conditions that ARE possible (e.g. the village alone), or
+  use 176+ blocks if the user only wanted them nearby.
+- Two of the SAME structure are never closer than their grid allows (villages
+  ~144 blocks, swamp huts ~144). A tight cluster tighter than that is impossible.
+The engine refuses these too, but saying it in notes is faster and kinder than
+watching a search that cannot succeed.
+
+INSIDE a structure (which building, which room) is NOT expressible here. Village
+buildings ARE searchable, but by a separate real-worldgen tool in the UI ("Village
+buildings"), which finds villages containing N of a given building -- including
+temple (the church), library, mason, butcher and the smiths. If the request is
+about a building inside a village, say so in notes and emit a plain village
+condition.
+
 Rules:
 - Use ONLY structure/biome names from the vocabulary below. Never invent one.
 - If the request implies something none of these express, leave it out and say so
