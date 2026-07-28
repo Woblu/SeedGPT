@@ -47,6 +47,10 @@ PORT = int(os.environ.get("SEED_UI_PORT", "8777"))
 TIMEOUTS = {"plan": 15, "explain": 90, "search": 180, "describe": 30, "map": 60,
             "villagesmiths": 900}
 VERSION_RE = re.compile(r"^[0-9][0-9A-Za-z._-]{0,15}$")
+# Longest time budget a single search may request. Generous on purpose -- the
+# whole point is being able to leave it running -- but bounded so a typo cannot
+# pin every core until the server is restarted.
+MAX_SEARCH_SECONDS = 6 * 60 * 60
 
 
 class Failure(Exception):
@@ -185,6 +189,9 @@ def parse_funnel(out: str) -> dict:
     if m:
         f["mseeds_s"] = float(m.group(1))
     f["too_loose"] = "Tighten" in out
+    # A budgeted run that ran out of time scanned fewer seeds than asked for,
+    # and any "best of N" claim has to say so.
+    f["timed_out"] = "time budget expired" in out
     return f
 
 
@@ -576,6 +583,14 @@ World preset. If the request says "large biomes", add "large_biomes": true next
 to "conditions". It is a property of the world, not of a condition, and it
 changes every biome answer -- so never set it unless it was asked for.
 
+Search budget. If the request says how long or how far to look -- "search for
+ten minutes", "scan 50 million seeds", "keep looking for an hour" -- add a
+sibling key next to "conditions":
+  "budget": {"minutes": M}   or   {"seeds": N}
+Minutes is the better unit for a leaderboard, because how many seeds a range
+buys depends entirely on how expensive the query is. Only include it if the
+request actually mentions an amount of time or seeds.
+
 Leaderboard (records). If the request is superlative -- "the TALLEST mountain",
 "the BIGGEST diamond vein", "the most slime chunks", "the largest mushroom
 island" -- add a sibling key next to "conditions":
@@ -683,6 +698,17 @@ def api_gemini(body) -> dict:
     q = {"version": ver, "conditions": conds}
     # A leaderboard request survives only if it names a condition that exists;
     # a dangling "rank" would be a hard planner error rather than a search.
+    # A budget the model emitted travels back to the UI, which owns the
+    # controls -- the planner itself has no notion of wall-clock time.
+    budget = obj.get("budget")
+    if isinstance(budget, dict):
+        b = {}
+        if isinstance(budget.get("minutes"), (int, float)) and budget["minutes"] > 0:
+            b["minutes"] = min(float(budget["minutes"]), 360.0)
+        if isinstance(budget.get("seeds"), (int, float)) and budget["seeds"] > 0:
+            b["seeds"] = min(int(budget["seeds"]), 500_000_000)
+        if b:
+            q["budget"] = b
     rank = obj.get("rank")
     if isinstance(rank, dict) and any(c.get("id") == rank.get("of") for c in conds):
         q["rank"] = {"of": rank["of"],
@@ -833,6 +859,13 @@ class Handler(BaseHTTPRequestHandler):
         rng = str(max(1, min(500_000_000, int(body.get("range", 3_000_000)))))
         threads = str(max(1, min(64, int(body.get("threads", 16)))))
         env = dict(os.environ); env["FIND_STREAM"] = "1"
+        # A time budget lets the caller say "look for ten minutes" instead of
+        # guessing a seed count, which is the honest unit for a leaderboard:
+        # how far a range gets you depends entirely on the query.
+        seconds = float(body.get("seconds", 0) or 0)
+        seconds = max(0.0, min(seconds, MAX_SEARCH_SECONDS))
+        if seconds:
+            env["FIND_SECONDS"] = str(seconds)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -847,7 +880,10 @@ class Handler(BaseHTTPRequestHandler):
                              text=True, cwd=str(ROOT), env=env, bufsize=1)
         job = str(body.get("job", "")).strip()
         job_register(job, p)
-        watchdog = threading.Timer(TIMEOUTS["search"], p.terminate)
+        # The watchdog has to outlast the budget, or it would kill the search
+        # just as it was about to report what it found.
+        watchdog = threading.Timer(
+            (seconds + 60) if seconds else TIMEOUTS["search"], p.terminate)
         watchdog.start()
         buf = []
         try:

@@ -510,6 +510,15 @@
         <div><label for="threads">threads</label>
           <input type="number" id="threads" value="16" min="1" max="64"></div>
       </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px">
+        <div><label for="budgetMin">or search for (minutes)</label>
+          <input type="number" id="budgetMin" value="0" min="0" max="360" step="1"></div>
+        <div style="align-self:end">
+          <div class="hint" style="margin:0">0 = no limit. With a budget the
+            seed count is just an upper bound — leave it huge and let the clock
+            decide. A leaderboard only improves the longer it runs.</div>
+        </div>
+      </div>
       <div id="rankBox" style="margin-top:9px"></div>
       <div class="btnrow">
         <button id="planBtn">Plan</button>
@@ -1606,6 +1615,7 @@
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, job: runJob,
                              range: +$('#range').value || 3000000,
+                             seconds: budgetSeconds(),
                              threads: +$('#threads').value || 16 }) });
     if (!resp.ok) throw new Error((await resp.text()) || ('HTTP ' + resp.status));
     const reader = resp.body.getReader(), dec = new TextDecoder();
@@ -1629,6 +1639,11 @@
     return result;
   }
 
+  // Minutes in the box -> seconds for the server. Capped at six hours, which is
+  // also the server's ceiling; 0 means "no clock, use the seed count".
+  const budgetSeconds = () =>
+    Math.max(0, Math.min(360, +$('#budgetMin').value || 0)) * 60;
+
   async function runSearch(query, inheritedToken) {
     if (!query || !(query.conditions || []).length) { fail('nothing to search — add a condition'); return; }
     // A query may request a different MC version (e.g. something that only exists
@@ -1645,6 +1660,13 @@
     // reflect into the builder so result rows resolve their icons and the user
     // can open settings and tweak.
     loadQueryIntoBuilder(query);
+    // A budget from the natural-language layer drives the same controls the
+    // user would have set by hand, so what runs is visible rather than hidden.
+    if (query.budget) {
+      if (query.budget.minutes) $('#budgetMin').value = query.budget.minutes;
+      if (query.budget.seeds)   $('#range').value = query.budget.seeds;
+      delete query.budget;                  // not part of the engine's schema
+    }
     $('#main').classList.add('searched');   // collapse the hero, ChatGPT-style
     // A prompt hands down its own token (the Gemini call and the search are one
     // run); a direct Search press starts a fresh one, which also stops anything
@@ -1678,6 +1700,11 @@
         ['elapsed', (f.seconds ?? 0) + ' s'],
         ['throughput', (f.mseeds_s ?? 0) + ' M/s'],
       ]));
+      // "Best of N" has to name the N that was actually reached, not the one
+      // that was requested before the clock ran out.
+      if (f.timed_out)
+        out.append(el('div','note',
+          `Time budget reached — this is the best of the ${(f.scanned ?? 0).toLocaleString()} seeds actually scanned, not the full range. Give it longer for better results.`));
 
       if (f.pass1_pct != null) {
         const c = el('div','card');
@@ -1726,11 +1753,25 @@
             // z=736" and then panning to it by hand is the step that made
             // results feel unverifiable.
             const goCell = (x, z, structure) => {
-              const td = el('td', null, `x=${x}  z=${z}`);
-              td.style.cssText = 'cursor:pointer;text-decoration:underline dotted';
-              td.title = 'show this on the map';
+              const td = el('td');
+              const link = el('span', null, `x=${x}  z=${z}`);
+              link.style.cssText = 'cursor:pointer;text-decoration:underline dotted';
+              link.title = 'show this on the map';
               const dim = structure ? (vocab.structures[structure] || 'overworld') : 'overworld';
-              td.onclick = () => mapView(s.seed, { cx: x, cz: z, dim, radius: 600 });
+              link.onclick = () => mapView(s.seed, { cx: x, cz: z, dim, radius: 600 });
+              // Copying the coordinates is the thing you actually do with a
+              // result -- paste them into a /tp, or into another tool. The
+              // teleport form keeps the Y as ~ so it drops you on the surface.
+              const cp = el('button', 'tiny', '⧉');
+              cp.title = 'copy coordinates (shift-click for a /tp command)';
+              cp.style.marginLeft = '6px';
+              cp.onclick = (e) => {
+                const text = e.shiftKey ? `/tp @s ${x} ~ ${z}` : `${x} ${z}`;
+                navigator.clipboard?.writeText(text);
+                const was = cp.textContent;
+                cp.textContent = '✓'; setTimeout(() => cp.textContent = was, 800);
+              };
+              td.append(link, cp);
               return td;
             };
             if (s.spawn) {
@@ -2189,6 +2230,7 @@
              t: +$('#threads').value, c: conds,
              // A shared leaderboard link must rebuild as a leaderboard, or the
              // recipient silently gets a plain filter search instead.
+             b: budgetSeconds() / 60,
              k: rank.on ? { of: rank.of, by: rank.by, top: rank.top } : null,
              lb: largeBiomes() };
   }
@@ -2197,6 +2239,7 @@
     if (s.v) $('#version').value = s.v;
     if (s.r) $('#range').value = s.r;
     if (s.t) $('#threads').value = s.t;
+    if (s.b !== undefined) $('#budgetMin').value = s.b;
     $('#largeBiomes').checked = !!s.lb;
     rank.on = !!s.k;
     if (s.k) { rank.of = s.k.of || ''; rank.by = s.k.by || 'auto'; rank.top = s.k.top || 10; }

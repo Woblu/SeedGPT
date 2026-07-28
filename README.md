@@ -259,6 +259,18 @@ Rankable conditions are the ones that *measure* something: terrain height, ore,
 slime chunks, biome area, island, end-portal eyes, structure clusters, geode
 size, and overlap.
 
+### Budget it by time, not by seeds
+
+A seed count is a poor way to say "keep looking while I make coffee" -- how far
+a range gets you depends entirely on how expensive the query is, and the
+interesting queries are the slow ones. So a search can be given a **time
+budget** instead: the UI's "search for (minutes)" box, or `FIND_SECONDS` on
+`find.exe` directly. The scan stops when the clock runs out and reports
+whatever it found, and both the funnel and the UI say the budget expired --
+because "best of N seeds" has to name the N actually reached, not the one that
+was requested. Leave the seed count huge and let the clock decide. Asking for it
+in plain English works too ("search for ten minutes", "scan 50 million seeds").
+
 Two things to know, because they change how you write the query:
 
 - **The whole range is scanned.** There is no early stop, because "the best of

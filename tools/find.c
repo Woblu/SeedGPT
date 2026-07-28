@@ -68,6 +68,24 @@ static int g_want = MAX_HITS;
 static int g_stream = 0;
 static int g_hitstream = 0;   // FIND_HITSTREAM: print every hit, uncapped
 
+// Time budget (env FIND_SECONDS). A range is a poor way to ask for "keep
+// looking while I make coffee": how many seeds that buys depends entirely on
+// the query, and the interesting queries are the slow ones. A deadline lets the
+// caller spend an amount of TIME and take whatever the search found by then --
+// which is what a leaderboard wants, since it improves the longer it runs.
+static ULONGLONG g_deadline = 0;          // 0 = no limit
+static volatile LONG g_expired = 0;
+
+static inline int outOfTime(uint64_t scanned)
+{
+    // Checked once every 1024 seeds: GetTickCount64 is cheap but not free, and
+    // the fastest queries run millions of seeds a second.
+    if (!g_deadline || (scanned & 1023)) return 0;
+    if (GetTickCount64() < g_deadline) return 0;
+    InterlockedExchange(&g_expired, 1);
+    return 1;
+}
+
 // A bijection on 64 bits (splitmix64's finaliser). Whole-seed mode walks an
 // index and maps it through this, so a scan of N seeds is N DISTINCT world
 // seeds spread across the whole range rather than 0,1,2,... -- which would be a
@@ -98,6 +116,7 @@ static DWORD WINAPI worker(LPVOID arg)
     if (wholeSeed) {
         for (uint64_t i = j->lo; i < j->hi; i++) {
             if (g_found >= g_want) break;
+            if (outOfTime(j->scanned)) break;
             j->scanned++;
             uint64_t ws = mix64(i);
 
@@ -137,6 +156,7 @@ static DWORD WINAPI worker(LPVOID arg)
 
     for (uint64_t s48 = j->lo; s48 < j->hi; s48++) {
         if (g_found >= g_want) break;
+        if (outOfTime(j->scanned)) break;
         j->scanned++;
 
         if (g_stream) {
@@ -395,6 +415,12 @@ int main(int argc, char **argv)
     if (bias)    { explainCompare(&q, samples, nthreads, stdout); free(json); return 0; }
     if (explain) { explainQuery(&q, samples, nthreads, stdout);   free(json); return 0; }
 
+    const char *secs = getenv("FIND_SECONDS");
+    if (secs && atof(secs) > 0) {
+        g_deadline = GetTickCount64() + (ULONGLONG)(atof(secs) * 1000.0);
+        printf("time budget: %.0f seconds -- the scan stops when it expires, "
+               "whatever it has found by then\n", atof(secs));
+    }
     g_stream = getenv("FIND_STREAM") != NULL;
     g_hitstream = getenv("FIND_HITSTREAM") != NULL;
     if (g_hitstream) g_want = 0x7fffffff;   // don't stop early; stream them all
@@ -403,10 +429,12 @@ int main(int argc, char **argv)
     // one thing a record search must not do.
     if (q.rankTop > 0) {
         g_want = 0x7fffffff;
-        printf("ranking the top %d by %s over %" PRIu64 " %s "
-               "(the full range is scanned -- no early stop)\n\n",
+        printf("ranking the top %d by %s over %" PRIu64 " %s (%s)\n\n",
                q.rankTop, queryScoreLabel(&q), range,
-               q.ngeom == 0 ? "world seeds" : "structure seeds");
+               q.ngeom == 0 ? "world seeds" : "structure seeds",
+               g_deadline ? "or until the time budget runs out -- the funnel "
+                            "below says how many were actually scanned"
+                          : "the full range is scanned -- no early stop");
     }
     InitializeCriticalSection(&g_lock);
     Job *jobs = calloc(nthreads, sizeof(Job));
@@ -451,6 +479,10 @@ int main(int argc, char **argv)
     double r1 = 100.0 * p1 / (sc ? sc : 1);
     int wholeSeed = (q.ngeom == 0);
     printf("--- funnel ---\n");
+    // Without this line a budgeted run is indistinguishable from a tiny range,
+    // and "best of N seeds" would quietly mean a different N than requested.
+    if (g_expired)
+        printf("stopped    : time budget expired before the range was exhausted\n");
     if (wholeSeed) {
         // No geometry pass exists here, so reporting a survival rate would be
         // theatre: it is 100% by construction.
