@@ -5,6 +5,7 @@
 #include "terrain.h"
 #include "loot.h"
 #include "ore.h"
+#include "climate.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1120,6 +1121,10 @@ int queryPlan(Query *q, char *err, size_t errlen)
         }
     }
 
+    // Pass 1.5. Cheap enough to sit between the two passes, and it only ever
+    // rejects, so it needs no place in the cost model or the dependency order.
+    climatePlan(q, &q->clim);
+
     q->est_cost_ns = 0;
     for (int i = 0; i < q->ngeom; i++) q->est_cost_ns += geomCost(q, q->geom[i]);
     return 0;
@@ -1299,6 +1304,17 @@ void queryPrintPlan(const Query *q, FILE *f)
     for (int i = 0; i < q->nviab; i++) {
         int k = q->viab[i];
         fprintf(f, "    %d. %-42s ~%.0f ns\n", i+1, condDesc(q, k, buf, sizeof buf), viabCost(q, k));
+    }
+    // Not a pass of its own: a cheap test fused into the biome scans above,
+    // sparing them the full six-noise lookup wherever temperature already rules
+    // the biome out. Listed so the windows are auditable.
+    if (q->clim.n > 0) {
+        fprintf(f, "  temperature gate, inside the pass-2 biome scans\n");
+        for (int k = 0; k < q->n; k++)
+            if (q->clim.use[k])
+                fprintf(f, "       %-42s t in [%lld, %lld]\n",
+                        condDesc(q, k, buf, sizeof buf),
+                        (long long)q->clim.lo[k], (long long)q->clim.hi[k]);
     }
     fprintf(f, "  est. pass-1 cost: %.0f ns/seed\n\n", q->est_cost_ns);
 }
@@ -1863,8 +1879,10 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             for (int dz = -c->within; dz <= c->within; dz += step) {
                 if ((int64_t)dx*dx + (int64_t)dz*dz > lim) continue;
                 int bx = centre.x + dx, bz = centre.z + dz;
-                total++;
-                int id = getBiomeAt(g, 0, (bx>>4)*4 + 2, 319 >> 2, (bz>>4)*4 + 2);
+                total++;   // counted before the gate: it is the denominator
+                int qx = (bx>>4)*4 + 2, qz = (bz>>4)*4 + 2;
+                if (!climateMayHold(q, worldSeed, k, qx, qz)) continue;
+                int id = getBiomeAt(g, 0, qx, 319 >> 2, qz);
                 if (id == c->biomeId) match++;
             }
             // Integer test without floating point: match/total >= pct/100.
@@ -2108,7 +2126,11 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                     int bx = centre.x + dx, bz = centre.z + dz;
                     // surface sampling: biomes are 3D since 1.18; a y=63 probe
                     // lands in cave biomes. 319>>2 is what viability checks use.
-                    int id = getBiomeAt(g, 0, (bx>>4)*4 + 2, 319 >> 2, (bz>>4)*4 + 2);
+                    int qx = (bx>>4)*4 + 2, qz = (bz>>4)*4 + 2;
+                    // Temperature first: a third of the cost, and where it says
+                    // no the full six-noise lookup cannot say yes.
+                    if (!climateMayHold(q, worldSeed, k, qx, qz)) continue;
+                    int id = getBiomeAt(g, 0, qx, 319 >> 2, qz);
                     if (id != c->biomeId) continue;
                     hit = 1;
                     if (d < bestd) { bestd = d; best = (Pos){bx, bz}; }

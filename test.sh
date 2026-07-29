@@ -36,7 +36,8 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkbiomearea.c >/tmp/sc_test/b15 2>&1 \
 && ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1 \
 && ./build.sh tools/checkcluster.c >/tmp/sc_test/b17 2>&1 \
-&& ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1 \n&& ./build.sh tools/checkplacement.c >/tmp/sc_test/b19 2>&1; then
+&& ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1 \n&& ./build.sh tools/checkplacement.c >/tmp/sc_test/b19 2>&1 \
+&& ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -942,6 +943,36 @@ done < <(awk '/^SEED/{s=$2}
               match($0, /([0-9]+)-block cave below/, m) {
                   gsub(/x=|z=|,/,""); print s, $2, $3, m[1] }'          /tmp/sc_test/cave.out | head -5)
 [ "$cv_n" -ge 3 ] && [ "$cv_bad" -eq 0 ]   && ok "every reported cave under a structure re-measures identically ($cv_n checked)"   || bad "a reported cave did not reproduce" "checked=$cv_n bad=$cv_bad"
+
+# ---------------------------------------------------------------- climate gate
+# The gate makes biome searches several times faster by rejecting points on
+# temperature before the full lookup. That is only acceptable if it rejects
+# nothing real, so both halves of the claim are tested: that it reproduces the
+# generator's own temperature exactly, and that a search returns the same seeds
+# with it switched off.
+section "climate gate"
+cl=$(./build/climatecheck.exe 1.21 500 2>&1)
+echo "$cl" | grep -q "^SOUND"   && ok "gate reproduces the generator bit-for-bit and stays inside biome limits"   || bad "climate gate is unsound" "$cl"
+cl=$(./build/climatecheck.exe 1.21 200 large 2>&1)
+echo "$cl" | grep -q "^SOUND"   && ok "gate is sound in a large-biomes world too"   || bad "climate gate unsound with large biomes" "$cl"
+
+cat > /tmp/sc_test/gate.json <<'EOF'
+{"version":"1.21","conditions":[
+ {"id":"bad","biome":"badlands","within":350,"of":"village"},
+ {"id":"village","structure":"village","within":500,"of":"origin"}]}
+EOF
+# One thread, so the scan order is deterministic and the two runs are comparable.
+             ./build/find.exe /tmp/sc_test/gate.json 200000000 1 2>/dev/null | grep '^SEED' > /tmp/sc_test/gate.on
+SC_NO_CLIMATE=1 ./build/find.exe /tmp/sc_test/gate.json 200000000 1 2>/dev/null | grep '^SEED' > /tmp/sc_test/gate.off
+gn=$(wc -l < /tmp/sc_test/gate.on)
+[ "$gn" -ge 5 ] && cmp -s /tmp/sc_test/gate.on /tmp/sc_test/gate.off \
+  && ok "gated and ungated searches return identical seeds ($gn checked)" \
+  || bad "the gate changed the result set" "$(diff /tmp/sc_test/gate.off /tmp/sc_test/gate.on | head)"
+
+skipped=$(./build/find.exe /tmp/sc_test/gate.json 200000000 1 2>/dev/null | grep -oE 'temperature alone \([0-9.]+%\)' | grep -oE '[0-9]+' | head -1)
+[ "${skipped:-0}" -ge 50 ] \
+  && ok "the gate actually earns its place (${skipped}% of biome lookups skipped)" \
+  || bad "the gate skipped almost nothing" "skipped=${skipped:-0}%"
 
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"

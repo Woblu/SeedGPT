@@ -9,6 +9,7 @@
 #include "loot.h"
 #include "ore.h"
 #include "explain.h"
+#include "climate.h"
 #include "util.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,7 +55,7 @@ static void rankOffer(const Query *q, uint64_t ws, const Match *m, int score)
 typedef struct {
     const Query *q;
     uint64_t lo, hi;
-    uint64_t scanned, pass1, pass2, applies;
+    uint64_t scanned, pass1, pass2, applies, climgate, climskip;
     Hit hits[MAX_HITS];
     int nhits;
 } Job;
@@ -217,6 +218,8 @@ static DWORD WINAPI worker(LPVOID arg)
             break;
         }
     }
+    j->climgate = climateGated();     // thread-local, so read them here
+    j->climskip = climateSkipped();
     lootCacheFree(lc);
     return 0;
 }
@@ -456,9 +459,10 @@ int main(int argc, char **argv)
     double el = (double)(t1.QuadPart - t0.QuadPart) / freq.QuadPart;
 
     FILE *tsv = getenv("FIND_TSV") ? fopen(getenv("FIND_TSV"), "wb") : NULL;
-    uint64_t sc=0, p1=0, p2=0, ap=0; int shown = 0;
+    uint64_t sc=0, p1=0, p2=0, ap=0, cd=0, cg=0; int shown = 0;
     for (int i = 0; i < nthreads; i++) {
         sc += jobs[i].scanned; p1 += jobs[i].pass1; p2 += jobs[i].pass2; ap += jobs[i].applies;
+        cg += jobs[i].climgate; cd += jobs[i].climskip;
     }
     if (q.rankTop > 0) {
         // Leaderboard: the whole range was scanned, so these really are the
@@ -496,6 +500,10 @@ int main(int argc, char **argv)
     printf("scanned    : %" PRIu64 " structure seeds in %.2fs\n", sc, el);
     printf("pass1 (48b): %" PRIu64 "  (%.4f%% survive)\n", p1, r1);
     printf("applySeed  : %" PRIu64 "\n", ap);
+    if (cg)
+        printf("temp gate  : %" PRIu64 " of %" PRIu64 " biome lookups skipped on\n"
+               "             temperature alone (%.1f%%)\n",
+               cd, cg, 100.0 * cd / cg);
     printf("pass2 (64b): %" PRIu64 "  full world seeds\n", p2);
     printf("throughput : %.2f M structure-seeds/s\n", sc / el / 1e6);
     if (r1 > 50.0)

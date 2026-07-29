@@ -155,6 +155,16 @@ typedef struct {
 #define SCAN_FINE   16
 #define SCAN_EXACT   4
 
+// Which conditions the climate pre-filter can reject on temperature alone, and
+// the window each one needs. Filled by queryPlan; see climate.h for what it
+// buys and why rejecting on it loses nothing.
+typedef struct {
+    int     n;                    // 0 = nothing to gate, filter idle
+    char    use[MAX_COND];        // is this condition temperature-gated?
+    int64_t lo[MAX_COND];         // inclusive temperature limits, 1e4-scaled,
+    int64_t hi[MAX_COND];         // in the units climateToBiome is handed
+} ClimatePlan;
+
 typedef struct {
     int  mc;
     Cond cond[MAX_COND];
@@ -185,6 +195,7 @@ typedef struct {
     int  geom[MAX_COND]; int ngeom;   // pass 1: 48-bit, dependency order
     int  viab[MAX_COND]; int nviab;   // pass 2: 64-bit, cheapest first
     int  dims[3];        int ndims;   // distinct dimensions pass 2 must visit
+    ClimatePlan clim;                 // pass 1.5: reject on temperature alone
     double est_cost_ns;               // estimated cost per candidate seed
 } Query;
 
