@@ -9,7 +9,7 @@ A Minecraft Java Edition **seed finder**: describe the world features you want, 
 ```sh
 ./setup.sh                 # clone + pin the engine (first time only)
 ./build.sh tools/find.c    # library + build/find.exe
-./test.sh                  # 45-check regression suite
+./test.sh                  # 105-check regression suite
 ```
 
 Requires `clang`, `git`, and a JDK (for the verifiers). No `make`/`ninja` needed.
@@ -318,7 +318,7 @@ done < /tmp/hits.tsv
 
 `tools/biomecheck.c` shows what "viable" actually resolved to for a seed.
 
-`./test.sh` runs the whole thing as a regression suite (45 checks, ~85s): the
+`./test.sh` runs the whole thing as a regression suite (105 checks, ~3 min): the
 cross-validation above, planner reordering *and* cost-based ordering, six error
 paths, same-type distinctness, nether/end queries including the end-city
 exclusion zone, biome-precision plumbing, a real search whose every seed is
@@ -328,6 +328,37 @@ and the hand-rolled PNG encoder (signature, chunk CRCs, zlib length). Each
 assertion has been
 confirmed to fail when the behaviour it checks is broken — a green run means
 something.
+
+### The last resort: a real world (tier 3)
+
+Everything above checks our code against *another implementation*. Some claims
+have no second implementation to check against — anything Minecraft places
+*after* terrain, because features need a `WorldGenLevel` the headless backend
+cannot build. For those, `tier3-java/` runs an actual 1.21.1 server and reads
+blocks out of the world it generates.
+
+```sh
+python tier3-java/check_terrain.py 12345 40        # our heights vs the real world
+python tier3-java/check_cactus.py 12345 -2468 832 6
+python tier3-java/confirm_cactus.py <seed> <x> <z> <height>
+```
+
+`server.jar` is fetched from Mojang's own manifest and checksummed; it is never
+committed. Running it writes `eula=true`, which accepts Mojang's licence on that
+machine — a deliberate act, not a side effect.
+
+It is built around one trap: `/execute if block` on an unloaded chunk fails
+*exactly* like a block that is not there. Merging those is how earlier Bedrock
+work reached three separate false conclusions, so every probe is preceded by a
+positive control (y=−64 is bedrock in every overworld column) and answers
+"unknown" rather than "no".
+
+This is also what keeps the honest numbers honest. Our block-level heights are
+exact in about four columns out of five; the cactus simulation, which replays
+decoration RNG where one wrong column desynchronises a whole patch, lands at 79%
+of predicted columns exact and 98% of chunks exact on block count. So the search
+generates candidates and tier 3 confirms a record before it is claimed — the same
+split this project uses everywhere else.
 
 ## Chest loot
 
