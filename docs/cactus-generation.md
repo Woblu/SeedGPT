@@ -40,10 +40,24 @@ for (int l = 0; l < tries; l++) {
 }
 ```
 
+Confirmed against the real `RandomPatchFeature.java`, not paraphrased: the loop
+body is exactly the three `nextInt(j) - nextInt(j)` style offsets above, and the
+success counter only increments when the inner feature actually places.
+
 The inner feature is a `block_column`: one layer of cactus whose height is
 `biased_to_bottom(min 1, max 3)`, placed upward, gated by a
 `block_predicate_filter` requiring the target block to be **air** and a cactus to
 **survive** there (sand or cactus below, no solid block horizontally adjacent).
+
+`BiasedToBottomInt.sample` is **two** draws, not one:
+
+```java
+return this.minInclusive
+     + randomSource.nextInt(randomSource.nextInt(this.maxInclusive - this.minInclusive + 1) + 1);
+```
+
+For 1..3 that is `1 + nextInt(nextInt(3) + 1)`. Reading it as a single draw
+would consume one fewer number and desynchronise every later try in the patch.
 
 **That is where stacking comes from.** `y_spread` is 3, so a later try can land
 up to three blocks above the origin — on top of cactus a previous try just
@@ -59,17 +73,27 @@ populationSeed = getPopulationSeed(mc, worldSeed, chunkMinX, chunkMinZ)   // cub
 featureSeed    = populationSeed + index + 10000 * step
 ```
 
-For **desert**, measured from `data/minecraft/worldgen/biome/desert.json`:
+For **desert**, `patch_cactus_desert` sits in generation step **9** (vegetal
+decoration), and is the 47th entry counting through that biome's own feature
+list (49 total).
 
-| | value |
-|---|---|
-| generation step | **9** (vegetal decoration) |
-| running feature index | **47** |
-| total placed features in the biome | 49 |
+**That index is not the one the seeding uses**, and this is the trap that would
+have sunk a first attempt. `ChunkGenerator.applyBiomeDecoration` does not count
+per biome:
 
-The index is the running count across the biome's whole feature list, not the
-position within its step — confirm against `ChunkGenerator.applyBiomeDecoration`
-before trusting it, since getting it wrong shifts every draw.
+```java
+holderSet.stream().map(Holder::value)
+         .forEach(pf -> intSet.add(stepFeatureData.indexMapping().applyAsInt(pf)));
+...
+worldgenRandom.setFeatureSeed(l, p, k);   // p from that index set, not a counter
+```
+
+`p` is a **global** index into the topologically sorted list of every placed
+feature any biome contributes to that step, built by `FeatureSorter`. So getting
+it right means reconstructing that global ordering across all biomes, not
+counting entries in `desert.json`. An index that is merely close still yields
+cacti — just cacti in the wrong places, which is the failure mode this project
+exists to avoid.
 
 ## What is still missing
 
