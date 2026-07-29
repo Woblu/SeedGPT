@@ -83,31 +83,68 @@ def column_grid(seed, version, x, z, half=12, step=4):
     return cols
 
 
-def cobble_column(bds, x, z, y0, y1):
-    """Tallest run of cobblestone in [y0, y1] at one column, or (0, None, None).
+def wait_loaded(bds, x, z, timeout=20):
+    """Block until the chunk answers block queries, or give up.
 
-    Two non-cobble blocks are tolerated inside a run: real foundations have the
-    odd stair or window course, and stopping at the first gap would under-report
-    exactly the tall ones we are looking for.
+    A fixed sleep is a race, and losing it is silent: the first probe returns
+    "not loaded", the loop treats it as "no cobblestone here", and the outpost
+    is reported as having none. That is how a 66-block foundation got recorded
+    as a zero. Poll instead, and let the caller SKIP rather than publish a
+    number it did not measure.
     """
-    best, run_top, run_bot = 0, None, None
-    cur_top = None
-    misses = 0
-    for y in range(y1, y0 - 1, -1):
-        r = block_is(bds, x, y, z, "cobblestone")
-        if r is None:
-            return 0, None, None            # chunk not loaded: no claim
-        if r:
-            if cur_top is None:
-                cur_top = y
-            misses = 0
-            if cur_top - y + 1 > best:
-                best, run_top, run_bot = cur_top - y + 1, cur_top, y
-        elif cur_top is not None:
+    end = time.time() + timeout
+    while time.time() < end:
+        if block_is(bds, x, 64, z, "air") is not None:
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def cobble_column(bds, x, z, y0, y1, known_bottom=None):
+    """Height of the cobblestone run at one column, in ~8 probes instead of ~45.
+
+    BDS executes ONE console command per tick (measured: 61 ms sequential, 62 ms
+    pipelined -- queueing more does not help), so the only way to go faster is
+    to ask fewer questions. A foundation is a column of cobblestone rising from
+    the ground to the tower's floor, so its top can be found by BISECTION rather
+    than by walking every block.
+
+    The run is not perfectly solid -- a stair or window course can interrupt it --
+    so after bisecting, the top is nudged upward past small gaps. That costs a
+    few probes and keeps the tall ones from being under-reported, which is the
+    failure that matters here.
+    """
+    bot = known_bottom if known_bottom is not None else y0
+    if block_is(bds, x, bot, z, "cobblestone") is not True:
+        return 0, None, None
+
+    # Bisect for the highest y that is still cobblestone, assuming the run is
+    # contiguous from `bot` upward.
+    lo, hi = bot, y1
+    if block_is(bds, x, hi, z, "cobblestone") is True:
+        top = hi
+    else:
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            r = block_is(bds, x, mid, z, "cobblestone")
+            if r is None:
+                return 0, None, None            # chunk not loaded: no claim
+            if r:
+                lo = mid
+            else:
+                hi = mid
+        top = lo
+
+    # Step over short interruptions so a decorative course does not truncate a
+    # tall foundation. Two consecutive non-cobble blocks end it, as before.
+    y, misses = top + 1, 0
+    while y <= y1 and misses <= 2:
+        if block_is(bds, x, y, z, "cobblestone") is True:
+            top, misses = y, 0
+        else:
             misses += 1
-            if misses > 2:
-                cur_top, misses = None, 0
-    return best, run_top, run_bot
+        y += 1
+    return top - bot + 1, top, bot
 
 
 def hunt_seed(bds, seed, version, reach, step, min_drop, min_cobble,
@@ -133,22 +170,37 @@ def hunt_seed(bds, seed, version, reach, step, min_drop, min_cobble,
         if not cols:
             continue
         bds.command(f"tickingarea add circle {x} 64 {z} 4 hunt", timeout=20)
-        time.sleep(2.5)
         try:
+            if not wait_loaded(bds, x, z):
+                if verbose:
+                    print(f"    {x},{z} SKIPPED -- chunk never loaded", file=sys.stderr)
+                continue
             # Cheap detector first: cobblestone sitting AT ground level. That is
             # true both of the tower's own base and of any foundation filled
             # down the low side, so one probe per column finds the structure
             # without walking every column top to bottom.
-            hits = []
+            hits, lost = [], False
             for (g, cx, cz) in cols:
                 r = block_is(bds, cx, g + 1, cz, "cobblestone")
                 if r is None:
-                    break                   # chunk not loaded: claim nothing
+                    lost = True             # unloaded: NOT the same as "no cobble"
+                    break
                 if r:
                     hits.append((g, cx, cz))
+            if lost:
+                if verbose:
+                    print(f"    {x},{z} SKIPPED -- probe lost the chunk", file=sys.stderr)
+                continue
             best = (0, None, None, None, None)
             for (g, cx, cz) in hits[:4]:    # lowest ground first: cols is sorted
-                h, top, bot = cobble_column(bds, cx, cz, g - 4, g + 40)
+                # The detector already proved cobblestone at g+1, so the run's
+                # bottom is known and only its top has to be found.
+                # Ceiling near build height, not a fixed offset: bisection
+                # makes a wide window cost ~1 extra probe, while a narrow one
+                # silently TRUNCATES the tall finds. A 60-block foundation was
+                # reported as 40 purely because the old window stopped at g+40.
+                h, top, bot = cobble_column(bds, cx, cz, g + 1, 200,
+                                            known_bottom=g + 1)
                 if h > best[0]:
                     best = (h, cx, cz, top, bot)
             h, cx, cz, top, bot = best
