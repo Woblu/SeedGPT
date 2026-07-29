@@ -334,6 +334,8 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
                spawnRel ? "from spawn" : "from origin");
         if (cd->structType == Geode && mm->geodeSize[c] > 0)
             printf(", size %d", mm->geodeSize[c]);
+        if (mm->caveHeight[c] > 0)
+            printf(", %d-block cave below", mm->caveHeight[c]);
         printf("\n");
     }
     // machine-readable twin, for piping into verifiers

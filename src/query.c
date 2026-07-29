@@ -40,6 +40,10 @@
 #define NS_SLIME_CHUNK    6.0   // per chunk: one Java-RNG isSlimeChunk call
 #define NS_TERRAIN_CELL 200000.0 // exact terrain: one heavy noise column per 4x4
 #define SEA_LEVEL          63    // overworld sea level: at/above = dry land
+// How far below the surface a "cave under this structure" may be. Deep enough
+// to catch the big 1.18 cheese caverns, shallow enough that an ordinary
+// mineshaft-depth void two hundred blocks down does not count as "underneath".
+#define CAVE_SCAN_DEPTH    80
 
 // Real block-level terrain relief under a footprint, using cubiomes' actual
 // 1.18+ terrain (generateColumn / generateRegion) -- not the smoothed 1:4
@@ -131,6 +135,10 @@ static double viabCost(const Query *q, int i)
         // Sorts this structure behind everything that needs only biomes.
         if (hasPlacementRule(q->mc, c->structType))
             cost += 16.0 * NS_TERRAIN_CELL;
+        // A cave check generates real block columns for five points across the
+        // footprint: by far the most expensive thing a structure condition can
+        // ask for, so the planner must see it.
+        if (c->caveBelow > 0) cost += 5.0 * 16.0 * NS_TERRAIN_CELL;
         // A population-seeded feature is also LOCATED here, chunk by chunk,
         // because pass 1 could not place it.
         if (isPopulationFeature(c->structType)) {
@@ -663,6 +671,26 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                     goto done;
                 }
                 c->reqCracked = cJSON_IsTrue(jcr) ? 1 : -1;
+            }
+            // "cave_below": N -- the structure stands over an open cavern at
+            // least N blocks tall. Real block terrain, so this sees 1.18's
+            // noise caves, not just carved tunnels. A village on a thin crust
+            // above a cathedral-sized void is the thing this finds.
+            cJSON *jcave = cJSON_GetObjectItem(e, "cave_below");
+            if (jcave && cJSON_IsNumber(jcave)) {
+                if (q->mc < MC_1_18) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"cave_below\" needs MC 1.18+ "
+                        "(block-level terrain)", c->id);
+                    goto done;
+                }
+                if (sc.dim != DIM_OVERWORLD) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"cave_below\" is overworld-only", c->id);
+                    goto done;
+                }
+                c->caveBelow = jcave->valueint;
+                if (c->caveBelow < 1) c->caveBelow = 1;
             }
             // "ship": end city that contains an end ship (guaranteed elytra).
             cJSON *jship = cJSON_GetObjectItem(e, "ship");
@@ -2034,6 +2062,24 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                     surf = (int)y;
                 }
                 if (surf < SEA_LEVEL) return 0;
+            }
+            if (c->caveBelow > 0) {
+                // Sample a few columns across the footprint, not just the
+                // anchor: a village is 60+ blocks wide and the cavern that
+                // makes it interesting rarely sits exactly under one corner.
+                static const int OFF[5][2] =
+                    {{0,0},{16,16},{-16,-16},{16,-16},{-16,16}};
+                int best = 0, top = 0;
+                for (int i = 0; i < 5; i++) {
+                    int t = 0;
+                    int v = terrainVoidBelow(q->mc, worldSeed, queryGenFlags(q),
+                                             p.x + OFF[i][0], p.z + OFF[i][1],
+                                             CAVE_SCAN_DEPTH, &t);
+                    if (v > best) { best = v; top = t; }
+                }
+                if (best < c->caveBelow) return 0;
+                fixed->caveHeight[k] = best;
+                (void)top;
             }
             if (c->reqShip) {
                 // Enumerate the end city's jigsaw and require an END_SHIP piece

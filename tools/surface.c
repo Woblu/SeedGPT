@@ -31,6 +31,11 @@ int main(int argc, char **argv)
     if (half < 0)  half = 0;
     if (half > 64) half = 64;      // this is a footprint probe, not a survey
 
+    // "column" prints what is actually under the point, which is how a
+    // "cave below" result gets checked rather than trusted.
+    int column = 0;
+    for (int i = 5; i < argc; i++) if (!strcmp(argv[i], "column")) column = 1;
+
     int ok = 0;
     int centre = terrainSurfaceY(mc, seed, gflags, x, z, &ok);
     if (!ok) { fprintf(stderr, "no block-level terrain for this version (needs 1.18+)\n"); return 2; }
@@ -46,5 +51,12 @@ int main(int argc, char **argv)
     }
     printf("%lld x=%d z=%d surface=%d low=%d high=%d drop=%d half=%d\n",
            (long long)seed, x, z, centre, lo, hi, hi - lo, half);
+    if (column) {
+        int top = 0;
+        int v = terrainVoidBelow(mc, seed, gflags, x, z, 80, &top);
+        printf("  tallest void within 80 blocks below the surface: %d blocks", v);
+        if (v > 0) printf(", topping out at y=%d", top);
+        printf("\n");
+    }
     return 0;
 }

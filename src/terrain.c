@@ -1,5 +1,6 @@
 #include "terrain.h"
 #include "generator.h"
+#include <stdlib.h>
 
 // One context per thread: setupTerrainNoise is heavy, initTerrainNoise is per
 // seed, and a worker evaluates thousands of seeds in a row.
@@ -61,4 +62,41 @@ int terrainSurfaceY(int mc, uint64_t worldSeed, uint32_t flags, int x, int z, in
     const double *ds11 = noiseCell(tn, cellX + 1, cellZ + 1);
     if (ok) *ok = 1;
     return generateColumn(x, z, NULL, ds00, ds01, ds10, ds11, /*flag=*/1) - TERRAIN_Y_BIAS;
+}
+
+int terrainVoidBelow(int mc, uint64_t worldSeed, uint32_t flags, int x, int z,
+                     int depth, int *topOut)
+{
+    TerrainNoise *tn = terrainFor(mc, worldSeed, flags);
+    if (!tn) return 0;
+    // One chunk's worth of columns is the cheapest unit generateRegion offers
+    // with the block data attached; the caller samples a few points inside a
+    // structure footprint, which almost always share a chunk.
+    static _Thread_local int (*blocks)[TERRAIN_COLUMN];
+    if (!blocks) blocks = malloc(16 * 16 * sizeof(*blocks));
+    if (!blocks) return 0;
+    int cx = x >> 4, cz = z >> 4;
+    generateRegion(tn, cx, cz, 1, 1, blocks, NULL, /*flag=*/0);
+    int rx = x - (cx << 4), rz = z - (cz << 4);
+    const int *col = blocks[rx * 16 + rz];
+
+    // Find the surface, then the tallest run of non-solid blocks under it.
+    // A cavern the structure sits over is what this measures; open air above
+    // the ground is not a cave and must not count, which is why the scan
+    // starts strictly below the first solid block.
+    int surf = -1;
+    for (int i = TERRAIN_COLUMN - 1; i >= 0; i--)
+        if (col[i]) { surf = i; break; }
+    if (surf < 0) return 0;
+    int best = 0, run = 0, bestTop = 0;
+    int lo = surf - depth; if (lo < 0) lo = 0;
+    for (int i = surf - 1; i >= lo; i--) {
+        if (!col[i]) {
+            if (++run > best) { best = run; bestTop = i + run - 1; }
+        } else {
+            run = 0;
+        }
+    }
+    if (topOut) *topOut = bestTop + TERRAIN_Y_MIN;
+    return best;
 }

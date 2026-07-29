@@ -571,6 +571,13 @@ Condition types (use EXACTLY these keys):
     village generated on top of a shipwreck", "two structures colliding". "pad"
     adds slack in blocks (use ~16 for "practically touching"). Footprints are
     nominal boxes, so a hit is a strong candidate, not a proof.
+- Over a cave:    {"id","structure":<name>,"cave_below":N,"within","of"}  the
+    structure stands on a crust above an open cavern at least N blocks tall.
+    Use for "village over/above/on top of a cave", "a village in a cave", "a
+    structure over a huge cavern". 1.18+ overworld, SLOW (real block terrain);
+    N of 20-30 is a big cave, 40+ is dramatic. NOTE a village is never INSIDE a
+    cave -- villages generate on the surface -- so this is the honest reading of
+    that request, and worth saying in notes.
 - Geode shape:    {"id","structure":"geode","size":N,"cracked":false,"within","of"}
     size is 3 or 4 (4 = the big one); "cracked":false = the RARE SEALED geode
     (1 in 20), "cracked":true = broken open (19 in 20, barely a filter).

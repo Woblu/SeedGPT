@@ -849,6 +849,25 @@ threshold, or with a corner under water, can be rejected when the game would
 allow it. `tools/checkplacement <seed> <structure> <version> <x> <z>` re-derives
 the corners and prints the verdict.
 
+## A structure over a cave
+
+```json
+{ "id": "v", "structure": "village", "cave_below": 25, "within": 800 }
+```
+
+1.18 caves are part of the terrain density function, not a carving pass, so a
+structure can end up on a thin crust above a cavern. This measures the tallest
+run of open blocks under the structure — sampling the anchor and four corners of
+its footprint, because a village is 60+ blocks wide and the interesting void is
+rarely under the exact anchor.
+
+Real block terrain, so it is one of the most expensive conditions and the
+planner sorts it last. `tools/surface … column` re-measures any single column
+independently, and the suite checks that every reported cave reproduces.
+
+Worth being precise about the wording: a village is never *inside* a cave —
+villages generate on the surface. What this finds is a village **over** one.
+
 ## Impossible queries are refused, not searched
 
 Some requests no seed can satisfy, and searching for them does not fail — it

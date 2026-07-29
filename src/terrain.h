@@ -26,6 +26,13 @@
 // (LARGE_BIOMES), so terrain matches the world the search is describing.
 TerrainNoise *terrainFor(int mc, uint64_t worldSeed, uint32_t flags);
 
+// Tallest run of non-solid blocks strictly BELOW the surface at (x,z), within
+// `depth` blocks of it -- the cavern under a structure. Returns 0 when the
+// version has no block terrain. Noise caves are part of the density function,
+// so this sees the real 1.18+ cave systems, not just carver tunnels.
+int terrainVoidBelow(int mc, uint64_t worldSeed, uint32_t flags, int x, int z,
+                     int depth, int *topOut);
+
 // Top solid block's world Y at (x,z), or 0 on failure (with *ok cleared).
 //
 // This is ONE column: four noise columns and an interpolation, rather than the

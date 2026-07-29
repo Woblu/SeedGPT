@@ -100,6 +100,9 @@ typedef struct {
     int      reqExposed;    // CT_STRUCTURE (buried_treasure): chest on dry land
                             // at/above sea level (exposed), not submerged
     int      reqShip;       // CT_STRUCTURE (end_city): require an end ship (elytra)
+    int      caveBelow;     // CT_STRUCTURE: require an open void at least this
+                            // many blocks tall UNDER the structure -- a village
+                            // perched over a cavern. Real block terrain, 1.18+.
     int      structType2;   // CT_OVERLAP: the second structure type
     int      overlapPad;    // CT_OVERLAP: slack in blocks. 0 = the two footprint
                             // boxes must genuinely intersect; N = within N blocks
@@ -222,6 +225,7 @@ typedef struct {
     int peakDrop[MAX_COND];   // CT_HEIGHT: peak - valley (local relief) in disc
     int veinMax[MAX_COND];    // CT_ORE: largest single connected vein found
     int geodeSize[MAX_COND];  // CT_STRUCTURE (geode): the matched geode's size
+    int caveHeight[MAX_COND]; // CT_STRUCTURE: tallest void found under it
     Pos partner[MAX_COND];    // CT_OVERLAP: position of the SECOND structure
     int overlapArea[MAX_COND];// CT_OVERLAP: footprint intersection, blocks^2
 } Match;

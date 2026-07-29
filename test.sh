@@ -916,6 +916,33 @@ while read -r oseed ox oz; do
 done < <(awk '/^SEED/{s=$2} /   o / && /x=/{gsub(/x=|z=/,""); print s, $2, $3}' /tmp/sc_test/excl.out | head -8)
 [ "$ex_n" -ge 5 ] && [ "$ex_bad" -eq 0 ]   && ok "no reported outpost sits inside a village exclusion zone ($ex_n checked)"   || bad "an outpost was reported inside a village exclusion zone" "checked=$ex_n bad=$ex_bad"
 
+# "A village over a cave" is a real thing 1.18 terrain produces: noise caves are
+# part of the density function, so a structure can sit on a thin crust above a
+# cavern. Every reported void must reproduce under an independent re-measure of
+# the same footprint columns -- and an ordinary village must NOT show one.
+section "structure over a cave"
+check_err "cave_below rejected before 1.18"   '{"version":"1.17","conditions":[{"id":"v","structure":"village","within":800,"cave_below":20}]}'   "1.18"
+cat > /tmp/sc_test/cave.json <<'EOF'
+{"version":"1.21","conditions":[{"id":"v","structure":"village","within":800,"of":"origin","cave_below":25}]}
+EOF
+./build/find.exe /tmp/sc_test/cave.json 60000 16 2>/dev/null > /tmp/sc_test/cave.out
+cv_n=0; cv_bad=0
+while read -r cseed cx cz ch; do
+  cv_n=$((cv_n+1))
+  # the search samples the anchor and four corners; the claim holds if ANY of
+  # them really has a void that tall
+  best=0
+  for off in "0 0" "16 16" "-16 -16" "16 -16" "-16 16"; do
+    set -- $off
+    v=$(./build/surface.exe "$cseed" 1.21 $((cx+$1)) $((cz+$2)) 0 column 2>/dev/null         | grep -oE "below the surface: [0-9]+" | grep -oE "[0-9]+$")
+    [ "${v:-0}" -gt "$best" ] && best=${v:-0}
+  done
+  [ "$best" != "$ch" ] && cv_bad=$((cv_bad+1))
+done < <(awk '/^SEED/{s=$2}
+              match($0, /([0-9]+)-block cave below/, m) {
+                  gsub(/x=|z=|,/,""); print s, $2, $3, m[1] }'          /tmp/sc_test/cave.out | head -5)
+[ "$cv_n" -ge 3 ] && [ "$cv_bad" -eq 0 ]   && ok "every reported cave under a structure re-measures identically ($cv_n checked)"   || bad "a reported cave did not reproduce" "checked=$cv_n bad=$cv_bad"
+
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
