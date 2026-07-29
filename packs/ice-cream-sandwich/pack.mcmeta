@@ -1,0 +1,6 @@
+{
+  "pack": {
+    "pack_format": 34,
+    "description": "Renames the book. Format 34 is what 1.21.1's own version.json reports."
+  }
+}
