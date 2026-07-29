@@ -29,6 +29,16 @@ TerrainNoise *terrainFor(int mc, uint64_t worldSeed, uint32_t flags)
 // Noise-column cache. generateColumn needs the four columns bounding the 4x4
 // cell a block sits in; adjacent lookups reuse them, and a footprint check hits
 // the same handful of cells repeatedly. Direct-mapped: a miss just recomputes.
+//
+// THE SLOT IS THE CELL'S LOW BITS, and that is not a detail. A caller holds all
+// four returned pointers at once, so any two cells sharing a slot would make the
+// second lookup overwrite the data the first pointer still refers to -- handing
+// generateColumn a duplicated corner and a quietly wrong interpolation. Under a
+// hash, four cells collided about a third of the time, and the symptom was a
+// surface height off by a block or two in roughly one column in five, which
+// looks exactly like ordinary reimplementation drift. Indexing by (x&3, z&3)
+// makes collision impossible instead of unlikely: consecutive cells always
+// differ in their low two bits, so the four corners land in four distinct slots.
 #define NCACHE 16
 typedef struct { int cellX, cellZ; int valid; double ds[48 + 1]; } CellEntry;
 static _Thread_local CellEntry g_cells[NCACHE];
@@ -38,8 +48,7 @@ static _Thread_local uint32_t  g_cellFlags = 0;
 
 static const double *noiseCell(TerrainNoise *tn, int cellX, int cellZ)
 {
-    unsigned h = (unsigned)(cellX * 0x9E3779B1u + cellZ * 0x85EBCA77u);
-    CellEntry *e = &g_cells[h % NCACHE];
+    CellEntry *e = &g_cells[((cellX & 3) << 2) | (cellZ & 3)];
     if (e->valid && e->cellX == cellX && e->cellZ == cellZ) return e->ds;
     sampleNoiseColumn(tn, cellX, cellZ, e->ds);
     e->cellX = cellX; e->cellZ = cellZ; e->valid = 1;

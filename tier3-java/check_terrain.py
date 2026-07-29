@@ -98,10 +98,10 @@ def main():
                 continue
             why = ("nothing solid at our surface" if not at
                    else "terrain continues above our surface")
-            # Is this column under water? 1.18+ aquifers carve the seabed out of
-            # what the base noise called solid, and cubiomes does not model them,
-            # so submerged columns are expected to disagree and are reported
-            # apart from dry-land ones rather than lumped in.
+            # Submerged columns are reported apart from dry-land ones. NOT
+            # because water is expected to be worse -- measured, it is not
+            # (8/10 under water against 16/20 on land) -- but because that was
+            # the standing theory and splitting them is what disproved it.
             #
             # Sampling one height is not enough: a frozen ocean has ICE at 62 and
             # water below it, which read as dry and put a submerged column in the

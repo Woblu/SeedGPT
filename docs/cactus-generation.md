@@ -144,10 +144,12 @@ Measured after those fixes, over 361 chunks: **79% of predicted columns exact
 ### Why it is not 100%, and what to do about it
 
 The residual is not in the cactus code — it is `terrain.c`. Sampled against the
-real game, cubiomes' block terrain is right in about 9 columns out of 10 here;
-the misses are genuine overhangs (sandstone at y=68 with air beneath it) and the
-occasional off-by-one. Because a mispredicted placement consumes the wrong
-number of draws, one wrong column desynchronises the rest of its patch.
+real game, cubiomes' block terrain is exact in about four columns out of five;
+the misses are genuine overhangs (sandstone at y=68 with air beneath it) and
+off-by-ones near the density function's zero crossing. Because a mispredicted
+placement consumes the wrong number of draws, one wrong column desynchronises
+the rest of its patch — which is why 80% terrain accuracy becomes 79% cactus
+accuracy rather than something better.
 
 So the search is a **candidate generator**, exactly like tier 1 elsewhere in this
 project, and a record is confirmed before it is claimed:

@@ -70,9 +70,27 @@ inferring it: the block at our reported height must be a terrain material, and
 the block one above must not be. What decoration stacked on top is then
 irrelevant, which is the whole point.
 
-**A real limitation it did surface.** Under water our heights are wrong, badly:
-at (1595,1645) we report solid ground at y=57 where the true seabed is y=33, a
-24-block error. That is 1.18+ **aquifers** — the generator carves water out of
-what the base noise called solid, and cubiomes' `generateColumn` does not model
-them. Submerged columns are therefore reported separately, and any height,
-relief or `cave_below` result below sea level should be treated as unverified.
+**The real limitation it surfaced.** Our block-level heights are exact in about
+four columns out of five, not five out of five. Measured over 30 scattered
+columns in seed 12345: 24 exact, errors of +/-1 in most of the rest and
+occasionally more.
+
+An earlier version of this note blamed 1.18+ aquifers and said submerged columns
+were badly wrong, on the strength of a single sample at (1595,1645) where we
+report solid ground at y=57 and the true seabed is y=33. Measuring properly
+killed that theory: under water 8 of 10 columns are exact, on dry land 16 of 20.
+The error is not about water, and that column is an outlier rather than a class.
+
+Two things it is NOT. It is not the corner-cache in terrain.c, though that did
+contain a real aliasing bug -- four cells could hash to one slot, and the second
+lookup would overwrite data the first pointer still referenced, handing
+generateColumn a duplicated corner. That is fixed (the slot is now the cell's low
+bits, so the four corners cannot collide), and it changed none of the measured
+columns. And it is not the corner ordering, which matches cubiomes' own caller.
+
+What is left is cubiomes' density reimplementation differing from the game near
+the zero crossing, plus genuine overhangs where "topmost solid block" is a
+different question from "the surface". Closing that means rewriting the density
+function, not patching a caller. Until then anything block-exact -- height and
+relief records, `cave_below`, cactus columns -- should be confirmed against this
+oracle before it is claimed, which is what confirm_cactus.py is for.
