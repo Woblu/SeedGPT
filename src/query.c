@@ -13,15 +13,26 @@
 
 // ---------------------------------------------------------------- cost model
 //
-// Numbers are measured on this machine (i7-10700K, clang -O3), not guessed:
-//   getStructurePos                  ~9 ns
-//   isViableStructurePos            ~42 us
-//   getBiomeAt (seed already applied) ~2.3 us
-// applySeed (~25 us) is paid once per world seed, not per condition, so it is
-// not attributed to any single condition here.
+// Numbers are measured on this machine (i7-10700K, clang -O3), not guessed --
+// and re-measured at MC 1.21, where two of them had drifted badly:
+//   getStructurePos                   ~9 ns
+//   isViableStructurePos             ~5.1 us   (was 42 us in the model: 8x off.
+//                                     For most structures this is ONE biome
+//                                     sample, not the survey the old number
+//                                     implied.)
+//   getBiomeAt (seed already applied) ~5.5 us   (was 2.3 us: 2.4x off. Measured
+//                                     the way a scan actually uses it, on a
+//                                     clustered lattice rather than scattered
+//                                     points -- 1961 samples over a radius-400
+//                                     disc cost 10.7 ms, which is what a single
+//                                     biome condition really costs per seed.)
+// applySeed (~25-42 us) is paid once per world seed per dimension, not once per
+// condition, so it is not attributed to any single condition here -- but it is
+// the single largest item in a search: 84% of the cost of testing one
+// upper-bit variant, which the search does ~50 times per structure seed.
 #define NS_STRUCT_POS    9.0
-#define NS_VIABLE     42000.0
-#define NS_BIOME_AT    2300.0
+#define NS_VIABLE      5100.0
+#define NS_BIOME_AT    5460.0
 #define NS_SPAWN    2300000.0   // getSpawn: ~437/s
 #define NS_EYES    10250000.0   // locate stronghold + pieces + loot: ~98/s
 #define NS_LOOT       47000.0   // structure viability + a ~5us loot roll
