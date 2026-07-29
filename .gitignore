@@ -36,6 +36,7 @@ tier3-bedrock/obs_*.txt
 # Bedrock Dedicated Server: Mojang's binaries and the throwaway worlds the
 # oracle generates. The harness that drives it IS tracked; the server is not.
 tier3-bedrock/server/
+tier3-bedrock/server[0-9]*/
 tier3-bedrock/bds.zip
 tier3-bedrock/out/
 tier2-outpost/.gradle/

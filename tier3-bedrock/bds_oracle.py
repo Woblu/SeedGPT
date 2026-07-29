@@ -25,7 +25,9 @@ A seed change needs a fresh world, so each seed costs one server start
 """
 
 import argparse
+import atexit
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -37,6 +39,33 @@ from queue import Queue, Empty
 
 ROOT = Path(__file__).parent
 SERVER = ROOT / "server"
+
+# HARD CAP on concurrent servers. Each BDS instance is a real Minecraft server:
+# it holds roughly a third of a gigabyte and pins a core while generating. This
+# tool is meant to run in the background on someone's own machine, so the cap is
+# deliberately conservative and is enforced in code -- not left to whatever
+# number reaches the command line.
+MAX_INSTANCES = 4
+
+# Every live server, so none can outlive the process that started it. A hunt
+# that crashes, is interrupted, or raises must not leave servers running: that
+# has already happened once in this project, where an orphan held the port and
+# silently failed every subsequent seed.
+_LIVE = set()
+_LIVE_LOCK = threading.Lock()
+
+
+def _kill_all():
+    with _LIVE_LOCK:
+        procs = list(_LIVE)
+    for p in procs:
+        try:
+            p.kill()
+        except OSError:
+            pass
+
+
+atexit.register(_kill_all)
 EXE = SERVER / "bedrock_server.exe"
 LEVEL = "seedprobe"
 
@@ -50,24 +79,68 @@ RE_NONE = re.compile(r"could not find|no .* found|unable to find", re.I)
 RE_READY = re.compile(r"Server started", re.I)
 
 
+def prepare_instance(n):
+    """Give instance `n` its own server directory, and return it.
+
+    BDS reads server.properties from its OWN working directory, so several
+    servers cannot share one folder -- they would fight over the seed. Copying
+    a 207 MB executable per worker is wasteful, so the tree is reproduced with
+    HARDLINKS: same bytes on disk, separate directory, instant to create.
+
+    This is the only remaining throughput lever. A server executes one console
+    command per tick (measured), so the way to run more commands per second is
+    to run more ticking servers.
+    """
+    if n == 0:
+        return SERVER
+    dst = ROOT / f"server{n}"
+    if not (dst / "bedrock_server.exe").exists():
+        for src in SERVER.rglob("*"):
+            if "worlds" in src.parts:          # never share a world directory
+                continue
+            rel = src.relative_to(SERVER)
+            target = dst / rel
+            if src.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                continue
+            try:
+                os.link(src, target)           # hardlink: no extra bytes
+            except OSError:
+                shutil.copy2(src, target)      # different volume: fall back
+    return dst
+
+
 class Bds:
     """One server instance on one seed, driven through stdin/stdout."""
 
-    def __init__(self, seed, verbose=False, boot_timeout=180):
+    def __init__(self, seed, verbose=False, boot_timeout=180, instance=0):
         self.seed = str(seed)
         self.verbose = verbose
         self.boot_timeout = boot_timeout
         self.proc = None
         self.lines = Queue()
+        # Each worker gets its own directory, port and world. Ports are spaced
+        # by two because BDS binds an IPv4 and an IPv6 port.
+        self.instance = int(instance)
+        if not 0 <= self.instance < MAX_INSTANCES:
+            raise ValueError(f"instance {self.instance} exceeds the "
+                             f"{MAX_INSTANCES}-server cap")
+        self.dir = prepare_instance(self.instance)
+        self.port = 19140 + 2 * self.instance
 
     # -- lifecycle ---------------------------------------------------------
     def __enter__(self):
         self._write_properties()
         self._wipe_world()
         self.proc = subprocess.Popen(
-            [str(EXE)], cwd=str(SERVER), stdin=subprocess.PIPE,
+            [str(self.dir / "bedrock_server.exe")], cwd=str(self.dir), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1)
+        with _LIVE_LOCK:
+            _LIVE.add(self.proc)
         threading.Thread(target=self._pump, daemon=True).start()
         if not self._wait_for(RE_READY, self.boot_timeout):
             self.close()
@@ -81,6 +154,8 @@ class Bds:
     def close(self):
         if not self.proc:
             return
+        with _LIVE_LOCK:
+            _LIVE.discard(self.proc)
         try:
             self.proc.stdin.write("stop\n")
             self.proc.stdin.flush()
@@ -120,20 +195,20 @@ class Bds:
             "allow-cheats": "true",
             "max-players": "1",
             "online-mode": "false",
-            "server-port": "19140",
-            "server-portv6": "19141",
+            "server-port": str(self.port),
+            "server-portv6": str(self.port + 1),
             "player-idle-timeout": "0",
             "view-distance": "4",       # nothing renders; keep generation small
             "tick-distance": "4",
         }
-        (SERVER / "server.properties").write_text(
+        (self.dir / "server.properties").write_text(
             "\n".join(f"{k}={v}" for k, v in props.items()) + "\n",
             encoding="utf-8")
 
     def _wipe_world(self):
         # The seed only takes effect on a NEW world -- reusing the directory
         # would silently answer every query from the first seed ever run.
-        shutil.rmtree(SERVER / "worlds" / LEVEL, ignore_errors=True)
+        shutil.rmtree(self.dir / "worlds" / LEVEL, ignore_errors=True)
 
     # -- queries -----------------------------------------------------------
     # A block probe answers with "The block at ..." / "Successfully found the

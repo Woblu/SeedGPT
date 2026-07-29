@@ -28,20 +28,28 @@ cannot produce.
 
 import argparse
 import json
+import queue
 import random
 import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from bds_oracle import Bds, EXE                     # noqa: E402
+from bds_oracle import Bds, EXE, MAX_INSTANCES      # noqa: E402
 from collect_structures import sweep                # noqa: E402
 from glitched_outposts import block_is              # noqa: E402
 
 ROOT = Path(__file__).parent.parent
 SURFACE = ROOT / "build" / "surface.exe"
+
+# How many cobblestone columns get measured per outpost. The grid is sorted
+# lowest-ground-first and a foundation reaches down on the low side, so the
+# first few hits are the ones that matter -- probing the rest of the grid is
+# ~30 wasted commands, and a command costs a server tick.
+WANT_HITS = 4
 
 
 def box_drop(seed, version, x, z, half=16):
@@ -187,12 +195,15 @@ def hunt_seed(bds, seed, version, reach, step, min_drop, min_cobble,
                     break
                 if r:
                     hits.append((g, cx, cz))
+                    if len(hits) >= WANT_HITS:
+                        break               # cols is sorted lowest-first, and
+                                            # only these get measured anyway
             if lost:
                 if verbose:
                     print(f"    {x},{z} SKIPPED -- probe lost the chunk", file=sys.stderr)
                 continue
             best = (0, None, None, None, None)
-            for (g, cx, cz) in hits[:4]:    # lowest ground first: cols is sorted
+            for (g, cx, cz) in hits:        # lowest ground first: cols is sorted
                 # The detector already proved cobblestone at g+1, so the run's
                 # bottom is known and only its top has to be found.
                 # Ceiling near build height, not a fixed offset: bisection
@@ -235,6 +246,10 @@ def main():
     ap.add_argument("--min-cobble", type=int, default=8,
                     help="report a foundation at least this tall")
     ap.add_argument("--json", help="append finds as JSON lines")
+    ap.add_argument("--workers", type=int, default=1,
+                    help=f"parallel Bedrock servers (1-{MAX_INSTANCES}). Each is a "
+                         f"real Minecraft server holding ~0.35 GB and a core while "
+                         f"it generates, so this is capped in code.")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
 
@@ -252,24 +267,55 @@ def main():
         seeds = [12345]
 
     out = open(a.json, "a", encoding="utf-8") if a.json else None
-    total = 0
-    for i, seed in enumerate(seeds, 1):
-        t0 = time.time()
-        try:
-            with Bds(seed) as bds:
-                finds = hunt_seed(bds, seed, a.version, a.reach, a.step,
-                                  a.min_drop, a.min_cobble, a.top_by_drop,
-                                  a.verbose)
-        except Exception as e:                        # noqa: BLE001
-            print(f"[{i}/{len(seeds)}] seed {seed}: FAILED {e}", file=sys.stderr)
-            continue
-        total += len(finds)
-        print(f"[{i}/{len(seeds)}] seed {seed}: {len(finds)} find(s) "
-              f"in {time.time()-t0:.0f}s (running total {total})", file=sys.stderr)
-        for f in finds:
-            print(json.dumps(f), flush=True)
-            if out:
-                out.write(json.dumps(f) + "\n"); out.flush()
+    lock = threading.Lock()
+    work = queue.Queue()
+    for i, sd in enumerate(seeds):
+        work.put((i + 1, sd))
+    state = {"total": 0, "done": 0}
+
+    def worker(instance):
+        """One server, many seeds. Each worker owns its own BDS directory and
+        port, because a server runs one command per tick -- more ticking
+        servers is the only way to run more commands per second."""
+        while True:
+            try:
+                idx, seed = work.get_nowait()
+            except queue.Empty:
+                return
+            t0 = time.time()
+            try:
+                with Bds(seed, instance=instance) as bds:
+                    finds = hunt_seed(bds, seed, a.version, a.reach, a.step,
+                                      a.min_drop, a.min_cobble, a.top_by_drop,
+                                      a.verbose)
+            except Exception as e:                    # noqa: BLE001
+                with lock:
+                    print(f"[{idx}/{len(seeds)}] seed {seed}: FAILED {e}", file=sys.stderr)
+                continue
+            with lock:
+                state["total"] += len(finds); state["done"] += 1
+                print(f"[{state['done']}/{len(seeds)}] seed {seed}: {len(finds)} find(s) "
+                      f"in {time.time()-t0:.0f}s  (w{instance}, running total "
+                      f"{state['total']})", file=sys.stderr)
+                for f in finds:
+                    print(json.dumps(f), flush=True)
+                    if out:
+                        out.write(json.dumps(f) + chr(10)); out.flush()
+
+    # Clamp rather than trust the flag: this runs on someone's own machine,
+    # and four Minecraft servers is already a noticeable share of it.
+    nworkers = max(1, min(a.workers, MAX_INSTANCES, len(seeds)))
+    if nworkers != a.workers:
+        print(f"using {nworkers} worker(s) (capped at {MAX_INSTANCES})", file=sys.stderr)
+    threads = [threading.Thread(target=worker, args=(i,), daemon=True)
+               for i in range(nworkers)]
+    t0 = time.time()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    print(f"{state['total']} find(s) from {state['done']} seeds in "
+          f"{time.time()-t0:.0f}s on {nworkers} worker(s)", file=sys.stderr)
     if out:
         out.close()
 
