@@ -46,6 +46,7 @@ typedef enum {
     CT_HEIGHT,      // APPROXIMATE surface height peaks >= N within `within`
     CT_ISLAND,      // land at the reference, ocean covering >= N% of the disc
     CT_OVERLAP,     // two structures whose footprint boxes intersect
+    CT_CACTUS,      // a cactus at least N blocks tall within `within`
 } CondType;
 
 // What a leaderboard search ranks by. AUTO picks the condition's natural
@@ -60,6 +61,7 @@ typedef enum {
     RANK_PCT,       // CT_BIOME_AREA/CT_ISLAND: percent of the disc
     RANK_SIZE,      // CT_STRUCTURE (geode): variant size
     RANK_AREA,      // CT_OVERLAP: intersection area in blocks^2
+    RANK_TALL,      // CT_CACTUS: cactus height in blocks
 } RankBy;
 
 // End portal frames: 12, each independently 10% likely to hold an eye. That
@@ -104,6 +106,9 @@ typedef struct {
                             // many blocks tall UNDER the structure -- a village
                             // perched over a cavern. Real block terrain, 1.18+.
     int      structType2;   // CT_OVERLAP: the second structure type
+    int      cactusMin;     // CT_CACTUS: minimum cactus height in blocks. One
+                            // placement is 1-3, so anything above ~6 needs
+                            // several patches stacking on one column.
     int      overlapPad;    // CT_OVERLAP: slack in blocks. 0 = the two footprint
                             // boxes must genuinely intersect; N = within N blocks
                             // of each other, for "practically on top of".
@@ -239,6 +244,8 @@ typedef struct {
     int caveHeight[MAX_COND]; // CT_STRUCTURE: tallest void found under it
     Pos partner[MAX_COND];    // CT_OVERLAP: position of the SECOND structure
     int overlapArea[MAX_COND];// CT_OVERLAP: footprint intersection, blocks^2
+    int cactusTall[MAX_COND]; // CT_CACTUS: tallest cactus found, in blocks
+    int cactusBase[MAX_COND]; // CT_CACTUS: world Y its lowest block stands on
 } Match;
 
 // Leaderboard scoring. Returns the ranked condition's measurement for this

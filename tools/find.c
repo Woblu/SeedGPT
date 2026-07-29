@@ -254,6 +254,11 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
                    (int)sqrt((double)(dx*dx + dz*dz)), mm->overlapArea[c]);
             continue;
         }
+        if (cd->type == CT_CACTUS) {
+            printf("   %-14s x=%6d z=%6d   %d-block cactus, base y=%d\n", cd->id,
+                   mm->pos[c].x, mm->pos[c].z, mm->cactusTall[c], mm->cactusBase[c]);
+            continue;
+        }
         if (cd->type == CT_ORE) {
             int nm; const OreMaterial *tab = oreMaterials(&nm);
             printf("   %-14s x=%6d z=%6d   %d %s%s ore within %d", cd->id,

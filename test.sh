@@ -37,7 +37,7 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1 \
 && ./build.sh tools/checkcluster.c >/tmp/sc_test/b17 2>&1 \
 && ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1 \n&& ./build.sh tools/checkplacement.c >/tmp/sc_test/b19 2>&1 \
-&& ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1; then
+&& ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1 \n&& ./build.sh tools/cactus.c >/tmp/sc_test/b21 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -973,6 +973,44 @@ skipped=$(./build/find.exe /tmp/sc_test/gate.json 200000000 1 2>/dev/null | grep
 [ "${skipped:-0}" -ge 50 ] \
   && ok "the gate actually earns its place (${skipped}% of biome lookups skipped)" \
   || bad "the gate skipped almost nothing" "skipped=${skipped:-0}%"
+
+# ---------------------------------------------------------------- cactus
+# The cactus simulation replays decoration RNG in exact order, so the checks
+# that matter are structural: it must refuse versions it cannot model, and its
+# own tool must agree with the search that uses it. Block-for-block agreement
+# with a real world is not testable here -- it needs a running server -- and
+# lives in tier3-java/check_cactus.py.
+section "tall cactus"
+check_err "cactus rejected before 1.18"   '{"version":"1.17","conditions":[{"id":"c","cactus":5,"within":128}]}'   "1.18"
+
+cat > /tmp/sc_test/cactus.json <<'EOF'
+{"version":"1.21","rank":{"of":"c","top":5},"conditions":[
+ {"id":"c","cactus":1,"within":160,"of":"d"},
+ {"id":"d","biome":"desert","within":250,"of":"origin"}]}
+EOF
+./build/find.exe /tmp/sc_test/cactus.json 1500 16 2>/dev/null > /tmp/sc_test/cactus.out
+cn=0; cbad=0
+while read -r cseed cx cz ch; do
+  cn=$((cn+1))
+  # The standalone tool re-simulates from scratch; it must name the same column
+  # and the same height the search reported.
+  got=$(./build/cactus.exe "$cseed" 1.21 "$cx" "$cz" 32 2>/dev/null \
+        | awk -v x="$cx" -v z="$cz" '$1=="CACTUS" && $2==x && $3==z {print $5}')
+  [ "$got" != "$ch" ] && cbad=$((cbad+1))
+done < <(awk '/^SEED/{s=$2}
+              match($0, /([0-9]+)-block cactus/, m) {
+                  gsub(/x=|z=/,""); print s, $2, $3, m[1] }' /tmp/sc_test/cactus.out | head -6)
+[ "$cn" -ge 3 ] && [ "$cbad" -eq 0 ] \
+  && ok "every reported cactus re-simulates to the same height ($cn checked)" \
+  || bad "a reported cactus did not reproduce" "checked=$cn bad=$cbad"
+
+# A single patch places 1-3 blocks and can stack to about 6; a plain (unranked)
+# search asking for more should therefore find nothing quickly rather than
+# report something impossible.
+tallcnt=$(awk 'match($0, /([0-9]+)-block cactus/, m) && m[1] > 12' /tmp/sc_test/cactus.out | wc -l)
+[ "$tallcnt" -eq 0 ] \
+  && ok "no absurd heights reported (nothing over 12 blocks in 1500 seeds)" \
+  || bad "implausible cactus height reported" "$tallcnt over 12 blocks"
 
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"

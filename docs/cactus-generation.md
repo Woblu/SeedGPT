@@ -111,29 +111,61 @@ Note there are **two** cactus features. Badlands-family biomes pull
 `patch_cactus_decorated`, so a column near a desert/badlands boundary can be
 fed by both, at different feature seeds.
 
-## What is still missing
+## It is built — `src/cactus.c`
 
-The seeding is solved and verified. Three things are not.
+The query language takes `{"id":"c","cactus":N,"within":R,"of":...}`, and
+`rank` by `tall` makes it a records search. `build/cactus.exe` lists a region's
+cacti directly.
 
-**The exact heightmap.** The placement rides `MOTION_BLOCKING`, which counts
-water and leaves; `terrain.c` computes `OCEAN_FLOOR_WG`, which does not. On open
-desert sand the two coincide, but "usually coincide" is not a basis for a record
-claim, and cacti near water or at a biome edge are exactly where the interesting
-columns are.
+The world model is deliberately thin, because only four things affect a cactus:
+where terrain stops, whether the top block is sand, water up to sea level, and
+what cactus is already standing there. Everything else above ground is air —
+sound *here* only because cacti are the last vegetal feature a desert generates
+(index 74, after dead bushes at 61, sugar cane 65 and pumpkins 72).
 
-**Block-level survival.** `would_survive` asks whether the block below is sand
-or cactus and whether any horizontal neighbour is solid. That needs the surface
-*material* and its neighbours, not just a surface height — a layer above what
-`terrain.c` currently models.
+### What the real world said
 
-**End-to-end confirmation.** Every other correctness claim here was checked
-against something independent: a JDK reference, a headless generator, Bedrock
-Dedicated Server, or — for the feature index above — cubiomes' verified table.
-There is no such source for a finished cactus column. The headless backend stops
-before decoration, because features need a `WorldGenLevel`.
+`tier3-java/check_cactus.py` diffs it against a running 1.21.1 server in two
+directions: every predicted column is probed for its exact base and height, then
+every chunk is emptied with `/fill ... replace` to count what was really there —
+because probing only our own predictions can never reveal a cactus we missed.
 
-The fix is the trick that worked for Bedrock: run a real Java server, generate
-the world, probe blocks with `/execute if block`. That would confirm not only
-cacti but `cave_below` and the 1.18+ placement rules, which currently rest on
-our own reimplementation. It needs the Mojang EULA accepted on this machine,
-which is not a call to make silently.
+Three bugs came out of that, and none would have been visible by reading:
+
+| Bug | Symptom | Fix |
+|---|---|---|
+| built on `java.util.Random` | plausible cacti, wrong chunks | 1.18+ decoration uses **Xoroshiro** (`new WorldgenRandom(new XoroshiroRandomSource(...))`) |
+| everything above terrain treated as air | 13 false positives in 361 chunks, **all at y=62** | model water to `SEA_TOP`; the game sees water, fails `matching_blocks air`, and spends no randomness |
+| destructive `/fill` probes reused a world | "the game has no cactus" everywhere | `JavaServer(fresh=True)` |
+
+Measured after those fixes, over 361 chunks: **79% of predicted columns exact
+(base and height), 98% of chunks exact on block count.**
+
+### Why it is not 100%, and what to do about it
+
+The residual is not in the cactus code — it is `terrain.c`. Sampled against the
+real game, cubiomes' block terrain is right in about 9 columns out of 10 here;
+the misses are genuine overhangs (sandstone at y=68 with air beneath it) and the
+occasional off-by-one. Because a mispredicted placement consumes the wrong
+number of draws, one wrong column desynchronises the rest of its patch.
+
+So the search is a **candidate generator**, exactly like tier 1 elsewhere in this
+project, and a record is confirmed before it is claimed:
+
+```
+python tier3-java/confirm_cactus.py <seed> <x> <z> <height>
+```
+
+Worked end to end: a leaderboard over 4,000 seeds returned a 5-block cactus at
+(−75,−287) in seed −688210502972053640, and the real game has exactly a 5-block
+cactus with its base at y=83.
+
+### How tall can they actually get
+
+One placement is 1–3 blocks, and a single patch can stack to about **6** —
+`y_spread` is 3, so a later try can land on top of what an earlier one placed,
+but nothing can reach above `origin.y + 3`. Beyond that a column needs patches
+from *different chunks with different origin heights*, which means sloping
+ground. That is why 10+ is a records hunt and 22 is a famous number, and why a
+leaderboard with a real budget — not a plain filter — is the right shape of
+query for it.

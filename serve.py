@@ -259,6 +259,12 @@ def parse_seeds(out: str) -> list:
                 {"x2": int(m.group(1)), "z2": int(m.group(2)), "structure2": m.group(3),
                  "gap": int(m.group(4)), "area": int(m.group(5))})
             continue
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+)-block cactus, base y=(-?\d+)", line)
+        if m and cur:
+            cur.setdefault("cactus", []).append(
+                {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
+                 "height": int(m.group(4)), "base_y": int(m.group(5))})
+            continue
         m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+) slime chunks within (\d+)", line)
         if m and cur:
             cur.setdefault("slime", []).append(
@@ -581,6 +587,16 @@ Condition types (use EXACTLY these keys):
 - Geode shape:    {"id","structure":"geode","size":N,"cracked":false,"within","of"}
     size is 3 or 4 (4 = the big one); "cracked":false = the RARE SEALED geode
     (1 in 20), "cracked":true = broken open (19 in 20, barely a filter).
+- Tall cactus:    {"id","cactus":N,"within","of"}  a cactus >= N blocks tall.
+    One placement is only 1-3 blocks, so height comes from patches stacking
+    on one column: 4-5 is already uncommon, 6 is about the ceiling for a
+    single patch, and anything higher needs a slope where several patches
+    with different origins pile up. Ask for 10+ only with a leaderboard and
+    a real budget, and say in notes that it is a records hunt.
+    Cacti are a DESERT/BADLANDS feature and 1.18+ only. SLOW (real terrain).
+    Results are simulated and ~80% exact per column, so a record should be
+    confirmed with tier3-java/confirm_cactus.py before it is claimed --
+    worth mentioning in notes when the user asks for a tall one.
 - Slime chunks:   {"id","slime":N,"within","of"}  >=N slime chunks (farm site).
 - Chest loot:     {"id","within","loot":{"structure":<s>,"item":<i>,"count":N}}
     loot structures: desert_pyramid jungle_temple igloo outpost shipwreck ruined_portal
@@ -599,10 +615,10 @@ buys depends entirely on how expensive the query is. Only include it if the
 request actually mentions an amount of time or seeds.
 
 Leaderboard (records). If the request is superlative -- "the TALLEST mountain",
-"the BIGGEST diamond vein", "the most slime chunks", "the largest mushroom
+"the BIGGEST diamond vein", "the TALLEST cactus", "the most slime chunks", "the largest mushroom
 island" -- add a sibling key next to "conditions":
   "rank": {"of": <condition id>, "by": <metric>, "top": K}
-  metric: auto|height|relief|vein|count|pct|size|area  (auto = that condition's
+  metric: auto|height|relief|vein|count|pct|size|area|tall  (auto = that condition's
   own measurement; usually correct). K defaults to 10.
 A ranked search scans the whole range and returns the best it saw instead of
 stopping at the first match, so set that condition's THRESHOLD LOW (e.g.

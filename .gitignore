@@ -50,3 +50,5 @@ tier2-outpost/logs/
 # never committed or redistributed.
 tier2-outpost/*-sources.jar
 tier2-outpost/sources/
+tier3-java/server.jar
+tier3-java/run-*/

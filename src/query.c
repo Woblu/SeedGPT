@@ -6,6 +6,7 @@
 #include "loot.h"
 #include "ore.h"
 #include "climate.h"
+#include "cactus.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,6 +40,9 @@
 #define NS_LOOT       47000.0   // structure viability + a ~5us loot roll
 #define NS_ORE_CHUNK   4000.0   // per chunk: one biome probe + config scan + gen
 #define NS_SLIME_CHUNK    6.0   // per chunk: one Java-RNG isSlimeChunk call
+#define NS_CACTUS_CHUNK 90000.0  // 1 chunk in 6 rolls through; those that do
+                                 // need ~50 terrain columns for the tries and
+                                 // their neighbours
 #define NS_TERRAIN_CELL 200000.0 // exact terrain: one heavy noise column per 4x4
 #define SEA_LEVEL          63    // overworld sea level: at/above = dry land
 // How far below the surface a "cave under this structure" may be. Deep enough
@@ -114,6 +118,11 @@ static double viabCost(const Query *q, int i)
     const Cond *c = &q->cond[i];
     if (c->type == CT_EYES) return NS_EYES;
     if (c->type == CT_LOOT) return NS_LOOT;
+    if (c->type == CT_CACTUS) {
+        // Every chunk in the box, plus a ring, has to roll its patch.
+        double n = 2.0 * (c->within / 16.0) + 3.0;
+        return n * n * NS_CACTUS_CHUNK;
+    }
     if (c->type == CT_ORE) {
         // A per-chunk cost over the disc's bounding square -- the most expensive
         // condition, so it sorts last and runs only for earlier survivors.
@@ -350,6 +359,7 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         cJSON *jb = cJSON_GetObjectItem(e, "biome");
         cJSON *jore = cJSON_GetObjectItem(e, "ore");
         cJSON *jslime = cJSON_GetObjectItem(e, "slime");
+        cJSON *jcact = cJSON_GetObjectItem(e, "cactus");
         cJSON *jarea = cJSON_GetObjectItem(e, "biome_area");
         cJSON *jheight = cJSON_GetObjectItem(e, "height");
         cJSON *jrelief = cJSON_GetObjectItem(e, "relief");
@@ -417,6 +427,25 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
             c->scanStep = SCAN_FINE;
             cJSON *of = cJSON_GetObjectItem(e, "of");
             snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "spawn");
+        } else if (jcact && cJSON_IsNumber(jcact)) {
+            c->type = CT_CACTUS;
+            c->dim = DIM_OVERWORLD;
+            c->cactusMin = jcact->valueint;
+            if (c->cactusMin < 1) c->cactusMin = 1;
+            if (q->mc < MC_1_18) {
+                snprintf(err, errlen, "condition \"%s\": cactus height needs "
+                         "block-level terrain, which is 1.18+", c->id);
+                goto done;
+            }
+            cJSON *cw = cJSON_GetObjectItem(e, "within");
+            c->within = (cw && cJSON_IsNumber(cw)) ? cw->valueint : 128;
+            // Every chunk in range must roll its patch and most of the cost is
+            // real terrain, so a huge radius is a different query, not a slower
+            // one. 512 blocks is already ~1000 chunks per seed.
+            if (c->within > 512) c->within = 512;
+            if (c->within < 16)  c->within = 16;
+            cJSON *of = cJSON_GetObjectItem(e, "of");
+            snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "origin");
         } else if (jslime && cJSON_IsNumber(jslime)) {
             c->type = CT_SLIME;
             c->dim = DIM_OVERWORLD;              // slime chunks are overworld
@@ -838,6 +867,7 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
             else if (!strcmp(b, "vein"))    q->rankBy = RANK_VEIN;
             else if (!strcmp(b, "count"))   q->rankBy = RANK_COUNT;
             else if (!strcmp(b, "pct"))     q->rankBy = RANK_PCT;
+            else if (!strcmp(b, "tall"))    q->rankBy = RANK_TALL;
             else if (!strcmp(b, "size"))    q->rankBy = RANK_SIZE;
             else if (!strcmp(b, "area"))    q->rankBy = RANK_AREA;
             else if (strcmp(b, "auto")) {
@@ -1141,6 +1171,7 @@ static int rankMetric(const Query *q)
     if (q->rankBy != RANK_AUTO) return q->rankBy;
     switch (q->cond[q->rankIdx].type) {
     case CT_HEIGHT:     return q->cond[q->rankIdx].reliefMin > 0 ? RANK_RELIEF : RANK_HEIGHT;
+    case CT_CACTUS:     return RANK_TALL;
     case CT_ORE:        return q->cond[q->rankIdx].veinMin > 0 ? RANK_VEIN : RANK_COUNT;
     case CT_SLIME:      return RANK_COUNT;
     case CT_STRUCTURE:  return q->cond[q->rankIdx].structType == Geode ? RANK_SIZE : RANK_COUNT;
@@ -1164,6 +1195,7 @@ const char *queryScoreLabel(const Query *q)
     case RANK_SIZE:   return "geode size";
     case RANK_PCT:    return "percent";
     case RANK_AREA:   return "overlap";
+    case RANK_TALL:   return "cactus height";
     case RANK_COUNT:
         switch (c->type) {
         case CT_ORE:       return "ore blocks";
@@ -1188,6 +1220,7 @@ int queryScore(const Query *q, const Match *m)
     case RANK_VEIN:   return m->veinMax[k];
     case RANK_SIZE:   return m->geodeSize[k];
     case RANK_AREA:   return m->overlapArea[k];
+    case RANK_TALL:   return m->cactusTall[k];
     case RANK_PCT: {
         int tot = m->areaTotal[k];
         return tot > 0 ? (int)((int64_t)m->areaCells[k] * 100 / tot) : 0;
@@ -1217,6 +1250,11 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
         if (!strncmp(it, "minecraft:", 10)) it += 10;
         snprintf(buf, n, "%s with >= %d %s in its chests",
                  struct2str(c->structType), c->lootMin, it);
+        return buf;
+    }
+    if (c->type == CT_CACTUS) {
+        snprintf(buf, n, "a cactus >= %d blocks tall within %d of %s",
+                 c->cactusMin, c->within, c->ofId);
         return buf;
     }
     if (c->type == CT_ORE) {
@@ -1800,6 +1838,18 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             fixed->pos[k] = a;
             fixed->partner[k] = b;
             fixed->overlapArea[k] = area;
+            continue;
+        }
+
+        if (c->type == CT_CACTUS) {
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
+            Cactus best;
+            int tall = cactusTallest(g, q->mc, queryGenFlags(q), worldSeed,
+                                     centre.x, centre.z, c->within, &best);
+            if (tall < c->cactusMin) return 0;
+            fixed->pos[k] = (Pos){best.x, best.z};
+            fixed->cactusTall[k] = tall;
+            fixed->cactusBase[k] = best.baseY;
             continue;
         }
 
