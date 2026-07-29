@@ -73,13 +73,9 @@ populationSeed = getPopulationSeed(mc, worldSeed, chunkMinX, chunkMinZ)   // cub
 featureSeed    = populationSeed + index + 10000 * step
 ```
 
-For **desert**, `patch_cactus_desert` sits in generation step **9** (vegetal
-decoration), and is the 47th entry counting through that biome's own feature
-list (49 total).
-
-**That index is not the one the seeding uses**, and this is the trap that would
-have sunk a first attempt. `ChunkGenerator.applyBiomeDecoration` does not count
-per biome:
+Counting through `desert.json` puts `patch_cactus_desert` 47th of 49, in step 9.
+**That is the wrong number**, and it is the trap that would have sunk a first
+attempt. `ChunkGenerator.applyBiomeDecoration` does not count per biome:
 
 ```java
 holderSet.stream().map(Holder::value)
@@ -89,24 +85,55 @@ worldgenRandom.setFeatureSeed(l, p, k);   // p from that index set, not a counte
 ```
 
 `p` is a **global** index into the topologically sorted list of every placed
-feature any biome contributes to that step, built by `FeatureSorter`. So getting
-it right means reconstructing that global ordering across all biomes, not
-counting entries in `desert.json`. An index that is merely close still yields
-cacti — just cacti in the wrong places, which is the failure mode this project
-exists to avoid.
+feature that any biome in the world contributes to that step, built by
+`FeatureSorter` over `biomeSource.possibleBiomes()`. An index that is merely
+close still yields cacti — just cacti in the wrong places, which is exactly the
+failure this project exists to avoid.
+
+Rather than reimplement that sort and hope, `tier2-outpost/FeatureIndex.java`
+asks the game's own sorter, with the arguments `ChunkGenerator` passes:
+
+| | step | index |
+|---|---|---|
+| `minecraft:patch_cactus_desert` | 9 | **74** |
+| `minecraft:patch_cactus_decorated` | 9 | **75** |
+
+so `featureSeed = populationSeed + 74 + 90000`.
+
+**Why that is trustworthy.** cubiomes carries a hand-maintained `{index, step}`
+table for the ore features, and our ore search is already tested against real
+worlds. `tier2-outpost/check_feature_index.sh` runs FeatureIndex against it:
+all eight cross-checkable entries match exactly (dirt 0, diamond 18, buried
+diamond 21, buried lapis 23, copper 25, clay 27, extra gold 28, emerald 33). A
+tool that reproduces eight known-good indices is trustworthy for the ninth.
+
+Note there are **two** cactus features. Badlands-family biomes pull
+`patch_cactus_decorated`, so a column near a desert/badlands boundary can be
+fed by both, at different feature seeds.
 
 ## What is still missing
 
-**A Java block oracle.** Every other correctness claim in this project was
-checked against something independent: a JDK reference, a headless generator, or
-Bedrock Dedicated Server. There is no such thing for Java *features* — our
-headless backend stops at terrain and structures, because feature decoration
-needs a `WorldGenLevel`.
+The seeding is solved and verified. Three things are not.
 
-The natural fix is the same trick that worked for Bedrock: run a real Java
-server, generate the world, and probe blocks with `/execute if block`. That
-would verify not only cacti but `cave_below` and the 1.18+ placement rules,
-which are currently checked only against our own reimplementation.
+**The exact heightmap.** The placement rides `MOTION_BLOCKING`, which counts
+water and leaves; `terrain.c` computes `OCEAN_FLOOR_WG`, which does not. On open
+desert sand the two coincide, but "usually coincide" is not a basis for a record
+claim, and cacti near water or at a biome edge are exactly where the interesting
+columns are.
 
-Until that exists, a cactus search would be a simulation nobody has confirmed —
-which is the one thing this project does not ship.
+**Block-level survival.** `would_survive` asks whether the block below is sand
+or cactus and whether any horizontal neighbour is solid. That needs the surface
+*material* and its neighbours, not just a surface height — a layer above what
+`terrain.c` currently models.
+
+**End-to-end confirmation.** Every other correctness claim here was checked
+against something independent: a JDK reference, a headless generator, Bedrock
+Dedicated Server, or — for the feature index above — cubiomes' verified table.
+There is no such source for a finished cactus column. The headless backend stops
+before decoration, because features need a `WorldGenLevel`.
+
+The fix is the trick that worked for Bedrock: run a real Java server, generate
+the world, probe blocks with `/execute if block`. That would confirm not only
+cacti but `cave_below` and the 1.18+ placement rules, which currently rest on
+our own reimplementation. It needs the Mojang EULA accepted on this machine,
+which is not a call to make silently.
