@@ -37,7 +37,7 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1 \
 && ./build.sh tools/checkcluster.c >/tmp/sc_test/b17 2>&1 \
 && ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1 \n&& ./build.sh tools/checkplacement.c >/tmp/sc_test/b19 2>&1 \
-&& ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1 \n&& ./build.sh tools/cactus.c >/tmp/sc_test/b21 2>&1 \n&& ./build.sh tools/invert.c >/tmp/sc_test/b22 2>&1; then
+&& ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1 \n&& ./build.sh tools/cactus.c >/tmp/sc_test/b21 2>&1 \n&& ./build.sh tools/invert.c >/tmp/sc_test/b22 2>&1 \n&& ./build.sh tools/findat.c >/tmp/sc_test/b23 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -1032,6 +1032,25 @@ done
 ./build/invert.exe 1.21 ancient_city --verify >/dev/null 2>&1
 [ $? -eq 2 ] && ok "refuses placements it cannot invert instead of guessing" \
              || bad "inverter accepted a placement it does not implement" ""
+
+# End to end: solve for "village exactly at chunk (0,0)", then have a DIFFERENT
+# tool go and look. A seed that only the solver believes in is worth nothing.
+./build/findat.exe 1.21 village 0 0 4 2>/dev/null > /tmp/sc_test/findat.out
+fa_n=0; fa_bad=0
+while read -r fs; do
+  fa_n=$((fa_n+1))
+  line=$(./build/nearest.exe "$fs" 1.21 structure village 0 0 2>/dev/null | head -1)
+  echo "$line" | grep -q "x=0 z=0 dist=0" || fa_bad=$((fa_bad+1))
+done < <(awk '/^SEED/{print $2}' /tmp/sc_test/findat.out)
+[ "$fa_n" -ge 3 ] && [ "$fa_bad" -eq 0 ] \
+  && ok "solved seeds really do have the village at that exact chunk ($fa_n checked)" \
+  || bad "a solved seed did not hold up" "checked=$fa_n bad=$fa_bad"
+
+# A chunk past the placement range is impossible for EVERY seed. Saying so beats
+# searching forever, which is what the scanning path would do.
+./build/findat.exe 1.21 village 30 30 2>/dev/null | grep -q "^IMPOSSIBLE" \
+  && ok "an unreachable chunk is called impossible, not searched for" \
+  || bad "did not recognise an unreachable chunk offset" ""
 
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"
