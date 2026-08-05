@@ -96,6 +96,54 @@ alone. Two ways out, and the first is likely simpler:
 Start with (1). It is obviously correct; (2) is an optimisation to measure
 against it, not to assume.
 
+## The join that makes it a real MITM
+
+(1) above removes the obstacle but leaves a nested loop. The hash join is
+available too, and this is the piece worth having.
+
+Split on `y = ws + off_0` rather than on `ws`, so every structure's pre-XOR
+seed is `y + D_j` for a known constant `D_j = off_j − off_0`. Then
+
+```
+s0_jH = ((yH + D_jH + c_j) mod 2²⁴) ^ KH
+```
+
+— every high-half input is `yH` plus a **known** constant, and `c_j ∈ {0,1}`,
+so across `n` structures there are only `2ⁿ` carry patterns. Precompute once:
+
+```
+T[v] = ((v ^ KH)·K) mod 2²⁴          v over 2²⁴, ~64 MB as uint32
+s1_jH = (T[yH + shift_j] + PH_j) mod 2²⁴     shift_j = D_jH + c_j
+```
+
+Now build, per carry pattern, a bucket index over all `2²⁴` values of `yH`
+keyed by the tuple `(T[yH + shift_j] mod 3)` for j = 1..n — that is `3ⁿ`
+buckets, 81 for a quad. The low half computes the tuple it needs,
+`((e_j − PH_j) mod 3)_j`, and **looks it up** instead of sweeping. Meet in the
+middle, properly.
+
+The mod-3 truncation problem does not arise here: `T` is built by doing the
+`mod 2²⁴` concretely, so nothing is ever factored through it.
+
+## Sizing it, so the win is known before the work
+
+Two filters compound, and the first is nearly free:
+
+- `8 | d_j` is computable from `yL` alone and kills **7 of 8** per constraint.
+  Four structures constrained on x leaves ~`2²⁴/4096 = 4096` surviving low
+  halves. (In a quad hunt the corner offset is not a single value but a small
+  set, so the real rate is per allowed offset — measure it, do not assume 1/8.)
+- The bucket lookup then replaces a `2²⁴` sweep per survivor with one bucket.
+
+Even the *nested* version — every surviving `yL` against all `2²⁴` `yH`, no
+join — is ~`4096 × 2²⁴ ≈ 7×10¹⁰` concrete tests, which at a few hundred
+million per second across threads is minutes rather than `quad.c`'s ~9 hours.
+That is worth building first precisely because it needs no clever reasoning:
+if the join version does not agree with it exactly, the join version is wrong.
+
+So the build order is: nested (obviously correct, minutes) → join (fast) →
+prove they return the identical set.
+
 ## Second axis and further structures
 
 `oz` uses `s2 = s1·K + b`, which is the same shape one step along, so the same
