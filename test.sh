@@ -37,7 +37,7 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1 \
 && ./build.sh tools/checkcluster.c >/tmp/sc_test/b17 2>&1 \
 && ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1 \n&& ./build.sh tools/checkplacement.c >/tmp/sc_test/b19 2>&1 \
-&& ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1 \n&& ./build.sh tools/cactus.c >/tmp/sc_test/b21 2>&1; then
+&& ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1 \n&& ./build.sh tools/cactus.c >/tmp/sc_test/b21 2>&1 \n&& ./build.sh tools/invert.c >/tmp/sc_test/b22 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -1011,6 +1011,27 @@ tallcnt=$(awk 'match($0, /([0-9]+)-block cactus/, m) && m[1] > 12' /tmp/sc_test/
 [ "$tallcnt" -eq 0 ] \
   && ok "no absurd heights reported (nothing over 12 blocks in 1500 seeds)" \
   || bad "implausible cactus height reported" "$tallcnt over 12 blocks"
+
+# ---------------------------------------------------------------- inversion
+# Solving for seeds instead of scanning them is only useful if it finds ALL of
+# them. An inverter that quietly skips solutions would make the search report
+# "nothing found" for seeds that exist -- a failure no user could detect. So the
+# check is two-sided, and the completeness half is the one that matters.
+section "placement inversion"
+for s in swamp_hut village desert_pyramid shipwreck; do
+  out=$(./build/invert.exe 1.21 "$s" --verify 2>&1)
+  if echo "$out" | grep -q "^OK"; then
+    d=$(echo "$out" | grep -oE '\([0-9]+x less' | grep -oE '[0-9]+')
+    ok "$s: sound, and no brute-force hit missed (${d}x less space to search)"
+  else
+    bad "inverter unsound or incomplete for $s" "$out"
+  fi
+done
+# Refusing the cases it cannot do is part of being correct: a power-of-two range
+# scales instead of taking a remainder, so the residue-class trick does not hold.
+./build/invert.exe 1.21 ancient_city --verify >/dev/null 2>&1
+[ $? -eq 2 ] && ok "refuses placements it cannot invert instead of guessing" \
+             || bad "inverter accepted a placement it does not implement" ""
 
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"
