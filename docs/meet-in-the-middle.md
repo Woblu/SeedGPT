@@ -416,8 +416,23 @@ boxes intersect.
 ```
 
 The solver proposes seeds whose four slots are tight; the overlap scores what
-the pieces did with that chance. Ranking 400 candidates found a seed with
-**286 intersecting piece pairs and 27 592 blocks of shared bounding box** across
-four real fortresses — nearly double the first candidate the solver happened to
-emit, which is the point: the tightest starts are not the deepest overlap, and
-only measuring tells you which is which.
+the pieces did with that chance.
+
+Measured, all four fortresses verified:
+
+| spread (chunks) | best score | shared blocks | seed |
+|---|---|---|---|
+| **8** | **286** | **27 592** | 272750727216669 |
+| 10 | 201 | 8 540 | 8248588826346 |
+| 12 | 148 | 5 476 | 117035865797502 |
+
+Two things that only measuring shows. Across spread bands, tighter starts really
+do mean deeper overlap — the loosest band is half the score of the tightest. But
+*within* one band the correlation is weak: the twelve spread-8 bases range from
+138 to 286, so the seed the solver happens to emit first is not the one worth
+having.
+
+And spread 8 is exhaustive: two runs with different limits returned the **same
+twelve** bases, so that is the complete set at the tightest geometry the grid
+allows. Wanting more of them means accepting a looser spread, and the table says
+what that costs.

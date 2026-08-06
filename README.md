@@ -666,10 +666,13 @@ intersect.
   | ./build/fortoverlap.exe 0 1.21 --stdin | sort -rn | head
 ```
 
-Best from 400 candidates: **286 intersecting piece pairs, 27 592 blocks of
-shared bounding box**, across four verified fortresses — nearly double the first
-candidate the solver happened to emit. The tightest starts are not the deepest
-overlap, which is exactly why it is worth measuring.
+Best found: **seed 272750727216669 — 286 intersecting piece pairs, 27 592
+blocks of shared bounding box**, four verified fortresses. Spread 8 beats
+looser bands outright (201 at spread 10, 148 at spread 12), and it is
+exhaustive: two runs with different limits returned the same twelve bases, so
+that is every quad fortress at the tightest geometry the grid allows. Within
+that band the scores run 138–286, so the first candidate emitted is not the one
+worth having.
 
 One result the wiring makes cheap: when the solver **completes** and finds
 nothing, that is a proof of absence over all 2⁴⁸ seeds, in seconds. The example
