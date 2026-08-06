@@ -161,6 +161,63 @@ cases prove it is not simply blind — so the negative is a measurement, not a
 silence. It is 108 chests, not a proof over all seeds; a wider hunt would
 strengthen or overturn it, and `--json` exists so one can accumulate.
 
+### treasure_casing.py — the chest writes its own walls
+
+The probe above answers "what is next to the chest", which turned out to be the
+wrong question. Buried treasure does not simply sit in terrain: it takes the
+block at its landing spot and writes that block into whichever of its six **face**
+neighbours were air or water. The chest arrives already walled in.
+
+```sh
+python treasure_casing.py <seed> [radius]
+```
+
+The test that separates "encased by the structure" from "happens to be next to
+some": the overwrite hits the six faces and not the twenty diagonals, so faces
+should be markedly more uniform. Over 16 chests they are — **75% against 59%** —
+and individual chests show the rule outright:
+
+```
+chest (1737,44,153)
+    faces  [andesite, andesite, andesite, andesite, gravel, gravel]
+```
+
+Four faces written with the block it landed on; two left as gravel because those
+were already solid, so there was nothing to overwrite. **4/6 is a complete
+casing, not a partial one**, which is why a hunt must not score it as half a
+result. Judging by the fraction of *originally air-or-water* faces that came out
+ore would be truer still, but that state is gone by the time anything can look.
+
+### hunt_treasure_ore.py — can the casing be ore?
+
+```sh
+python hunt_treasure_ore.py --target iron_ore --min 2 --seeds 120 --radius 6000
+python hunt_treasure_ore.py --target any --min 1 ...     # rank by total ore faces
+```
+
+Scores the six faces, not all 26 neighbours — the diagonals are terrain the
+structure never touched, and counting them buries the signal. Screening is one
+pass against the 20 ores plus the 16 blocks a casing is actually made of; a face
+matching none of those falls through to the full 85-block list rather than being
+recorded as unknown, since an unidentified face is exactly the one that might
+matter. That is 186 commands per chest against 630, and roughly 4× the chests
+per hour.
+
+**What the casing can be.** Over 87 chests: sand 64, gravel 13, sandstone 6,
+stone 2, andesite 1, diorite 1. Two groups, and the split is the generation rule
+showing through — the sediment the chest sat *in*, and the rock it sat *on*. The
+scan descends from the ocean floor until the block *beneath* is stone-like, so
+ore, not being a stopping block, is fallen *through* and landed *on*. The
+reachable configuration is therefore narrow but real: an ore blob whose top block
+sits directly under the beach sediment, with stone below it.
+
+**Deepslate iron ore cannot case a buried treasure.** Deepslate replaces stone
+only below y≈8, and every chest measured sits at y 32–79 — the scan stops at the
+first stone-like block under the ocean floor and never reaches deepslate depth.
+Plain `iron_ore` is the reachable target; the deepslate variants are on the
+candidate list because leaving them off would have mislabelled a find, not
+because a treasure can reach them.
+
 ### Cost, honestly
 
 ~14 s to boot a world, ~8 s per village, ~2 s per treasure shell. The radius is

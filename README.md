@@ -1008,6 +1008,22 @@ does not occur, bedrock being a hundred blocks below anything measured. The
 detector fires when something unusual is present (two chests had ore touching
 them), so that negative is a measurement rather than a blind spot.
 
+**"A buried treasure encased in ore."** That first probe answered the wrong
+question. Buried treasure does not sit in terrain — it takes the block at its
+landing spot and writes it into whichever of its six **face** neighbours were air
+or water, so the chest arrives already walled in. `treasure_casing.py` separates
+the six faces from the twenty diagonals and finds them **75% uniform against
+59%**, with chests like `[andesite ×4, gravel ×2]`: four faces overwritten, two
+already solid. So 4/6 is a *complete* casing, and `hunt_treasure_ore.py` scores
+the faces rather than all 26 neighbours.
+
+The casing over 87 chests is sand 64, gravel 13, sandstone 6, stone 2, andesite
+1, diorite 1 — the sediment it sat *in* and the rock it sat *on*. The scan
+descends until the block beneath is stone-like, so ore is fallen *through* and
+landed *on*: reachable only where a blob's top block sits directly under the
+sediment. **Deepslate iron is out of reach entirely** — deepslate needs y≲8 and
+these chests are at y 32–79.
+
 This tier is **slow and one-seed-at-a-time**: ~14 s per world, ~8 s per village.
 It is a confirmer and a hunter, not a filter inside the main search — the flow is
 cubiomes finds candidates in microseconds, the server checks the survivors.
