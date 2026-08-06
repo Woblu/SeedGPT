@@ -94,3 +94,80 @@ different question from "the surface". Closing that means rewriting the density
 function, not patching a caller. Until then anything block-exact -- height and
 relief records, `cave_below`, cactus columns -- should be confirmed against this
 oracle before it is claimed, which is what confirm_cactus.py is for.
+
+## Two things cubiomes cannot answer, and now something can
+
+Both of these are the same shape: a question about the *finished world* rather
+than about a placement formula. cubiomes computes where things go; it does not
+build the blocks, so it cannot be asked what is actually there.
+
+### village_smiths.py — how many blacksmiths a village really has
+
+The 1.13 "blacksmith" split into three buildings in 1.14, each identified by the
+workstation its template places: `blast_furnace` (armorer), `smithing_table`
+(toolsmith), `grindstone` (weaponsmith). A 1.14+ village is assembled by the
+jigsaw generator at generation time, and no seed-finding library implements that
+assembler — FeatureUtils and mc_feature both ship it unfinished, and `tier2/`
+runs the real one only for 1.16.5 and was never wired to anything.
+
+So this does not reproduce the assembler. It counts the workstations in the
+finished world, which is both simpler and version-current: whatever the assembler
+decided, the blocks are there.
+
+```sh
+python village_smiths.py <seed> [radius] [--min N]
+python hunt_smiths.py --min 5 --seeds 200 --radius 1500
+```
+
+**Every count carries a positive control.** A village has exactly one bell, so a
+box reporting zero bells reports nothing at all rather than zero smiths — the
+same discipline as the bedrock control above, for the same reason. `bells > 1`
+means the box caught more than one village meeting point, so that line is a
+CLUSTER, not one village; it is printed rather than hidden, because "five smiths"
+means different things for the two.
+
+Counting is `/fill ... replace`, which is **destructive** — probing a
+village-sized volume one position at a time is hundreds of thousands of commands
+against a few dozen fills. Each seed therefore gets a fresh throwaway world and
+is counted exactly once.
+
+### treasure_probe.py — what is actually around a buried treasure
+
+```sh
+python treasure_probe.py <seed> [radius]
+python hunt_treasure.py --seeds 40 --radius 3000 --json out.jsonl
+```
+
+Identification is by **candidate list**: `/execute if block` can only ask "is it
+X?", and `/data get block` only speaks for block entities, so a neighbour
+matching nothing on the list is reported as *unidentified* — never as air, and
+never folded into "ordinary". That distinction is the point, since an unknown
+neighbour might be the interesting one.
+
+**What the data says.** Over 108 chests across 6 seeds (1.21.1):
+
+| | |
+|---|---|
+| chest Y | 32–79, concentrated in 48–63 |
+| neighbours | sand 1314, sandstone 706, water 241, gravel 208, stone 167, … |
+| unidentified | **0** — the candidate list covers everything actually present |
+| unusual | 2 chests with an ore touching them (copper, coal) |
+
+So on this evidence a buried treasure **cannot** be encased in bedrock: it
+generates at the ocean floor or beach surface, and bedrock is at y −64…−59,
+a hundred blocks below anything measured. No spawner was adjacent to any chest
+either. The detector does fire when something unusual is there — the two ore
+cases prove it is not simply blind — so the negative is a measurement, not a
+silence. It is 108 chests, not a proof over all seeds; a wider hunt would
+strengthen or overturn it, and `--json` exists so one can accumulate.
+
+### Cost, honestly
+
+~14 s to boot a world, ~8 s per village, ~2 s per treasure shell. The radius is
+the only lever that amortises the boot. Each world is ~60 MB and is deleted as
+soon as it has been read — fifty seeds was 2.9 GB before that was added.
+
+Servers get their own port per instance. The default 25565 lingers in TIME_WAIT
+between back-to-back worlds, which failed 31 seeds out of 40 in one run while
+still printing a tidy "0 found" — so the hunts now report failed seeds loudly
+and separately from negative results.

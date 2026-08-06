@@ -949,6 +949,41 @@ test suite confirms every zombie-village result really is abandoned. (Geodes
 aren't in this engine's structure list, so its `cracked`/`size` variant fields
 aren't exposed.)
 
+## Questions about the finished world (tier 3)
+
+Some questions are not about *where* something generates but about what is
+actually there once every generation stage has run. cubiomes computes placement;
+it does not build blocks, so it cannot answer them at all. `tier3-java/` runs a
+real 1.21.1 server and reads the blocks out of the world it makes.
+
+```sh
+python tier3-java/village_smiths.py <seed> 1500      # blacksmiths per village
+python tier3-java/hunt_smiths.py --min 5 --seeds 200 # hunt for a 5-smith village
+python tier3-java/treasure_probe.py <seed>           # what surrounds a treasure
+```
+
+**"A village with 5 blacksmiths."** The 1.13 blacksmith became three buildings
+in 1.14 — armorer, toolsmith, weaponsmith — each identified by the workstation
+its template places. A 1.14+ village is assembled by the jigsaw generator, and
+no seed-finding library implements that assembler. Rather than reproduce it,
+this counts `blast_furnace` / `smithing_table` / `grindstone` in the finished
+world: whatever the assembler decided, the blocks are there to count. Every
+count carries a positive control — a village has one bell, and a box with no
+bell reports nothing rather than zero.
+
+**"A buried treasure somewhere it shouldn't be."** Probes all 26 neighbours of
+the chest in one server round trip and identifies each against a candidate list,
+reporting anything it cannot name as *unidentified* rather than as ordinary.
+Measured over 108 chests: they sit at y 32–79 in sand, sandstone, water and
+gravel, with **zero** unidentified neighbours — so a bedrock-encased treasure
+does not occur, bedrock being a hundred blocks below anything measured. The
+detector fires when something unusual is present (two chests had ore touching
+them), so that negative is a measurement rather than a blind spot.
+
+This tier is **slow and one-seed-at-a-time**: ~14 s per world, ~8 s per village.
+It is a confirmer and a hunter, not a filter inside the main search — the flow is
+cubiomes finds candidates in microseconds, the server checks the survivors.
+
 ## Not every structure is verified
 
 A structure position comes from two things: a generation **attempt** (exact

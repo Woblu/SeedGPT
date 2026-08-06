@@ -25,6 +25,7 @@ import atexit
 import os
 import queue
 import re
+import socket
 import shutil
 import subprocess
 import sys
@@ -69,6 +70,7 @@ class JavaServer:
         self.q = queue.Queue()
         self._n = 0
         self._forced = set()
+        self.port = self._free_port()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -78,6 +80,14 @@ class JavaServer:
 
     def __exit__(self, *exc):
         self.stop()
+
+    @staticmethod
+    def _free_port():
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
 
     def _prepare(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -103,14 +113,33 @@ class JavaServer:
             "sync-chunk-writes": "false",
             "enable-jmx-monitoring": "false",
             "allow-nether": "false",
+            # Its own port per instance. The default 25565 lingers in TIME_WAIT
+            # after a stop, so back-to-back worlds -- exactly what a hunt does --
+            # hit "FAILED TO BIND TO PORT" and the run quietly checks a fraction
+            # of what it was asked to. That failed 31 seeds out of 40 once, and
+            # still printed a tidy "0 found".
+            "server-port": str(self.port),
         }
         with open(os.path.join(self.dir, "server.properties"), "w") as f:
             for k, v in props.items():
                 f.write(f"{k}={v}\n")
 
-    def start(self, timeout=300):
+    def start(self, timeout=300, tries=3):
         if not os.path.exists(JAR):
             raise RuntimeError(f"missing {JAR} -- see tier3-java/README.md")
+        # A port can still be taken between choosing it and binding it, so a
+        # bind failure retries on a new one rather than killing the whole run.
+        for attempt in range(tries):
+            try:
+                return self._start_once(timeout)
+            except RuntimeError as e:
+                if "FAILED TO BIND" not in str(e) or attempt == tries - 1:
+                    raise
+                self.stop()
+                self.port = self._free_port()
+        raise RuntimeError("unreachable")
+
+    def _start_once(self, timeout):
         self._prepare()
         self.proc = subprocess.Popen(
             [JAVA, f"-Xmx{self.ram}", "-jar", JAR, "nogui"],
@@ -250,6 +279,62 @@ class JavaServer:
             if run > best:
                 best, best_base = run, y
         return (best, best_base)
+
+    # -- identifying and counting -----------------------------------------
+
+    def identify(self, x, y, z, candidates):
+        """Which of `candidates` is at this position? A list, normally 0 or 1.
+
+        `/execute if block` can only ASK about a block, never name one, and
+        `/data get block` only speaks for block entities. So identification here
+        means testing a list -- which makes "not on the list" a real answer,
+        distinct from "nothing there". Callers get the empty list for that and
+        must not read it as air.
+
+        None if the chunk is not loaded, which is not the same as no match.
+        """
+        self.forceload(x, z)
+        if not self.loaded(x, z):
+            return None
+        cmds = [f"execute if block {x} {y} {z} {b} run say HIT{i}"
+                for i, b in enumerate(candidates)]
+        out = self.run(cmds)
+        found = []
+        for line in out:
+            m = re.search(r"\bHIT(\d+)\b", line)
+            if m:
+                found.append(candidates[int(m.group(1))])
+        return found
+
+    def count_block(self, x0, y0, z0, x1, y1, z1, block, _limit=32):
+        """How many `block` are in this box? DESTRUCTIVE -- they become air.
+
+        `/fill ... replace` is the only cheap way to count: probing a village-
+        sized volume one position at a time is hundreds of thousands of
+        commands, while this is a few dozen. The price is that the blocks are
+        gone afterwards, so a run's world is spent once it has been counted --
+        which is fine for a throwaway `run-<seed>/`, and ruinous if a later
+        probe reuses it. Count last, or pass fresh=True.
+
+        Fill is capped at 32768 blocks per command, so the box is tiled.
+        """
+        self.forceload((x0 + x1) // 2, (z0 + z1) // 2,
+                       radius_chunks=max(2, (max(x1 - x0, z1 - z0) // 16) + 2))
+        cmds = []
+        for bx in range(x0, x1 + 1, _limit):
+            for by in range(y0, y1 + 1, _limit):
+                for bz in range(z0, z1 + 1, _limit):
+                    cmds.append(
+                        f"fill {bx} {by} {bz} "
+                        f"{min(bx+_limit-1, x1)} {min(by+_limit-1, y1)} {min(bz+_limit-1, z1)} "
+                        f"minecraft:air replace {block}")
+        total = 0
+        for i in range(0, len(cmds), 200):          # keep batches readable
+            for line in self.run(cmds[i:i+200]):
+                m = re.search(r"Successfully filled (\d+) block", line)
+                if m:
+                    total += int(m.group(1))
+        return total
 
 
 if __name__ == "__main__":
