@@ -55,6 +55,14 @@ INTERESTING = [
     "minecraft:diamond_ore", "minecraft:deepslate_diamond_ore",
     "minecraft:emerald_ore", "minecraft:deepslate_emerald_ore",
     "minecraft:gold_ore", "minecraft:redstone_ore", "minecraft:lapis_ore",
+    # Every deepslate variant, not just the two rare ones. Without these a chest
+    # encased in deepslate iron came back UNIDENTIFIED -- honest, but not found,
+    # which for a hunt is the same as missing it.
+    "minecraft:deepslate_iron_ore", "minecraft:deepslate_copper_ore",
+    "minecraft:deepslate_coal_ore", "minecraft:deepslate_gold_ore",
+    "minecraft:deepslate_redstone_ore", "minecraft:deepslate_lapis_ore",
+    "minecraft:raw_iron_block", "minecraft:raw_copper_block",
+    "minecraft:raw_gold_block", "minecraft:iron_block",
     "minecraft:budding_amethyst", "minecraft:amethyst_block",
     "minecraft:amethyst_cluster", "minecraft:chest", "minecraft:trapped_chest",
     "minecraft:mossy_cobblestone", "minecraft:rail", "minecraft:oak_planks",
@@ -71,6 +79,13 @@ INTERESTING = [
 
 CANDIDATES = ORDINARY + INTERESTING
 
+# Ore-only, for a targeted hunt: probing 26 neighbours against 16 blocks instead
+# of 60 is a quarter of the commands, and a hunt is bounded by how many chests it
+# can reach, not by how carefully it describes each one.
+ORES = [b for b in INTERESTING if b.endswith("_ore")
+        or b.endswith("raw_iron_block") or b.endswith("raw_copper_block")
+        or b.endswith("raw_gold_block") or b == "minecraft:iron_block"]
+
 
 def locate(seed, version, radius):
     """Every buried treasure in range, from the fast side."""
@@ -84,7 +99,7 @@ def locate(seed, version, radius):
     return out
 
 
-def shell_probe(srv, x, y, z):
+def shell_probe(srv, x, y, z, candidates=None):
     """Identify all 26 neighbours of (x,y,z) in ONE server round trip.
 
     Calling identify() per position would be 26 round trips plus 26 positive
@@ -94,16 +109,17 @@ def shell_probe(srv, x, y, z):
     offsets = [(dx, dy, dz)
                for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)
                if (dx, dy, dz) != (0, 0, 0)]
+    cands = candidates or CANDIDATES
     cmds = []
     for oi, (dx, dy, dz) in enumerate(offsets):
-        for ci, b in enumerate(CANDIDATES):
+        for ci, b in enumerate(cands):
             cmds.append(f"execute if block {x+dx} {y+dy} {z+dz} {b} run say P{oi}_{ci}")
     out = srv.run(cmds)
     hits = {}
     for line in out:
         for m in re.finditer(r"\bP(\d+)_(\d+)\b", line):
             oi, ci = int(m.group(1)), int(m.group(2))
-            hits.setdefault(offsets[oi], []).append(CANDIDATES[ci])
+            hits.setdefault(offsets[oi], []).append(cands[ci])
     result = {}
     for off in offsets:
         got = hits.get(off, [])
