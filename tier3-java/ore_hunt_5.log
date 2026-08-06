@@ -1,2 +1,7 @@
 hunting buried treasure CASED in >= 1 face(s) of any, seeds 1125..1149, radius 4000
   [seed 1125] 54 chests, 7 min, 7.3s/chest, best 0/6
+  [seed 1126] 123 chests, 20 min, 9.6s/chest, best 0/6
+  [seed 1127] 184 chests, 29 min, 9.5s/chest, best 0/6
+  [seed 1128] 217 chests, 35 min, 9.8s/chest, best 0/6
+  seed 1129: server failed (server died mid-command)
+  seed 1130: server failed (server did not report Done within timeout)

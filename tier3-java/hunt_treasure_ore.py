@@ -108,10 +108,15 @@ def main():
                 # Generation is the cost, not probing. Ask for every treasure's
                 # chunks up front so the server works through them together.
                 for (x, z) in spots:
-                    # 1, not 2. The six faces reach one block out, so a 3x3 of
-                    # chunks always contains them even when the chest sits on a
-                    # chunk border -- a 5x5 generates 25 chunks to read 2. Chunk
-                    # generation is the whole cost of this hunt.
+                    # 1, not 2 and not 0. Treasure always sits at
+                    # (chunkX*16+9, chunkZ*16+9) -- every chest coordinate
+                    # measured is 9 mod 16 -- so its faces are at offsets 8..10
+                    # and a single chunk would geometrically suffice. Forcing
+                    # only that chunk was measured and is NOT faster: the server
+                    # generates the neighbourhood anyway to finish a chunk, so
+                    # the 5.3s does not shrink, it just reappears in the column
+                    # scan (0.04s -> 1.79s per chest). 1 keeps the margin for
+                    # nothing, so it keeps the margin.
                     srv.forceload(x, z, radius_chunks=1)
                 for (x, z) in spots:
                     if not srv.loaded(x, z):
@@ -139,10 +144,19 @@ def main():
                             ore_tally[b] += c
 
                         if score:
-                            rows.append({"seed": seed, "x": x, "y": y, "z": z,
-                                         "score": score, "ore": dict(counts),
-                                         "casing": modal,
-                                         "faces": [full[o] for o in FACES]})
+                            row = {"seed": seed, "x": x, "y": y, "z": z,
+                                   "score": score, "ore": dict(counts),
+                                   "casing": modal,
+                                   "faces": [full[o] for o in FACES]}
+                            rows.append(row)
+                            # Written as it is found, not at exit. A hunt runs
+                            # for hours and gets killed; buffering to the end
+                            # means an interrupted run loses everything it
+                            # learned, which is how the first one lost its data.
+                            if jsonl:
+                                with open(jsonl, "a", encoding="utf-8") as fh:
+                                    fh.write(json.dumps(row) + "\n")
+                                    fh.flush()
                         if score > best:
                             best, best_at = score, (seed, x, y, z, dict(counts),
                                                     [full[o] for o in FACES])
@@ -190,10 +204,6 @@ def main():
         print(f"  /tp {x} {y} {z}")
     print(f"{len(hits)} chest(s) met the >= {want} bar")
 
-    if jsonl:
-        with open(jsonl, "a", encoding="utf-8") as f:
-            for r in rows:
-                f.write(json.dumps(r) + "\n")
     return 0 if hits else 1
 
 

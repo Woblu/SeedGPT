@@ -1,3 +1,9 @@
 hunting buried treasure CASED in >= 1 face(s) of any, seeds 1000..1024, radius 4000
   best so far: seed 1000 (-551,46,2297) 1/6 faces ore {'minecraft:coal_ore': 1}
   [seed 1000] 36 chests, 4 min, 5.8s/chest, best 1/6
+  [seed 1001] 116 chests, 17 min, 9.0s/chest, best 1/6
+  [seed 1002] 179 chests, 27 min, 9.1s/chest, best 1/6
+  best so far: seed 1003 (-2231,48,-3143) 2/6 faces ore {'minecraft:coal_ore': 2}
+  [seed 1003] 236 chests, 37 min, 9.4s/chest, best 2/6
+  [seed 1004] 276 chests, 44 min, 9.5s/chest, best 2/6
+  seed 1005: server failed (server did not report Done within timeout)

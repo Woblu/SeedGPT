@@ -111,6 +111,12 @@ class JavaServer:
             "spawn-animals": "false",
             "spawn-monsters": "false",
             "sync-chunk-writes": "false",
+            # Boot was measured at 100s against 5.5s to generate a treasure's
+            # chunks, and nearly all of it is the server pre-generating a spawn
+            # area no probe ever looks at. Nothing here reads spawn.
+            "spawn-chunk-radius": "0",
+            "max-players": "1",
+            "network-compression-threshold": "-1",
             "enable-jmx-monitoring": "false",
             "allow-nether": "false",
             # Its own port per instance. The default 25565 lingers in TIME_WAIT
@@ -155,6 +161,11 @@ class JavaServer:
             if line is None:
                 break
             if "Done (" in line:
+                # Every world here is a throwaway read once and deleted, so
+                # writing chunks to disk buys nothing and costs I/O on the hot
+                # path. This also stops a killed run leaving 60 MB per seed
+                # behind -- an earlier one accumulated 2.8 GB that way.
+                self.run("save-off")
                 return self
             if "FAILED TO BIND" in line or "Failed to start" in line:
                 raise RuntimeError(f"server failed to start: {line}")
