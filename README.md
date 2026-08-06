@@ -371,7 +371,7 @@ Search for a structure whose chests hold a rare item:
 ```
 
 Supported structures: `desert_pyramid`, `jungle_temple`, `igloo`, `outpost`,
-`shipwreck`, and `ruined_portal`. The item list per structure is exposed at
+`shipwreck`, `ruined_portal`, `fortress`, and `bastion`. The item list per structure is exposed at
 `/api/lootitems` and in the UI dropdown, so you can only ask for something that
 can actually appear there. `count` aggregates across every chest in an instance,
 and the search scans **all** instances within the radius — a farther pyramid
@@ -415,14 +415,44 @@ its RNG state and output buffer in place. Concurrent rolls therefore race, which
 silently made loot counts depend on thread timing. `src/loot.c` serialises the
 roll+read with a small spinlock; the ~5 µs roll is a tiny fraction of the
 per-seed cost and the biome/structure work stays parallel, so throughput is
-unaffected in practice. Two structures were investigated and left out for hard
-reasons: **fortress** (`getFortressPieces` never enforces its buffer bound, so a
-large fortress overflows and crashes) and **bastion** (the engine simulates only
-some pieces and its reported loot did not reproduce under verification).
+unaffected in practice.
+
+### The nether pair
+
+Fortress and bastion were previously excluded, one for a crash and one because
+its counts did not reproduce. Both are now in, for different reasons.
+
+**Fortress — exact.** `getFortressPieces` documents its `n` argument as "the
+maximum size of the output list", stores it in `env->nmax`, and then never reads
+it: every piece is written at `env->list + *env->n` with no bound. That is not a
+rare overflow — over a 3.6-million-fortress sample the median fortress has ~130
+pieces and **84% have more than 64**, so the old array was overrun by most
+fortresses, not by an unlucky one (largest seen: 257 pieces, 96 chests).
+[`patches/fortress-piece-bound.patch`](patches/fortress-piece-bound.patch) makes
+the engine honour the bound — returning `NULL` exactly as the existing collision
+path does, so generation unwinds instead of corrupting memory — and `setup.sh`
+applies it after pinning the upstream commit. With room to work in, the patch
+changes nothing: the same 180 000-fortress sample produces byte-identical piece
+counts before and after. The engine simulates the entire corridor/bridge graph,
+so **every** fortress chest is found and the counts are exact.
+
+**Bastion — a floor, stated as one.** cubiomes simulates only the starting piece
+of each of the four bastion types, i.e. the chests that *always* generate (2 for
+units, 1 for hoglin stable, 2 for treasure, 1 for bridge); the randomly
+assembled remainder is not modelled (`// TODO: simulate all pieces` upstream). So
+a bastion loot count is a **lower bound**: every hit is real and reproduces
+exactly, but a bastion whose only copy of the item sits in a later chest is
+missed. `lootCountIsLowerBound()` names that asymmetry rather than leaving it
+implicit, and the API description tells the planner to say so in its notes.
+
+The earlier "bastion loot did not reproduce" finding was the loot-context
+singleton race described above, not the piece list — the search ran threaded and
+the verifier did not. With the lock in place, 24 fortress and bastion instances
+pulled from a 32-thread search all re-derive exactly, single-threaded.
 
 Every supported structure has its loot re-derived from scratch in the test suite
-(`tools/checkloot`, `tools/checkrpchest`) — fewer structures, but each one you
-can trust.
+(`tools/checkloot`, `tools/checkrpchest`) — including a 236-piece fortress, to
+keep the buffer honest.
 
 ## Ore density
 
@@ -589,6 +619,113 @@ search), so expect a long scan; the cost scales with the search reach, so keep
 This is *not* an infinite-world scan — it examines a large area around the
 reference, which is what you actually want (a quad hut you can reach), not a
 cluster half a million blocks away.
+
+#### Solving for the cluster instead of scanning for it
+
+`tools/quad.c` solves the **first** structure's two constraints with
+`src/invert.c` and tests the other six — ~140× better than brute force, and
+still 4.9e11 seeds *per corner offset*, so a complete enumeration costs more the
+looser the spread. `tools/mitm.c` solves all eight at once
+(`docs/meet-in-the-middle.md`):
+
+```sh
+./build/mitm.exe 1.21 swamp_hut quad 15          # every quad base in 2^48
+./build/mitm.exe 1.21 swamp_hut --verify         # sound + complete, two-sided
+```
+
+**The planner uses it automatically.** A `spread` cluster condition on a
+solvable structure no longer walks seeds 0,1,2,… — `src/solve.c` hands `find` a
+list of seeds that already place the cluster, and the search spends its budget
+on those. Only the seed *source* changes: pass 1 still evaluates every
+candidate, so the solver decides what is **tried**, never what is a **hit**.
+`find` prints which path it took and why, and falls back to scanning when a
+cluster is loose enough that scanning is genuinely the better tool (measured,
+not guessed — it builds under a time budget and judges by the yield).
+
+The failure mode that matters is the list *missing* clusters, so that is checked
+by brute force rather than argued: `mitm --covers 240 2000000` finds real
+clusters the hard way and demands the solver would have proposed each one — 185
+found, 0 missed.
+
+One result the wiring makes cheap: when the solver **completes** and finds
+nothing, that is a proof of absence over all 2⁴⁸ seeds, in seconds. The example
+two paragraphs above is one — four swamp huts within **160 blocks of a common
+member cannot exist**, because the two diagonal members are never closer than
+9√2 chunks ≈ 204 blocks. A plain scan reports that as 0.0000% survival, which
+reads as "rare" rather than "impossible".
+
+Split the 48-bit seed into halves. The low half alone decides whether **any**
+high half can work — `(s1 >> 17) mod 24` is `8·s1H + (s1L >> 17)` (128 ≡ 8 mod
+24), and since `gcd(128, 24) = 8` divides 24 only 3 ways, a low half landing on
+the wrong residue is dead for every high half at once, having touched none of
+them. Eight constraints later
+(x *and* z, all four structures) that is `2²⁴/8⁸ ≈ 1` surviving low half when
+the offsets are pinned: **the low 24 bits of the seed fall out of the geometry.**
+The survivors then meet the high halves, either by sweeping all 2²⁴ (obvious) or
+by a bucket lookup keyed on the high half's residue class (70× fewer tests for
+swamp huts, 28 000× for ruined portals).
+
+The two halves are strong in *opposite* regimes, and `gcd(128, range)` decides
+which. Swamp huts (gcd 8) get a sieve that pins the low half to ~1 value in 2²⁴
+and a weak 3-residue bucket key; ruined portals (gcd 1) get **no sieve at all** —
+every low half stays live — and a 25-residue key that carries the whole search.
+Building only one of the two would have left half the structures unimproved.
+
+Complete enumeration of **every** swamp-hut quad in the world, at spread 15 —
+the tightest spread that has any:
+
+| | seeds/pairs examined | wall clock | quad bases |
+|---|---|---|---|
+| `quad.c` | 2.39e13 seeds | ~49 h (projected from its measured rate) | 1 045 607 |
+| `mitm --nested` | 8.34e11 pairs | 318 s | 1 045 607 |
+| `mitm` (join) | 1.54e10 pairs | **44 s** | 1 045 607 |
+
+Same 1 045 607 bases from the sweep and the join, measured on the same machine
+that ran `quad.exe` for the projection (49 corner offsets × 2⁴⁸/24² seeds at its
+observed 1.35e8 seeds/s).
+
+A solver that silently drops seeds reports "nothing found" for seeds that exist,
+so `--verify` is two-sided and the completeness half is the one that matters: it
+checks acceptance against cubiomes' placement in **both** directions over
+millions of seeds, brute-forces windows and demands the *same set* back (not
+similar counts), takes low halves the sieve **discarded** and sweeps all 2²⁴ high
+halves against each, and requires the nested sweep and the hash join to return
+identical sets over the whole 2⁴⁸ space. Every base `quad.c` finds must be
+reachable, and the suite checks that against the real binary.
+
+**Which structures.** Every region-based structure in the game except the four
+that use a different algorithm entirely:
+
+| solvable | how |
+|---|---|
+| swamp hut, desert pyramid, jungle pyramid, igloo, village, ocean ruin, shipwreck, ruined portal, trail ruins, trial chambers | `ox = (s1>>17) % r` — the high half is pinned to one residue mod `r/gcd(128,r)` |
+| **ancient city** | power-of-two range: Java scales instead of taking a remainder, which for r = 2ᵏ is exactly `ox = s1H >> (24−k)` — a prefix of the high half |
+| **fortress, bastion (1.18+), pillager outpost** | same placement, plus a rejection roll that is a concrete function of the seed and the chunk |
+| **monument, mansion, end city** | two draws averaged per axis (four per structure); the sieve uses each draw's marginal |
+| **not solvable** | mineshaft and buried treasure (per-chunk rolls), stronghold (ring-based), geodes and wells (Xoroshiro population seeds) |
+
+`--verify` is green for **all twelve**: swamp hut, village, ruined portal,
+desert pyramid, shipwreck, ancient city, outpost, fortress, bastion, monument,
+mansion and end city. The suite runs six of them — between them covering every
+distinct code path, including `gcd(128, range)` of 8, 2 and 1, the power-of-two
+placement, a rejection roll, and the averaged pair.
+
+Mansion and end city took a while to get there, and the reason is worth knowing
+if you touch the join: on a **windowed** run the bucket lookup used to compute
+its class sets before checking whether a plain sweep would be cheaper, and for a
+query whose sieve keeps every low half that setup cost eleven minutes to avoid
+sweeping two values. Sweeping wins whenever the window is smaller than the walk's
+setup, and that is now decided first — mansion's verify went from over forty
+minutes to 2m29s.
+
+One result worth stating: under `quad.c`'s pairwise rule, **spread 13 and 14 are
+empty** — the two diagonal huts are ≥9 chunks apart on both axes, so nothing is
+tighter than 9√2 ≈ 12.73, and the offsets that reach it have no seed at all. The
+tightest swamp-hut quad that exists is spread 15. Since an empty answer from a
+sieve looks exactly like a broken sieve, `mitm quad` corroborates one by solving
+for three structures and testing the fourth with cubiomes — a route that never
+consults the sieve about it (650 236 seeds place three huts right; none places
+the fourth).
 
 ## Biome adjacency
 
@@ -1010,6 +1147,12 @@ tools/checkportal.c recomputes a ruined portal's buried/surface variant independ
 tools/checkore.c    recounts a material's ore blocks around a point independently
 tools/checkvariant.c re-reads a structure's variant flags (zombie/basement/giant)
 tools/checkrpchest.c re-derives a ruined portal's chest position + loot independently
+src/invert.{h,c}    structure placement run backwards: which seeds put it HERE
+src/mitm.{h,c}      meet-in-the-middle: all of a cluster's constraints at once
+tools/invert.c      CLI + two-sided soundness/completeness proof for the inverter
+tools/quad.c        quad-hut hunt by solving the first structure, testing the rest
+tools/mitm.c        quad-hut hunt by solving all eight constraints | --verify
+patches/            the one upstream fix this needs (applied by setup.sh)
 src/ore.{h,c}       ore-density counting (generateOres), material-by-block matching
 tools/lootitems.c   dumps the items each structure's loot tables can produce
 src/loot.{h,c}      per-thread loot-table cache + item counting

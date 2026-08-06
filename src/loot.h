@@ -29,3 +29,8 @@ int lootCountItem(LootCache *lc, int mc, uint64_t seed, int structType,
 
 // Is `name` a structure this module can search loot for?
 int lootStructureSupported(int structType);
+
+// True when only some of the structure's chests are modelled, so the count is a
+// floor: every hit is real, but a miss is not proof of absence. Bastions are the
+// one such case -- the engine simulates their guaranteed starting piece only.
+int lootCountIsLowerBound(int structType);

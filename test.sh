@@ -37,7 +37,9 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1 \
 && ./build.sh tools/checkcluster.c >/tmp/sc_test/b17 2>&1 \
 && ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1 \n&& ./build.sh tools/checkplacement.c >/tmp/sc_test/b19 2>&1 \
-&& ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1 \n&& ./build.sh tools/cactus.c >/tmp/sc_test/b21 2>&1 \n&& ./build.sh tools/invert.c >/tmp/sc_test/b22 2>&1 \n&& ./build.sh tools/findat.c >/tmp/sc_test/b23 2>&1; then
+&& ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1 \n&& ./build.sh tools/cactus.c >/tmp/sc_test/b21 2>&1 \n&& ./build.sh tools/invert.c >/tmp/sc_test/b22 2>&1 \n&& ./build.sh tools/findat.c >/tmp/sc_test/b23 2>&1 \
+&& ./build.sh tools/quad.c >/tmp/sc_test/b24 2>&1 \
+&& ./build.sh tools/mitm.c >/tmp/sc_test/b25 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
@@ -589,6 +591,56 @@ while IFS=$'	' read -r s a x z; do
 done < /tmp/sc_test/loot.tsv
 [ "$badloot" -eq 0 ]   && ok "all reported loot reproduces independently"   || bad "loot counts do not reproduce" "$badloot seeds disagreed"
 
+# Nether chest loot. Fortresses were unsupported because getFortressPieces takes
+# a buffer bound and never enforced it -- and 84% of fortresses exceed 64 pieces,
+# so the old array was overrun by most of them, not a rare one. With the bound
+# honoured (patches/fortress-piece-bound.patch) the whole corridor graph is
+# simulated, so fortress counts are exact. Bastion counts only the chests that
+# always generate, so they are a floor -- which still has to reproduce exactly.
+section "nether chest loot"
+cat > /tmp/sc_test/nether.json <<'EOF'
+{"version":"1.21","conditions":[
+ {"id":"f","loot":{"structure":"fortress","item":"gold_ingot","count":8},"within":1200},
+ {"id":"b","loot":{"structure":"bastion","item":"gold_ingot","count":6},"within":1200}]}
+EOF
+FIND_TSV=/tmp/sc_test/nether.tsv ./build/find.exe /tmp/sc_test/nether.json 2000000 16 \
+  > /tmp/sc_test/nether.log 2>&1
+nn=$(grep -c '^SEED' /tmp/sc_test/nether.log)
+[ "$nn" -gt 0 ] && ok "nether loot query returns seeds ($nn)" \
+                || bad "nether loot query found nothing" "$(tail -3 /tmp/sc_test/nether.log)"
+
+# Every reported instance re-derived from scratch, single-threaded. The search
+# runs 16 threads over shared loot contexts, so this is also the regression test
+# for the singleton race that made bastion counts irreproducible before.
+# One TSV row per SEED, with every condition's id/x/z appended -- so both the
+# fortress and the bastion are on the same line. Reading only the first triple
+# would silently check half of what the query asked for.
+nbad=0; nchk=0
+while IFS=$'\t' read -r s a1 x1 z1 a2 x2 z2; do
+  for t in "$a1 $x1 $z1" "$a2 $x2 $z2"; do
+    set -- $t
+    case "$1" in f) st=fortress; want=8;; b) st=bastion; want=6;; *) continue;; esac
+    got=$(./build/checkloot.exe "$s" "$st" "$2" "$3" 1.21 gold_ingot 2>/dev/null | sed 's/.*gold_ingot=//')
+    nchk=$((nchk+1))
+    if [ -z "$got" ] || [ "$got" -lt "$want" ]; then
+      nbad=$((nbad+1))
+      echo "     $s $st ($2,$3): find said >=$want, checkloot said ${got:-none}" >&2
+    fi
+  done
+done < /tmp/sc_test/nether.tsv
+[ "$nchk" -gt 0 ] && [ "$nbad" -eq 0 ] \
+  && ok "fortress and bastion loot reproduce independently ($nchk instances)" \
+  || bad "nether loot does not reproduce" "checked=$nchk bad=$nbad"
+
+# The overflow itself: a fortress with hundreds of pieces must roll without
+# corrupting anything. checkloot sizes for it and refuses if the bound is hit.
+./build/checkloot.exe 17733 fortress 320 -208 1.21 > /tmp/sc_test/bigfort.out 2>&1
+if [ $? -eq 0 ] && grep -q "fortress" /tmp/sc_test/bigfort.out; then
+  ok "a 236-piece fortress rolls its chests without overrunning the buffer"
+else
+  bad "large fortress failed" "$(cat /tmp/sc_test/bigfort.out)"
+fi
+
 check_err "unsupported loot structure rejected"   '{"version":"1.21","conditions":[{"id":"c","loot":{"structure":"mansion","item":"diamond"}}]}'   "not supported"
 check_err "loot missing item rejected"   '{"version":"1.21","conditions":[{"id":"c","loot":{"structure":"igloo"}}]}'   "needs"
 
@@ -1027,6 +1079,92 @@ for s in swamp_hut village desert_pyramid shipwreck; do
     bad "inverter unsound or incomplete for $s" "$out"
   fi
 done
+# ------------------------------------------------------- meet in the middle
+# The MITM sieves the low 24 bits of the seed against every constraint at once,
+# so a low half no high half can rescue is discarded untouched. That is only
+# safe if a discarded low half really has no solutions; a sieve that drops seeds
+# reports "no quad huts" for configurations that exist and looks fine doing it.
+# --verify is two-sided (acceptance vs cubiomes both ways, exhaustive window set
+# equality, rejected low halves swept against all 2^24 high halves, and the
+# nested sweep vs the hash join over the whole 2^48 space).
+# These cover every distinct code path in the solver. gcd(128, range) decides
+# which half of the algorithm does the work -- swamp huts (gcd 8) lean on the
+# sieve, ruined portals (gcd 1) get nothing from it and lean entirely on the
+# join, villages (gcd 2) sit between. Ancient cities take the power-of-two
+# placement (a prefix of the high half, not a residue), outposts add a rejection
+# roll, monuments average two draws per axis, end cities add the 1008-block
+# origin gap, and mansions are the extreme range where NEITHER half filters --
+# which is where the join's "decide before you compute" bug hid, so it is worth
+# the two minutes it costs to keep watching it.
+section "meet-in-the-middle solver"
+for s in swamp_hut village ruined_portal ancient_city pillager_outpost monument mansion end_city; do
+  ./build/mitm.exe 1.21 "$s" --verify > "/tmp/sc_test/mitm_$s.out" 2>&1
+  if grep -q "^OK" "/tmp/sc_test/mitm_$s.out"; then
+    np=$(grep -oE '^[0-9]+ passed' "/tmp/sc_test/mitm_$s.out" | grep -oE '^[0-9]+')
+    ok "$s: sound and complete ($np checks, nested set == join set)"
+  else
+    bad "MITM unsound or incomplete for $s" "$(grep -E 'FAIL' "/tmp/sc_test/mitm_$s.out" | head -3)"
+  fi
+done
+
+# Cross-check against the tool it replaces. quad.c solves one structure and
+# tests the other three; whatever it finds, the MITM must be able to reach.
+./build/quad.exe 1.21 swamp_hut 16 6 2>/dev/null | grep QUADBASE | awk '{print $2}' \
+  > /tmp/sc_test/quadbases.txt
+qn=$(wc -l < /tmp/sc_test/quadbases.txt)
+qrej=$(./build/mitm.exe 1.21 swamp_hut --accepts 16 < /tmp/sc_test/quadbases.txt 2>&1 \
+       | grep -oE '[0-9]+ the MITM would never reach' | grep -oE '^[0-9]+')
+if [ "$qn" -gt 0 ] && [ "${qrej:-1}" -eq 0 ]; then
+  ok "every quad.c base at spread 16 is reachable ($qn bases, 0 rejected)"
+else
+  bad "MITM rejects seeds quad.c found" "bases=$qn rejected=${qrej:-?}"
+fi
+
+# An empty answer is the dangerous one, so it is checked by a route that never
+# consults the sieve about the fourth structure. Swamp huts genuinely have no
+# four-within-13-chunks cluster in the whole 2^48 space.
+./build/mitm.exe 1.21 swamp_hut quad 13 > /tmp/sc_test/mitm13.out 2>&1
+if grep -q "independent agreement" /tmp/sc_test/mitm13.out; then
+  ok "empty result at spread 13 corroborated without the sieve"
+else
+  bad "spread-13 emptiness not corroborated" "$(tail -4 /tmp/sc_test/mitm13.out)"
+fi
+
+# The wired search (src/solve.c) replaces the scan with the solver's candidate
+# list, so what matters is not that its candidates are good -- pass 1 judges
+# those -- but that the list MISSES nothing. Brute-force real clusters and demand
+# the solver would have proposed every one. This is the check that licenses
+# swapping the seed source at all.
+./build/mitm.exe 1.21 swamp_hut --covers 240 2000000 > /tmp/sc_test/covers.out 2>&1
+cov_n=$(sed -n 's/^\([0-9]*\) clusters found.*/\1/p' /tmp/sc_test/covers.out)
+cov_m=$(sed -n 's/.*; \([0-9]*\) the solver would never propose/\1/p' /tmp/sc_test/covers.out)
+if [ "${cov_n:-0}" -gt 0 ] && [ "${cov_m:-1}" -eq 0 ]; then
+  ok "every brute-forced cluster is one the wired solver proposes ($cov_n checked)"
+else
+  bad "the wired solver would miss clusters the scan finds" "$(cat /tmp/sc_test/covers.out)"
+fi
+
+# And end to end: the wired search must return real hits, each re-checkable by
+# the independent cluster counter.
+cat > /tmp/sc_test/solvequad.json <<'EOF'
+{"version":"1.21","conditions":[
+ {"id":"quad","structure":"swamp_hut","count":4,"spread":240,"within":5000,"of":"origin"}]}
+EOF
+FIND_TSV=/tmp/sc_test/solvequad.tsv ./build/find.exe /tmp/sc_test/solvequad.json 200000 \
+  > /tmp/sc_test/solvequad.out 2>&1
+sq_n=$(grep -c '^SEED' /tmp/sc_test/solvequad.out)
+grep -q "candidates in" /tmp/sc_test/solvequad.out \
+  && ok "the planner solves the cluster instead of scanning for it" \
+  || bad "solver not engaged for a tight cluster" "$(grep solver /tmp/sc_test/solvequad.out)"
+sq_bad=0
+while IFS=$'\t' read -r s a x z; do
+  got=$(./build/checkcluster.exe "$s" swamp_hut 1.21 "$x" "$z" 240 2>/dev/null | sed 's/.*count=//')
+  if [ -z "$got" ] || [ "$got" -lt 4 ]; then sq_bad=$((sq_bad+1)); fi
+done < /tmp/sc_test/solvequad.tsv
+[ "$sq_n" -gt 0 ] && [ "$sq_bad" -eq 0 ] \
+  && ok "every solved quad reproduces under the independent cluster count ($sq_n seeds)" \
+  || bad "a solved quad did not reproduce" "hits=$sq_n bad=$sq_bad"
+
 # Refusing the cases it cannot do is part of being correct: a power-of-two range
 # scales instead of taking a remainder, so the residue-class trick does not hold.
 ./build/invert.exe 1.21 ancient_city --verify >/dev/null 2>&1

@@ -168,3 +168,213 @@ nothing here.
 Cross-check the finished thing against `tools/quad.c` on a loose spread where
 bases are common (spread 16 finds them in seconds): both must produce the
 **same set**, not merely similar counts.
+
+## Every region-based structure, not just the easy ones
+
+The first cut handled ten structures and refused eight. Reading the engine
+rather than the refusal shows most of those eight were rejected for reasons that
+do not hold:
+
+| structure | why it was refused | what is actually true |
+|---|---|---|
+| ancient city | power-of-two range | `ox = (r·bits)>>31` with r = 2ᵏ is **exactly** `s1H >> (24−k)`. The low half contributes at most 127 to a value shifted right by 24−k+7, so it can never carry. A *prefix* of the high half instead of a residue — cleaner than the modular case, not harder. |
+| fortress (1.18+) | "different draw pattern" | plain `getFeaturePos`, and `getStructurePos` returns 1 unconditionally. Nothing to handle at all. |
+| bastion (1.18+), outpost | "adds a rejection roll" | the roll is a function of the 48-bit seed and the chunk, so it is one more LCG walk per candidate and costs the sieve nothing. |
+| monument, mansion, end city | "two draws averaged" | four draws instead of two. The pair constraint couples them, so the sieve uses each draw's marginal — sound, weaker. End city's 1008-block gap is one more concrete test. |
+
+What is genuinely out of reach is what uses a *different algorithm*: mineshafts
+and buried treasure are per-chunk rolls, strongholds are ring-based, and the
+decorator features (geodes, wells) run on Xoroshiro population seeds. Those are
+not this problem with a twist; they are another problem.
+
+Two things the extension taught, both the hard way:
+
+- **The averaged offset is triangular, not uniform.** `(d1+d2)>>1` concentrates
+  in the middle: for a mansion, offset 59 needs both draws to be 59, one chance
+  in 3600. So a mansion 4-cluster does not exist at any tight spread, and the
+  harness demanding one was wrong about the solver rather than the reverse.
+- **Modelling rarity to decide whether a test is vacuous is a losing game.** It
+  was wrong three times running — the rejection rolls, then the triangular
+  distribution, then whatever correlates neighbouring outposts' rolls. The
+  harness now reports what it measured: if the independent reference found
+  nothing in the sample either, there was nothing to miss, and that is all it
+  claims.
+
+**A large range with averaged draws is the algorithm's worst case, and mansions
+are it.** The pair constraint means the sieve can only use each draw's marginal,
+and for a single target offset that marginal spans most of the 60 possible
+values — so the sieve keeps every low half. The bucket key is then the only
+filter, and with `m = 15` and offsets that wide it does not filter either. Both
+halves idle at once, which is the opposite of the swamp-hut and ruined-portal
+cases where exactly one of them carries the search.
+
+That is a property, not a bug. But it was also, for a long time, the wrong
+diagnosis of why mansion's `--verify` ran for forty minutes. Three fixes were
+guessed and applied — threading the heaviest check, budgeting in tests instead
+of seeds, measuring the sweep rate instead of modelling it — and each helped
+without solving it, because none of them was the actual problem.
+
+Timestamping every line found it in one run:
+
+```
+18:12  1 structure, nested   ->  18:23  1 structure, join   = 11 minutes
+18:23  2 structures, nested  ->  18:34  2 structures, join  = 11 minutes
+```
+
+The *nested* sweeps were instant; the **joins** took eleven minutes each — on a
+windowed run where `yhN` is one or two high halves. `joinWorker` was iterating
+all 2²⁴ surviving low halves and calling `classesFor` on every one, which loops
+octants × residues — 3840 iterations for a mansion. Six times 10¹⁰ operations of
+setup, to avoid sweeping two values. The guard that would have caught it ran
+*after* paying that cost.
+
+A sweep of `yhN` can never lose to a walk costing `n·C` just to set up, so that
+comparison now happens first. **Mansion's whole verify went from >40 minutes to
+2m29s, end city to 2m01s**, and both pass.
+
+Two lessons worth keeping, both about method rather than arithmetic:
+
+- **Measure before fixing.** Every one of the three earlier fixes was a
+  plausible story about where the time went, and all three were wrong. One run
+  with timestamps beat all the reasoning.
+- **A guard that runs after the expensive part is not a guard.** The join
+  already knew a sweep would be cheaper; it just worked that out too late.
+
+The other two changes are kept because they are real improvements in their own
+right: the threaded rejection sweep (swamp hut's `--verify`: ~2 minutes to
+**25 seconds**) and the measured window sizing.
+
+## What was built, and where the plan was wrong
+
+`src/mitm.c` + `tools/mitm.c`. Both halves exist and agree. Three things the
+plan above did not have right, kept here because the corrections are the
+interesting part:
+
+**The join's key was unsound as written.** The plan says to bucket `yH` by
+`(T[yH+shift_j] mod 3)` and look it up with `((e_j − PH_j) mod 3)`. That drops
+seeds. `s1_jH = (T[…] + PH_j) mod 2²⁴`, and the truncation is exactly the
+obstacle the plan had already identified two sections earlier — it does not go
+away by moving to a table, because `PH_j` is added *after* the table lookup.
+The addition wraps when `T ≥ 2²⁴ − PH_j`, a threshold that moves with the low
+half, and the residue the low half needs differs on either side of it. The fix
+is to put the **octant of `T`** in the key as well: the threshold then lies in
+one octant, seven have a known carry (one residue each) and the straddling one
+takes two. That is 9 of 24 classes per structure rather than 3 of 3 — a smaller
+cut than the unsound version promised, and an actual one. The nested-vs-join
+equality test is what caught it; nothing about the wrong version looked wrong.
+
+**The `8 | d` filter is not a free 8× per constraint.** Its strength is
+`|allowed offsets| / 8` per constraint, so it is only an 8× when the offset is
+pinned exactly. At spread 16 the allowed set is 8 consecutive offsets, exactly
+one of which is a multiple of 8 — so the sieve keeps *everything* and does no
+work at all.
+
+**The z axis sieves too, and that is where the win comes from.** `s2L` depends
+only on `s1L`, so `oz` gives an identical free filter on the low half. Eight
+constraints, not four. With the offsets pinned that is `2²⁴/8⁸ ≈ 1` surviving
+low half — the low 24 bits of the seed are determined outright.
+
+**Everything scales with `gcd(128, range)`, in opposite directions for the two
+halves.** The sieve pins the high half mod `m = range/gcd(128, range)`, so:
+
+| structure | range | gcd | m | sieve keeps (8 exact) | join vs sweep, measured |
+|---|---|---|---|---|---|
+| swamp hut, desert pyramid | 24 | 8 | 3 | 16 of 2²⁴ | 70× fewer pairs |
+| shipwreck | 20 | 4 | 5 | — | — |
+| village | 26 | 2 | 13 | 112 000 of 2²⁴ | 5 155× fewer pairs |
+| ruined portal | 25 | 1 | 25 | **all** of 2²⁴ | **27 966×** fewer pairs |
+
+(`--verify` is green for all five invertible families — swamp hut, desert
+pyramid, shipwreck, village, ruined portal — which is the point of covering the
+full range of `gcd` rather than the one structure the quad hunt cares about.)
+
+A big `gcd` makes the low-half sieve strong and the bucket key weak — only 3
+residues to key on. A small one does the reverse. At the extreme, ruined portals
+have `gcd(128, 25) = 1`, so `8 | d` is satisfied by every `d`: the sieve rejects
+**nothing**, every low half is live, and the join is doing all the work. (That
+is also why the gist this came from talks about "required offsets mod 25" — it
+was written for ruined portals, the one case where the low-half filter is
+free of charge and worth exactly nothing.)
+
+So the two filters are not a compounding pair — they are strong in opposite
+regimes, and `gcd(128, range)` decides which one carries the search. Building
+only the sieve would have left ruined portals with no improvement whatsoever;
+building only the join would have cost the swamp-hut case the sieve's own
+factor of 2²⁴/16 ≈ 10⁶. Both are load-bearing, for different structures.
+
+`--verify` reports this rather than assuming it: when the sieve rejects nothing,
+the "sweep every high half against a rejected low half" check has nothing to
+falsify and says so, instead of hunting forever for a rejection that cannot
+happen.
+
+Measured, swamp huts, whole 2⁴⁸ space:
+
+| spread | low halves kept | pairs tested (nested → join) | wall clock | quad bases |
+|--------|-----------------|------------------------------|------------|-----------|
+| 13     | 0               | —                            | 1.2 s      | 0         |
+| 14     | 64              | 1.07e9 → 2.3e7               | 1.0 s      | 0         |
+| 15     | 49 712          | 8.34e11 → 1.54e10            | 318 s → 44 s | 1 045 607 |
+
+`quad.c` covers the same ground by walking `2⁴⁸/24²` seeds **per corner offset**,
+and the number of corner offsets grows as the spread loosens: 4 at spread 10,
+49 at spread 15, 64 at spread 16. At its measured 1.35e8 seeds/s that is ~49
+hours for the spread-15 enumeration the join does in 44 seconds. Note the shape
+of it — `quad.c` gets *slower* as the target loosens because it must solve more
+corner offsets, while the MITM gets slower for the opposite reason (more low
+halves survive). They are not the same curve.
+
+**Spread 13 and 14 are empty, and that is a real answer.** Under `quad.c`'s
+pairwise rule the two diagonal structures are at least 9 chunks apart on *both*
+axes, so no cluster is tighter than 9√2 ≈ 12.73 — and the offsets that reach
+that bound turn out to have no seed at all. The tightest swamp-hut quad that
+exists is **spread 15**. `quad.c`'s own docstring picks spread 10 as its worked
+example — an hours-long enumeration whose complete and correct answer is
+nothing, which nobody would have found out by running it.
+
+An empty answer out of a sieve is indistinguishable from a broken sieve, so
+`mitm quad` corroborates one: it solves for three of the four structures and
+tests the fourth with cubiomes, a path that never asks the sieve about it. At
+spread 13, 650 236 seeds place three huts exactly right and not one places the
+fourth.
+
+## Wiring it into the search
+
+`src/solve.c` lets a normal query use the solver. When a query asks for a tight
+cluster, `find` stops walking seeds 0,1,2,… and instead walks a list of seeds
+that already place the cluster. `tools/find.c` changes by one line in the hot
+loop — where `s48` comes from — and **nothing downstream changes**: pass 1 still
+evaluates every candidate, so the solver decides what is *tried*, never what is
+a *hit*. A wrong proposal is rejected exactly like any other seed.
+
+That leaves one thing to prove: the list must not MISS clusters the scan would
+find. Three things make that argument, in order of how much they are load-
+bearing:
+
+1. **The corner is the only shape.** Four structures within `spread` of a common
+   member, one per region, must occupy a 2×2 region block — two regions apart on
+   an axis is at least `2·regionSize − (range−1)` chunks, and under the anchored
+   rule two members can be `2·spread` apart. `mitmCornerIsOnlyShape` checks that
+   inequality and **declines** when it fails, so a loose spread scans as before.
+2. **The rule is a disjunction, and is solved as one.** "Some member has the
+   other three close" is four questions, not one. Merging their offset sets
+   first makes the query so loose the sieve rejects nothing — measurably: the
+   merged form took 52 s to build 300 000 candidates, the four separate ones
+   take 1.0 s. Correctness and speed wanted the same thing here.
+3. **Measured, not argued.** `mitm --covers <spread> <N>` brute-forces N
+   structure seeds for real clusters and demands the solver would have proposed
+   every one. At spread 240: 185 clusters found, 0 missed.
+
+Solving is not always right. A loose cluster is common enough that the plain
+scan finds it before the solver can enumerate, because a loose target leaves the
+sieve nothing to reject. Predicting which case a query is in needs the true
+cluster rate — not the relaxed bound the solver has — so `find` measures it:
+build under a time budget, and fall back to scanning if the yield is poor. It
+says which it did and why.
+
+The other outcome is worth more than the speed. When the solver **completes**
+without finding anything, that is not "nothing yet" — it is a proof that the
+whole 2⁴⁸ space contains none, delivered in seconds where the scan would have
+run until the user gave up. The README's own flagship example turns out to be
+one of these: four swamp huts within **160** blocks of a common member is
+impossible, because the two diagonal members cannot be closer than 9√2 chunks =
+203.6 blocks. A scan reports that as 0.0000% survival, which reads as "rare".

@@ -19,23 +19,37 @@ static volatile int g_loot_lock = 0;
 static inline void loot_lock(void)   { while (__atomic_exchange_n(&g_loot_lock, 1, __ATOMIC_ACQUIRE)) {} }
 static inline void loot_unlock(void) { __atomic_store_n(&g_loot_lock, 0, __ATOMIC_RELEASE); }
 
+// Nether fortresses are far bigger than any other piece structure here: over a
+// 3.6-million-fortress sample the largest had 257 pieces and 84% had more than
+// 64, so the old stack array was overrun by most fortresses rather than a rare
+// one. 1024 is ~4x the observed maximum, and the engine now REFUSES to exceed
+// whatever bound it is given (patches/fortress-piece-bound.patch), so going
+// over is a detectable refusal instead of a write past the end of the array.
+#define PIECE_CAP 1024
+
 struct LootCache {
     char             *names[MAX_TABLES];
     LootTableContext *ctx[MAX_TABLES];
     int               n;
     int               mc;
+    Piece            *pieces;    // per-thread scratch, so no allocation per roll
 };
 
 LootCache *lootCacheNew(void)
 {
     LootCache *lc = calloc(1, sizeof *lc);
+    if (!lc) return NULL;
     lc->mc = -1;
+    // Callers treat the cache as infallible, so a failed piece buffer must not
+    // turn into a NULL cache they don't check. lootCountItem refuses instead.
+    lc->pieces = malloc((size_t)PIECE_CAP * sizeof(Piece));
     return lc;
 }
 
 void lootCacheFree(LootCache *lc)
 {
     if (!lc) return;
+    free(lc->pieces);
     for (int i = 0; i < lc->n; i++) free(lc->names[i]);
     // cubiomes loot contexts are heap-allocated by init_*; free_loot_table
     // exists but freeing a context that init_* built from static tables can
@@ -78,16 +92,33 @@ int lootStructureSupported(int structType)
     // and cubiomes, so it meets the same bar as the five above.
     case Ruined_Portal:
         return 1;
-    // The nether structures are deliberately excluded, each for a hard reason:
-    //   - Fortress: getFortressPieces stores its buffer bound (env.nmax) but
-    //     never enforces it, so a large fortress overflows the piece array and
-    //     crashes the search.
-    //   - Bastion: getStructurePieces only simulates some pieces, and the loot
-    //     the search reported did NOT reproduce under independent verification
-    //     (find over-counted vs checkloot). See README "Chest loot".
+    // Fortress: the engine simulates the whole corridor/bridge graph, so every
+    // chest is found. What blocked it was the buffer overrun, now fixed on both
+    // sides -- the engine honours its bound, and PIECE_CAP is 4x the largest
+    // fortress in a 3.6M sample. Counts are exact.
+    case Fortress:
+        return 1;
+    // Bastion: the engine simulates only the starting piece of each of the four
+    // bastion types -- the chests that ALWAYS generate (2 for units, 1 for
+    // hoglin stable, 2 for treasure, 1 for bridge). Those chests are exact; the
+    // ones in the randomly-assembled remainder are not modelled at all. So a
+    // bastion loot count is a LOWER BOUND: every hit is real, but a bastion
+    // whose only copy of the item sits in a generated-later chest is missed.
+    // That asymmetry is stated in the README and in /api/lootitems rather than
+    // papered over.
+    case Bastion:
+        return 1;
     default:
         return 0;
     }
+}
+
+// Only the guaranteed starting-piece chests are modelled for these types, so
+// the count is a floor rather than a total. Callers that must not overstate
+// coverage ask here instead of hardcoding the list.
+int lootCountIsLowerBound(int structType)
+{
+    return structType == Bastion;
 }
 
 // ---- ruined portal chest, computed from template data ----------------------
@@ -168,7 +199,7 @@ static int rpCountItem(LootCache *lc, int mc, uint64_t s48, int blockX, int bloc
 int lootCountItem(LootCache *lc, int mc, uint64_t seed, int structType,
                   int blockX, int blockZ, StructureVariant *sv, const char *item)
 {
-    if (!lootStructureSupported(structType)) return -1;
+    if (!lc || !lootStructureSupported(structType)) return -1;
 
     // Ruined portals aren't in getStructurePieces; compute their single chest
     // from the template data instead.
@@ -180,8 +211,14 @@ int lootCountItem(LootCache *lc, int mc, uint64_t seed, int structType,
     // matters for the position salt (already resolved), so -1 is fine here.
     if (!getStructureSaltConfig(structType, mc, -1, &ss)) return -1;
 
-    Piece pieces[64];
-    int n = getStructurePieces(pieces, 64, structType, ss, sv, mc, seed, blockX, blockZ);
+    Piece *pieces = lc->pieces;
+    if (!pieces) return -1;
+    int n = getStructurePieces(pieces, PIECE_CAP, structType, ss, sv, mc, seed, blockX, blockZ);
+    if (n < 0) return -1;
+    // A fortress that fills the buffer was cut short, and the pieces after the
+    // cut would have consumed RNG -- so the chests we did roll are right but the
+    // total is not. Refuse rather than report a number we know is short.
+    if (n >= PIECE_CAP) return -1;
 
     int total = 0;
     loot_lock();   // the loot contexts are shared singletons -- serialise rolls

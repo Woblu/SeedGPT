@@ -6,6 +6,7 @@
 // auditable, and reports the pass-1 survival rate afterwards -- the single
 // number that tells you whether the query is selective enough to be fast.
 #include "query.h"
+#include "solve.h"
 #include "loot.h"
 #include "ore.h"
 #include "explain.h"
@@ -55,6 +56,12 @@ static void rankOffer(const Query *q, uint64_t ws, const Match *m, int score)
 typedef struct {
     const Query *q;
     uint64_t lo, hi;
+    // When the query has a tight-cluster condition, `cand` holds structure seeds
+    // that src/solve.c already knows satisfy its geometry, and [lo,hi) indexes
+    // that list instead of counting seeds. Everything downstream is unchanged:
+    // pass 1 still evaluates each one, so the solver decides what is TRIED, never
+    // what is a hit.
+    const uint64_t *cand;
     uint64_t scanned, pass1, pass2, applies, climgate, climskip;
     Hit hits[MAX_HITS];
     int nhits;
@@ -155,7 +162,8 @@ static DWORD WINAPI worker(LPVOID arg)
         return 0;
     }
 
-    for (uint64_t s48 = j->lo; s48 < j->hi; s48++) {
+    for (uint64_t idx = j->lo; idx < j->hi; idx++) {
+        uint64_t s48 = j->cand ? j->cand[idx] : idx;
         if (g_found >= g_want) break;
         if (outOfTime(j->scanned)) break;
         j->scanned++;
@@ -446,6 +454,70 @@ int main(int argc, char **argv)
                             "below says how many were actually scanned"
                           : "the full range is scanned -- no early stop");
     }
+    // ---- solve instead of scan, where the query allows it -----------------
+    // A tight cluster is about one seed in 10^11, so scanning spends all of its
+    // budget on seeds that were never going to work. src/solve.c enumerates the
+    // ones that do and hands them over as candidates; the budget then buys that
+    // many CANDIDATES rather than that many consecutive seeds. Pass 1 still
+    // judges every one, so this changes what gets tried, not what counts.
+    uint64_t *cand = NULL;
+    uint64_t ncand = 0;
+    {
+        char why[256];
+        // FIND_NOSOLVE forces the plain scan, so the two paths can be compared.
+        int sk = (q.ngeom > 0 && !getenv("FIND_NOSOLVE")) ? solvePick(&q, why, sizeof why) : -1;
+        if (sk >= 0) {
+            // A solved candidate is worth orders of magnitude more than a
+            // scanned seed, so a huge `range` does not need a huge list -- and
+            // asking for one would just fail the allocation. 20M is already far
+            // more candidates than any cluster query gets through.
+            // (capped separately from `range`, so falling back to the scan
+            // still honours the budget the caller actually asked for)
+            uint64_t capN = range < 20000000ULL ? range : 20000000ULL;
+            cand = malloc((size_t)capN * sizeof(uint64_t));
+            if (!cand) {
+                printf("solver: %s -- but the candidate list would not fit; scanning\n\n", why);
+            } else {
+                // A loose cluster gives the low-half sieve nothing to reject, so
+                // the solver grinds while the plain scan would already be
+                // finding hits. Which case this is depends on the true cluster
+                // rate, not on anything cheap to compute -- so measure it: build
+                // under a budget and judge by the yield.
+                double budget = 20.0;
+                int timedOut = 0;
+                LARGE_INTEGER s0, s1, sf;
+                QueryPerformanceFrequency(&sf); QueryPerformanceCounter(&s0);
+                ncand = solveFill(&q, sk, capN, cand, nthreads, budget, &timedOut);
+                QueryPerformanceCounter(&s1);
+                double sel = (double)(s1.QuadPart - s0.QuadPart) / sf.QuadPart;
+
+                if (ncand == 0 && !timedOut) {
+                    // Not "found nothing yet" -- the solver walked the whole
+                    // 2^48 space. Scanning for this could only ever have run
+                    // until the user gave up.
+                    printf("solver: %s\n        searched ALL 2^48 structure seeds in %.1fs: "
+                           "there are NONE.\n        Scanning would have looked forever and "
+                           "found nothing.\n\n", why, sel);
+                    free(cand); cand = NULL;
+                    range = 0;
+                } else if (ncand < 1000) {
+                    printf("solver: %s\n        but only %" PRIu64 " candidates in %.1fs, so this "
+                           "target is common enough that scanning\n        beats solving it; "
+                           "scanning instead\n\n", why, ncand, sel);
+                    free(cand); cand = NULL;
+                } else {
+                    printf("solver: %s\n", why);
+                    printf("        %" PRIu64 " candidates in %.1fs -- every one already places "
+                           "the cluster, so the\n        budget buys candidates instead of "
+                           "consecutive seeds\n\n", ncand, sel);
+                    range = ncand;
+                }
+            }
+        } else if (q.ngeom > 0 && strstr(why, "solving") == NULL && strstr(why, "no tight") == NULL) {
+            printf("solver: not used -- %s\n\n", why);
+        }
+    }
+
     InitializeCriticalSection(&g_lock);
     Job *jobs = calloc(nthreads, sizeof(Job));
     HANDLE *th = calloc(nthreads, sizeof(HANDLE));
@@ -455,6 +527,7 @@ int main(int argc, char **argv)
     QueryPerformanceFrequency(&freq); QueryPerformanceCounter(&t0);
     for (int i = 0; i < nthreads; i++) {
         jobs[i].q = &q;
+        jobs[i].cand = cand;
         jobs[i].lo = (uint64_t)i * chunk;
         jobs[i].hi = (i == nthreads-1) ? range : (uint64_t)(i+1) * chunk;
         th[i] = CreateThread(NULL, 0, worker, &jobs[i], 0, NULL);

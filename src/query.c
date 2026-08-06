@@ -570,7 +570,8 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
             if (c->structType < 0 || !lootStructureSupported(c->structType)) {
                 snprintf(err, errlen,
                     "condition \"%s\": loot search not supported for \"%s\" "
-                    "(try desert_pyramid, jungle_temple, igloo, outpost, shipwreck, ruined_portal)",
+                    "(try desert_pyramid, jungle_temple, igloo, outpost, shipwreck, "
+                    "ruined_portal, fortress, bastion)",
                     c->id, ls->valuestring);
                 goto done;
             }

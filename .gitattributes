@@ -1,0 +1,6 @@
+# The cubiomes patch is applied by setup.sh with `git apply` against a freshly
+# checked-out upstream tree, which has LF endings. If git handed this file back
+# with CRLF on a Windows checkout the patch would not apply, setup.sh would
+# abort, and the fortress piece-bound fix would silently not be there -- which is
+# the one thing standing between a fortress loot search and a buffer overrun.
+patches/*.patch text eol=lf

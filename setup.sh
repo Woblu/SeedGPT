@@ -58,5 +58,19 @@ static inline int clock_gettime(clockid_t clk, struct timespec *ts)
 SHIM
 
 echo "compat shim written"
+
+# Upstream's getFortressPieces takes a buffer bound, stores it in env->nmax and
+# never reads it -- so a fortress with more pieces than the caller allocated
+# writes past the end of the array. That is most fortresses (84% exceed 64
+# pieces), which is why fortress chest loot was unsupported here.
+#
+# `git checkout <commit>` above does NOT discard modifications to tracked files,
+# so the working tree is reset explicitly first: without it a second run of this
+# script hits an already-patched finders.c, `git apply` fails, and set -e kills
+# the setup. Restoring then applying makes re-running a no-op, which is what a
+# setup script has to be.
+git -C cubiomes checkout --quiet -- .
+git -C cubiomes apply ../patches/fortress-piece-bound.patch
+echo "fortress piece-bound patch applied"
 echo
 echo "next: ./build.sh tools/find.c   then   ./test.sh"

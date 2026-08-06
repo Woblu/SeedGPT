@@ -599,7 +599,12 @@ Condition types (use EXACTLY these keys):
     worth mentioning in notes when the user asks for a tall one.
 - Slime chunks:   {"id","slime":N,"within","of"}  >=N slime chunks (farm site).
 - Chest loot:     {"id","within","loot":{"structure":<s>,"item":<i>,"count":N}}
-    loot structures: desert_pyramid jungle_temple igloo outpost shipwreck ruined_portal
+    loot structures: desert_pyramid jungle_temple igloo outpost shipwreck
+                     ruined_portal fortress bastion
+    Nether: fortress counts every chest exactly. Bastion counts only the
+    chests that ALWAYS generate (the starting piece), so its count is a
+    LOWER BOUND -- a hit is real, a miss is not proof of absence. Say so in
+    notes when a bastion loot condition is used.
 - End portal eyes:{"id":"portal","eyes":N}  the first stronghold's portal has >=N eyes.
 
 World preset. If the request says "large biomes", add "large_biomes": true next

@@ -19,6 +19,7 @@
 //             every single one. A gap in the residue-class reasoning shows up
 //             here as a hit the inverter would never have visited.
 #include "invert.h"
+#include "mitm.h"
 #include "finders.h"
 #include "generator.h"
 #include "util.h"
@@ -89,6 +90,17 @@ static int verify(int mc, int st)
                  + (uint64_t)regZ * 132897987541ULL + (uint64_t)sc.salt;
     uint64_t hits = 0, missed = 0;
     int tox = 7 % (int)r, toz = 19 % (int)r;
+
+    // The meet-in-the-middle solver (src/mitm.c) answers the same question for
+    // many structures at once, and it can fail the same silent way. Rather than
+    // stand up a second brute force for it, point this one at it too: the same
+    // hits, the same demand that none be missed.
+    MitmQuery mq;
+    int mrx[1] = { regX }, mrz[1] = { regZ };
+    uint64_t mokx[1] = { 1ULL << tox }, mokz[1] = { 1ULL << toz };
+    int haveMitm = mitmQueryInit(&mq, mc, st, 1, mrx, mrz, mokx, mokz);
+    uint64_t mitmMissed = 0;
+
     for (uint64_t ws = 0; ws < SLAB; ws++) {
         Pos p;
         if (!getStructurePos(st, mc, ws, regX, regZ, &p)) continue;
@@ -96,6 +108,7 @@ static int verify(int mc, int st)
         int gz = (p.z >> 4) - regZ * sc.regionSize;
         if (gx != tox || gz != toz) continue;
         hits++;
+        if (haveMitm && !mitmWouldReach(&mq, ws)) mitmMissed++;
         // Would the enumeration have reached this seed? Reproduce its s1 and
         // check the residue class, then round-trip back to the seed.
         uint64_t s1 = lcgForward((ws + off) ^ K);
@@ -106,6 +119,14 @@ static int verify(int mc, int st)
     printf("completeness: %" PRIu64 " brute-force hits in %" PRIu64 " seeds, "
            "%" PRIu64 " the enumeration would have missed\n", hits, SLAB, missed);
     if (missed || hits == 0) fail = 1;
+
+    if (haveMitm) {
+        printf("completeness (meet-in-the-middle): the same %" PRIu64 " hits, %"
+               PRIu64 " the MITM sieve would have discarded\n", hits, mitmMissed);
+        if (mitmMissed) fail = 1;
+    } else {
+        printf("completeness (meet-in-the-middle): not applicable to this placement\n");
+    }
 
     // ---- what it buys ---------------------------------------------------
     double expect = (double)SLAB / ((double)r * r);

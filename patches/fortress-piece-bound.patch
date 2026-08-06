@@ -1,0 +1,21 @@
+diff --git a/finders.c b/finders.c
+index e7adb98..3c65c39 100644
+--- a/finders.c
++++ b/finders.c
+@@ -4858,6 +4858,16 @@ fortress_info[] = {
+ static
+ Piece *addFortressPiece(PieceEnv *env, int typ, int x, int y, int z, int depth, int facing, int pending)
+ {
++    // finders.h documents `n` as "for fortresses the maximum size of the output
++    // list", and getFortressPieces stores it in env->nmax -- but nothing ever
++    // read it, and the write below is at env->list + *env->n. Most fortresses
++    // have well over 64 pieces, so any caller sizing its buffer by the end-city
++    // or village piece counts runs off the end of it. Refuse the piece instead:
++    // NULL is what the collision path already returns, and both callers unwind
++    // from it, so generation terminates rather than corrupting memory.
++    if (env->nmax > 0 && *env->n >= env->nmax)
++        return NULL;
++
+     Pos3 pos = {x, y, z};
+     Pos3 b0 = pos, b1 = pos;
+     Pos3 d0 = fortress_info[typ].offset, d1 = fortress_info[typ].size;

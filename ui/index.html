@@ -864,6 +864,13 @@
         const cnt = el('input'); cnt.type='number'; cnt.value=c.count; cnt.min=1; cnt.title='minimum count';
         cnt.onchange = e => c.count = Math.max(1, +e.target.value||1);
         g2.append(it, cnt); d.append(g2);
+        // Bastions are the one structure whose chests are only partly modelled
+        // (the engine simulates the starting piece, which always generates).
+        // Every hit is real; a miss is not proof of absence. Say so where the
+        // choice is made, not only in the README.
+        if (c.struct === 'bastion')
+          d.append(el('div','note warn',
+            'bastion loot counts only the chests that always generate — hits are real, but a bastion whose item is in a later chest is missed'));
         box.append(d);
         return;
       }
