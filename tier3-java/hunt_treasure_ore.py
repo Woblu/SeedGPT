@@ -108,7 +108,11 @@ def main():
                 # Generation is the cost, not probing. Ask for every treasure's
                 # chunks up front so the server works through them together.
                 for (x, z) in spots:
-                    srv.forceload(x, z, radius_chunks=2)
+                    # 1, not 2. The six faces reach one block out, so a 3x3 of
+                    # chunks always contains them even when the chest sits on a
+                    # chunk border -- a 5x5 generates 25 chunks to read 2. Chunk
+                    # generation is the whole cost of this hunt.
+                    srv.forceload(x, z, radius_chunks=1)
                 for (x, z) in spots:
                     if not srv.loaded(x, z):
                         continue                    # unknown, never "absent"
@@ -147,6 +151,12 @@ def main():
                                   f"{score}/6 faces {name} {dict(counts)}", flush=True)
                         if score >= want:
                             hits.append((seed, x, y, z, dict(counts)))
+            # A run of this size is otherwise silent for hours, since nothing
+            # prints unless a chest scores. Progress per seed makes the rate
+            # visible while there is still time to act on it.
+            el = time.time() - t0
+            print(f"  [seed {seed}] {chests} chests, {el/60:.0f} min, "
+                  f"{el/max(chests,1):.1f}s/chest, best {best}/6", flush=True)
         except Exception as e:
             failed += 1
             print(f"  seed {seed}: server failed ({e})", flush=True)
