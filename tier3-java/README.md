@@ -253,7 +253,59 @@ Scan cheap, probe deep. Measured over 20 seeds: 603 treasures scanned in 0.9 min
 about 10× end to end. The deep chests also case differently: gravel 25, sand 5,
 stone 2, granite 1, against sand-dominated at ordinary depths.
 
-**The depth cut is a heuristic, not a sieve.** The fast path disagreed on 1 of 19
+### OreGen — decoration without a server
+
+The gap above was that the headless path stopped before `applyBiomeDecoration`,
+which is where ore is placed. `tier2-outpost/OreGen.java` closes it. Decoration
+needs a `WorldGenLevel`, and vanilla only ever builds one on a `ServerLevel`;
+since it is an interface, OreGen supplies one by **dynamic proxy** — the handful
+of methods a feature really calls are implemented against a single `ProtoChunk`,
+and every default method is delegated back to the interface via `invokeDefault`,
+which keeps the class to what matters rather than the ~80 methods the type has.
+
+Three things that had to be right, each found by it being wrong first:
+
+- `shouldGenerateStructures()` **must** be true. `applyBiomeDecoration` advances
+  one shared counter across a step — first over every structure *registered* for
+  it, then over its features — calling `setFeatureSeed(seed, k, step)` each time.
+  Returning false skips the structure loop and shifts every ore's seed, placing
+  ore where the game never would, silently.
+- Neighbour chunks return an **empty** chunk, never this one. `ProtoChunk` masks
+  x/z by 15, so handing back our own chunk answers with a block wrapped round
+  from inside it — wrong, and quiet about it.
+- `isStateAtPosition` decides *where* a feature may place. Left to the default
+  `false` it would not crash; it would stop ore being placed at all, and the path
+  would look fast and sane while reporting no ore anywhere.
+
+Unsupplied methods are **recorded**, not defaulted silently (`UNIMPLEMENTED`),
+which is what found `getLevelData`, `getFluidTicks`, `isStateAtPosition` and
+`nextSubTickCount` in one run each.
+
+**Verified against the server on 49 chests** (`verify_oregen.py`):
+
+| | agreement |
+|---|---|
+| `chestY` | **47/49 (96%)** |
+| `fill` (the casing block) | **38/49 (78%)** |
+| speed | 0.125 s vs 6.5 s — **52×** |
+
+The fill misses have a shape: headless says `sand` where the server says
+`sandstone`, `dirt` where it says `sand` — the sediment column running one block
+deeper, so the chest lands on sediment instead of on water over rock. None of the
+disagreements involved ore, but with almost no ore in 49 chests that is not
+evidence either way.
+
+**So OreGen shortlists; the server decides.** A chest whose fill it calls ore is
+sent to the server for confirmation. Depth is kept as a second route onto the
+shortlist precisely because fill is only 78% — trusting it alone would drop real
+candidates it misread as sand. Measured end to end: 399 treasures scanned in
+0.8 min, 5 worth probing, **2.0 min against 43 min**.
+
+Light is faked (full sky, no block light). Ore does not consult it, so ore
+answers are unaffected — but light-gated vegetation may place differently here,
+which matters for anything reading the surface.
+
+**Neither cut is a sieve.** The fast path disagreed on 1 of 19
 chests because decoration can add surface blocks that move the landing spot, so a
 chest whose true depth is below the cut but whose predicted depth is above it is
 dropped and never probed. Fine for a hunt, which wants one good find; *not* fine

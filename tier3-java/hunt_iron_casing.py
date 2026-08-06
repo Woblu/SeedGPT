@@ -46,6 +46,52 @@ from treasure_casing import FACES                               # noqa: E402
 from bench_fast import java_bin, classpath                      # noqa: E402
 
 
+class OrePath:
+    """Headless worker WITH decoration: (seed, x, z) -> (chest Y, fill block).
+
+    OreGen supplies a WorldGenLevel by proxy so applyBiomeDecoration can run
+    without a server, which puts ore in the chunk. Verified against the server
+    over 49 chests: chestY agrees 96%, fill 78%. The fill number is why this
+    SHORTLISTS rather than decides -- a chest whose fill it calls ore is sent to
+    the server for confirmation, and the server has the final word.
+
+    The residual risk is the other direction: a chest whose fill really is ore
+    but which this calls sand is dropped and never confirmed. At 78% that is a
+    real miss rate, so a null result from this pipeline is not evidence that no
+    ore casing exists -- only that none was found among what it shortlisted.
+    """
+
+    def __init__(self):
+        self.p = subprocess.Popen(
+            [java_bin(), "-cp", classpath(), "OreGen", "oreserver"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, cwd=FAST, bufsize=1)
+        for line in self.p.stdout:
+            if line.strip().endswith("READY"):
+                return
+        raise RuntimeError("OreGen never reported READY")
+
+    def probe(self, seed, x, z):
+        self.p.stdin.write(f"{seed} {x} {z}\n")
+        self.p.stdin.flush()
+        for line in self.p.stdout:
+            if line.startswith("O\t"):
+                t = line.rstrip("\n").split("\t")
+                if any(f.startswith("err=") for f in t):
+                    return None, None
+                kv = dict(f.split("=", 1) for f in t if "=" in f)
+                return int(kv.get("chestY", -1)), kv.get("fill")
+        return None, None
+
+    def close(self):
+        try:
+            self.p.stdin.write("quit\n")
+            self.p.stdin.flush()
+        except Exception:
+            pass
+        self.p.terminate()
+
+
 class FastPath:
     """Persistent headless worker: (seed, x, z) -> predicted chest Y."""
 
@@ -91,16 +137,25 @@ def main():
     print(f"scanning seeds {start}..{start+nseeds-1} for treasures landing at "
           f"y <= {max_y}, then probing only those", flush=True)
     t0 = time.time()
-    fast = FastPath()
+    fast = OrePath()
     scanned, deep, probed, best, best_at = 0, [], 0, 0, None
     casings, ore_tally = Counter(), Counter()
+    fills = Counter()
 
     try:
         for seed in range(start, start + nseeds):
             for (x, z) in locate(seed, version, radius):
                 scanned += 1
-                y = fast.chest_y(seed, x, z)
-                if 0 < y <= max_y:
+                y, fill = fast.probe(seed, x, z)
+                if y is None:
+                    continue
+                fills[fill] += 1
+                # Two ways onto the shortlist. An ore fill is the direct hit --
+                # this path can see ore now, which is the whole point of adding
+                # decoration. Depth stays as a second route because the fill
+                # agrees with the server only 78% of the time, so trusting it
+                # alone would drop real candidates it merely misread as sand.
+                if (fill and fill.endswith("_ore")) or (0 < y <= max_y):
                     deep.append((seed, x, z, y))
             if (seed - start + 1) % 20 == 0:
                 el = time.time() - t0

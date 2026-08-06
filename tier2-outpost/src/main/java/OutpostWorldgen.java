@@ -59,7 +59,26 @@ public class OutpostWorldgen {
         public int getMinBuildHeight() { return -64; }
     };
 
+    // Extracted from main so a second entry point (OreGen) can bootstrap the
+    // same registries without duplicating the datapack load, which is the bulk
+    // of the 4.5s startup and is easy to get subtly wrong twice.
+    static boolean booted = false;
+
+    static void bootstrapRegistries() throws Exception {
+        if (booted) return;
+        booted = true;
+        bootstrapBody();
+    }
+
+    /** The registries this backend was bootstrapped with. */
+    static RegistryAccess.Frozen registries() { return worldgen; }
+
     public static void main(String[] args) throws Exception {
+        bootstrapRegistries();
+        mainBody(args);
+    }
+
+    static void bootstrapBody() throws Exception {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
 
@@ -89,7 +108,9 @@ public class OutpostWorldgen {
         outpost = worldgen.lookupOrThrow(Registries.STRUCTURE)
                           .getOrThrow(ResourceKey.create(Registries.STRUCTURE,
                               ResourceLocation.withDefaultNamespace("pillager_outpost")));
+    }
 
+    static void mainBody(String[] args) throws Exception {
         if (args.length > 0 && args[0].equals("treasurefull")) {
             // Debug: FULL chunk gen (terrain + surface sand/gravel + water), then
             // dump the real block column around the chest so we can see the cover.
