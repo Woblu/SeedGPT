@@ -647,6 +647,30 @@ by brute force rather than argued: `mitm --covers 240 2000000` finds real
 clusters the hard way and demands the solver would have proposed each one — 185
 found, 0 missed.
 
+### Quad fortresses: distance is the wrong measure
+
+Four fortresses "close together" ranks by the distance between their START
+positions, which is not what makes them interesting. A fortress is up to 257
+pieces sprawling as far as 112 blocks from its start, and each one is generated
+**without knowledge of the others** — `getFortressPieces` rejects a piece
+colliding with an earlier piece of the *same* fortress and has no idea a
+neighbour exists. Two fortresses 80 blocks apart do not sit near each other,
+they grow *through* each other.
+
+`tools/fortoverlap.c` measures what actually happened rather than the
+opportunity: build all four piece lists, count the pairs whose bounding boxes
+intersect.
+
+```sh
+./build/mitm.exe 1.21 fortress quad 8 --limit 6000 | grep QUADBASE | awk '{print $2}' \
+  | ./build/fortoverlap.exe 0 1.21 --stdin | sort -rn | head
+```
+
+Best from 400 candidates: **286 intersecting piece pairs, 27 592 blocks of
+shared bounding box**, across four verified fortresses — nearly double the first
+candidate the solver happened to emit. The tightest starts are not the deepest
+overlap, which is exactly why it is worth measuring.
+
 One result the wiring makes cheap: when the solver **completes** and finds
 nothing, that is a proof of absence over all 2⁴⁸ seeds, in seconds. The example
 two paragraphs above is one — four swamp huts within **160 blocks of a common
@@ -701,6 +725,7 @@ that use a different algorithm entirely:
 | swamp hut, desert pyramid, jungle pyramid, igloo, village, ocean ruin, shipwreck, ruined portal, trail ruins, trial chambers | `ox = (s1>>17) % r` — the high half is pinned to one residue mod `r/gcd(128,r)` |
 | **ancient city** | power-of-two range: Java scales instead of taking a remainder, which for r = 2ᵏ is exactly `ox = s1H >> (24−k)` — a prefix of the high half |
 | **fortress, bastion (1.18+), pillager outpost** | same placement, plus a rejection roll that is a concrete function of the seed and the chunk |
+| ↳ **fortress and bastion share a grid slot** | identical salt, region and range, and only one of them is built — so for these two the search checks *existence*, not placement. `getStructurePos(Fortress, …)` returns 1 unconditionally in 1.18+, and a quad search built on that reported three bastions and one fortress. |
 | **monument, mansion, end city** | two draws averaged per axis (four per structure); the sieve uses each draw's marginal |
 | **not solvable** | mineshaft and buried treasure (per-chunk rolls), stronghold (ring-based), geodes and wells (Xoroshiro population seeds) |
 

@@ -101,6 +101,43 @@ static int refMatches(const MitmQuery *q, uint64_t ws)
     return 1;
 }
 
+// Does the structure this seed places here actually EXIST? For most types
+// placement is existence, but a 1.18+ fortress shares its grid slot with a
+// bastion -- same salt, same region, same range -- and only one of them is
+// built. getStructurePos(Fortress, ...) returns 1 unconditionally, so a "quad
+// fortress" found on placement alone was three bastions and a fortress. That is
+// the difference between a result and a disappointment.
+//
+// The tie-break needs biomes, so it needs a generator; it is only ever reached
+// by a candidate that already passed the geometry, which is rare enough that
+// applySeed per candidate costs nothing measurable.
+static Generator *g_viab = NULL;
+static int g_viabDim = 0;
+static uint64_t g_viabSeed = ~0ULL;
+
+static int reallyExists(int mc, int st, uint64_t ws, Pos p)
+{
+    StructureConfig sc;
+    if (!getStructureConfig(st, mc, &sc)) return 0;
+    if (!g_viab) {
+        g_viab = malloc(sizeof(Generator));
+        setupGenerator(g_viab, mc, 0);
+        g_viabDim = sc.dim;
+        g_viabSeed = ~0ULL;
+    }
+    if (g_viabSeed != ws) {
+        applySeed(g_viab, sc.dim, ws);
+        g_viabSeed = ws;
+    }
+    return isViableStructurePos(st, g_viab, p.x, p.z, 0) != 0;
+}
+
+// Placement alone is enough for these; anything else is checked properly.
+static int placementIsExistence(int st)
+{
+    return st != Fortress && st != Bastion;
+}
+
 // The real cluster test: every pair inside one despawn sphere. Same rule as
 // tools/quad.c, checked against cubiomes' placement rather than ours.
 static int quadFits(const MitmQuery *q, uint64_t ws, int spread, Pos out[4])
@@ -140,6 +177,12 @@ static int onQuad(uint64_t ws, void *arg)
     // The solver's own --limit would count placements-on-allowed-offsets, of
     // which only ~1% are real clusters. "give me 3 quad huts" means 3 quad huts.
     if (!quadFits(c->q, ws, c->spread, p)) return 0;
+    if (!placementIsExistence(c->q->st)) {
+        for (int i = 0; i < 4; i++) {          // quadFits reports chunks
+            Pos b = { p[i].x << 4, p[i].z << 4 };
+            if (!reallyExists(c->q->mc, c->q->st, ws, b)) return 0;
+        }
+    }
     c->found++;
     if (c->bases) setPush(c->bases, ws);
     if (c->shown < 12) {

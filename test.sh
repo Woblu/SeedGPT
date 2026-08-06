@@ -39,7 +39,7 @@ if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1 \n&& ./build.sh tools/checkplacement.c >/tmp/sc_test/b19 2>&1 \
 && ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1 \n&& ./build.sh tools/cactus.c >/tmp/sc_test/b21 2>&1 \n&& ./build.sh tools/invert.c >/tmp/sc_test/b22 2>&1 \n&& ./build.sh tools/findat.c >/tmp/sc_test/b23 2>&1 \
 && ./build.sh tools/quad.c >/tmp/sc_test/b24 2>&1 \
-&& ./build.sh tools/mitm.c >/tmp/sc_test/b25 2>&1 \n&& ./build.sh tools/locate.c >/tmp/sc_test/b26 2>&1; then
+&& ./build.sh tools/mitm.c >/tmp/sc_test/b25 2>&1 \n&& ./build.sh tools/locate.c >/tmp/sc_test/b26 2>&1 \n&& ./build.sh tools/fortoverlap.c >/tmp/sc_test/b27 2>&1; then
   ok "all tools compile"
 else
   bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"

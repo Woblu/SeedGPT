@@ -378,3 +378,46 @@ run until the user gave up. The README's own flagship example turns out to be
 one of these: four swamp huts within **160** blocks of a common member is
 impossible, because the two diagonal members cannot be closer than 9√2 chunks =
 203.6 blocks. A scan reports that as 0.0000% survival, which reads as "rare".
+
+## Nether fortresses: placement is not existence, and distance is not overlap
+
+Two things made the quad-fortress search disappointing, and only one of them was
+a tuning problem.
+
+**The bug.** In 1.18+ a fortress and a bastion share a grid slot — identical
+salt, region size and range (`30084232, 27, 23`) — and only one of them is
+built: a fortress generates where the bastion does not. But
+`getStructurePos(Fortress, ...)` returns 1 **unconditionally** for 1.18+, so a
+search built on placement accepts every slot. The first "quad fortress" it
+reported had **one** fortress and three bastions.
+
+`mitm quad` now checks existence rather than placement for these two types, via
+`isViableStructurePos`, which resolves the tie-break properly. It is only
+reached by candidates that already passed the geometry, so the generator cost is
+irrelevant. Placement-is-existence remains true for every other structure and is
+still the fast path.
+
+**The wrong measure.** Asking for four fortresses "close together" ranks by the
+distance between their START positions, and that is not what makes fortresses
+interesting. A fortress is up to 257 pieces sprawling as far as 112 blocks from
+its start — and each is generated **without knowledge of the others**.
+`getFortressPieces` rejects a piece colliding with an earlier piece of the *same*
+fortress; it has no idea a neighbouring fortress exists. Two fortresses whose
+starts are 80 blocks apart therefore do not sit near each other, they grow
+*through* each other.
+
+Start distance only bounds the opportunity. `tools/fortoverlap.c` measures what
+actually happened: build all four piece lists and count the pairs whose bounding
+boxes intersect.
+
+```sh
+./build/mitm.exe 1.21 fortress quad 8 --limit 6000 | grep QUADBASE | awk '{print $2}' \
+  | ./build/fortoverlap.exe 0 1.21 --stdin | sort -rn | head
+```
+
+The solver proposes seeds whose four slots are tight; the overlap scores what
+the pieces did with that chance. Ranking 400 candidates found a seed with
+**286 intersecting piece pairs and 27 592 blocks of shared bounding box** across
+four real fortresses — nearly double the first candidate the solver happened to
+emit, which is the point: the tightest starts are not the deepest overlap, and
+only measuring tells you which is which.
