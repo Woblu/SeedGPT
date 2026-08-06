@@ -54,3 +54,4 @@ tier3-java/server.jar
 tier3-java/run-*/
 tier3-java/run-*/
 tier3-java/*.jsonl
+tier3-java/*.log

@@ -218,6 +218,48 @@ Plain `iron_ore` is the reachable target; the deepslate variants are on the
 candidate list because leaving them off would have mislabelled a find, not
 because a treasure can reach them.
 
+### hunt_iron_casing.py — spend the server only where it can pay
+
+Measured, rather than assumed (`bench_probe.py`): the server costs ~6.5 s per
+chest and **commands are free** — the probe is 0.07 s of that, so earlier work
+shrinking command counts was worth almost nothing. It is chunk generation, plus
+boot. `spawn-chunk-radius=0` and `save-off` cut boot from 100 s to 44 s; forcing
+a single chunk did *not* help, because the server generates the neighbourhood
+anyway to finish a chunk (the 5.3 s stayed put and reappeared in the column scan).
+
+The real lever is the tier-2 headless path, which replicates
+`BuriedTreasurePiece`'s placement scan in-process:
+
+| | server | headless |
+|---|---|---|
+| per chest | ~6.5 s | **0.092 s** (~70×) |
+| boot | 44 s *per seed* | 4.5 s **once** |
+| agreement | — | 18/19 on seed 4 |
+
+It cannot answer the question directly: it runs terrain and surface rules but not
+`applyBiomeDecoration`, and ore is placed in decoration. But it says how *deep* a
+chest lands, and depth is the whole game for iron — the middle band spans
+y −24…56 peaking at 16, so above y 56 only the small uniform band contributes.
+The measured chests sit at y 32–79 concentrated in **48–63**, i.e. almost all of
+them land where iron is scarcest. That is why 1300 chests produced coal (which
+peaks near y 96) and never iron.
+
+```sh
+python hunt_iron_casing.py --max-y 46 --seeds 200 --radius 4000
+```
+
+Scan cheap, probe deep. Measured over 20 seeds: 603 treasures scanned in 0.9 min,
+5.5% deep enough to probe, **6.7 min against 65 min** for probing all of them —
+about 10× end to end. The deep chests also case differently: gravel 25, sand 5,
+stone 2, granite 1, against sand-dominated at ordinary depths.
+
+**The depth cut is a heuristic, not a sieve.** The fast path disagreed on 1 of 19
+chests because decoration can add surface blocks that move the landing spot, so a
+chest whose true depth is below the cut but whose predicted depth is above it is
+dropped and never probed. Fine for a hunt, which wants one good find; *not* fine
+for a completeness claim. The counts printed are of chests probed, never of
+chests that exist.
+
 ### Cost, honestly
 
 ~14 s to boot a world, ~8 s per village, ~2 s per treasure shell. The radius is
