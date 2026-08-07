@@ -574,6 +574,59 @@
       </div>
     </section>
 
+    <section>
+      <h2>Treasure casing <span class="tag-exp">real worldgen</span></h2>
+      <div class="hint" style="margin-top:0;margin-bottom:9px">
+        A buried treasure writes the block it <b>landed on</b> into every air or water
+        face around it — so it arrives already walled in. The main search cannot ask
+        this: it runs on cubiomes, which has no surface rules and no decoration, so
+        sand columns, ore and magma are <b>absent from that engine</b> rather than slow.
+        Measured over 6&nbsp;646 chests: sand&nbsp;78%, gravel&nbsp;18%, dirt&nbsp;2.7%,
+        stone&nbsp;0.9% — and <b>copper ore and magma ~0.015% each</b>, about 6&nbsp;600
+        chests scanned per expected hit.
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
+        <div><label for="tcCasing">encased in</label>
+          <select id="tcCasing">
+            <option value="magma_block">magma block (~0.015%)</option>
+            <option value="copper_ore">copper ore (~0.015%)</option>
+            <option value="iron_ore">iron ore (rarer still)</option>
+            <option value="coal_ore">coal ore</option>
+            <option value="mud">mud</option>
+            <option value="stone">stone (deep / cave floor, ~0.9%)</option>
+            <option value="gravel">gravel (~18%)</option>
+            <option value="dirt">dirt (~2.7%)</option>
+          </select></div>
+        <div><label for="tcLimit">want</label>
+          <input type="number" id="tcLimit" value="1" min="1" max="10"></div>
+      </div>
+      <div style="margin-top:9px"><label for="tcRange">seeds to scan</label>
+        <input type="number" id="tcRange" value="3000000" min="100000" max="200000000" step="500000"></div>
+      <div class="btnrow">
+        <button class="primary" id="tcBtn">Find casing</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Keep looking <span class="tag-exp">open-ended</span></h2>
+      <div class="hint" style="margin-top:0;margin-bottom:9px">
+        The normal search walks seeds <b>starting from the same place every time</b>, so
+        running it again re-scanned the same ground. This runs batch after batch on
+        <b>fresh</b> seeds until it finds what you asked for, or you stop it. Uses the
+        query currently in the box.
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
+        <div><label for="huBatch">seeds per batch</label>
+          <input type="number" id="huBatch" value="2000000" min="10000" max="50000000" step="500000"></div>
+        <div><label for="huWant">want</label>
+          <input type="number" id="huWant" value="1" min="1" max="50"></div>
+      </div>
+      <div class="btnrow">
+        <button class="primary" id="huBtn">Keep looking</button>
+        <button id="huStop" disabled>Stop</button>
+      </div>
+    </section>
+
   </div>
 </aside>
 
@@ -2198,6 +2251,108 @@
         out.append(c);
       }
     } catch (e) { fail(e.message); }
+  };
+
+  // ---- treasure casing (tier-2 OreGen: decoration, so it can see ore) -----
+  $('#tcBtn').onclick = async () => {
+    const casing = $('#tcCasing').value;
+    const limit = Math.max(1, Math.min(10, +$('#tcLimit').value || 1));
+    const range = Math.max(100000, Math.min(200000000, +$('#tcRange').value || 3000000));
+    busy(`scanning for a buried treasure encased in ${pretty(casing)} — running real ` +
+         `worldgen with decoration on every candidate. Rare ones take a while.`);
+    try {
+      const d = await post('/api/casingtreasure', { casing, limit, range, workers: 4 });
+      out.innerHTML = '';
+      out.append(statsCard('Buried treasure casing · real MC 1.21.1 worldgen', [
+        ['chests checked', String(d.summary?.checked ?? 0)],
+        ['found', String(d.hits.length), d.hits.length ? 'good' : 'warn'],
+        ['encased in', pretty(casing)],
+      ]));
+      if (!d.hits.length) {
+        // Never "none exist". This is a bounded scan of a rare thing, and the
+        // difference matters most exactly when the result is empty.
+        out.append(el('div', 'note warn',
+          `No ${pretty(casing)} casing among the ${d.summary?.checked ?? 0} chests scanned. ` +
+          `That means not found in what was scanned — not that none exists. Scan more seeds.`));
+      } else {
+        const c = el('div', 'card');
+        c.append(el('h3', null, 'Encased treasures — click a seed to copy'));
+        d.hits.forEach(h => {
+          const box = el('div', 'seed');
+          const n = el('div', 'n');
+          const num = el('span', 'num', String(h.seed));
+          num.title = 'copy';
+          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
+            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          n.append(num, el('span', 'dim', pretty(casing))); box.append(n);
+          const t = el('table'), tr = el('tr');
+          tr.append(idCell('structure', 'buried_treasure', 'Buried treasure'),
+                    el('td', null, `x=${h.x}  y=${h.y ?? '?'}  z=${h.z}`),
+                    el('td', 'd', `/tp ${h.x} ${h.y ?? 64} ${h.z}`));
+          t.append(tr); box.append(t); c.append(box);
+        });
+        out.append(c);
+      }
+      if (d.confirm) out.append(el('div', 'note', d.confirm));
+    } catch (e) { fail(e.message); }
+  };
+
+  // ---- open-ended hunt ---------------------------------------------------
+  // The batch search always restarted its seed walk from the same place, so
+  // "search again" re-covered the same ground. This advances the offset per
+  // batch, which is the difference between "not in the first N" and "keep going".
+  let huntJob = null, huntPoll = null;
+  function huntStopUI() {
+    clearInterval(huntPoll); huntPoll = null; huntJob = null;
+    $('#huStop').disabled = true; $('#huBtn').disabled = false;
+  }
+  $('#huBtn').onclick = async () => {
+    if (!guard()) return;
+    const query = buildQuery();
+    const batch = Math.max(10000, Math.min(50000000, +$('#huBatch').value || 2000000));
+    const want = Math.max(1, Math.min(50, +$('#huWant').value || 1));
+    huntJob = 'hunt-' + Date.now();
+    $('#huBtn').disabled = true; $('#huStop').disabled = false;
+    busy('searching fresh seeds batch after batch — this keeps going until it finds what you asked for.');
+    try {
+      await post('/api/hunt', { query, job: huntJob, batch, want, secs: 60, threads: 16 });
+    } catch (e) { fail(e.message); huntStopUI(); return; }
+    huntPoll = setInterval(async () => {
+      if (!huntJob) return;
+      let s;
+      try { s = await post('/api/hunt/status', { job: huntJob }); }
+      catch (e) { return; }                 // a dropped poll is not a failure
+      out.innerHTML = '';
+      out.append(statsCard('Open-ended search', [
+        ['batches', String(s.batches || 0)],
+        ['seeds scanned', (s.scanned || 0).toLocaleString()],
+        ['found', String((s.hits || []).length), (s.hits || []).length ? 'good' : ''],
+      ]));
+      if (s.error) out.append(el('div', 'note warn', s.error));
+      if ((s.hits || []).length) {
+        const c = el('div', 'card');
+        c.append(el('h3', null, 'Seeds — click to copy'));
+        s.hits.forEach(h => {
+          const box = el('div', 'seed'), n = el('div', 'n');
+          const num = el('span', 'num', String(h.seed));
+          num.title = 'copy';
+          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
+            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          n.append(num); box.append(n); c.append(box);
+        });
+        out.append(c);
+      } else if (!s.error) {
+        out.append(el('div', 'note',
+          `Nothing yet after ${(s.scanned || 0).toLocaleString()} seeds. Every batch ` +
+          `covers seeds the earlier ones did not, so this is progress, not a loop.`));
+      }
+      if (!s.running) { huntStopUI(); }
+    }, 3000);
+  };
+  $('#huStop').onclick = async () => {
+    if (!huntJob) return;
+    try { await post('/api/hunt/stop', { job: huntJob }); } catch (e) {}
+    huntStopUI();
   };
 
   // ---- start -------------------------------------------------------------

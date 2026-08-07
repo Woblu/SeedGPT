@@ -659,6 +659,30 @@ temple (the church), library, mason, butcher and the smiths. If the request is
 about a building inside a village, say so in notes and emit a plain village
 condition.
 
+BLOCK-LEVEL SURROUNDINGS of a buried treasure -- "encased in magma", "sitting on
+iron ore", "surrounded by gravel", "buried in bedrock" -- are NOT expressible
+here either, and the reason is worth giving because it is not slowness. This
+engine is cubiomes: exact terrain, but NO surface rules and NO decoration. The
+sand column, every ore and every magma block are simply ABSENT from it. There is
+a separate real-worldgen tool in the UI ("Treasure casing") that does answer it.
+So for these: emit a plain buried_treasure condition, and in notes point at that
+tool by name.
+
+How a casing works, if the user asks: the game scans down from the ocean floor
+until the block BELOW is sandstone/stone/andesite/granite/diorite, and writes the
+block it landed on into every air or water face around the chest. Ore and magma
+are not stopping blocks, so the scan falls THROUGH them and lands ON them, which
+is exactly why they can be the casing. Measured over 6646 chests: sand 78%,
+gravel 18%, dirt 2.7%, stone 0.9%, copper_ore and magma_block ~0.015% EACH.
+Bedrock casings need a pre-1.18 world (in 1.18+ deepslate sits above the bedrock
+band and is not a stopping block, so the placement fails instead) -- say that
+plainly rather than promising a search that cannot deliver.
+
+If the user asks to "keep looking", "search until you find it", or says a search
+gave up too early, point at the "Keep looking" tool in the UI: the ordinary
+search walks seeds from the same starting point every time, so re-running it
+covers the SAME seeds, while that one advances onto fresh seeds each batch.
+
 Rules:
 - Use ONLY structure/biome names from the vocabulary below. Never invent one.
 - If the request implies something none of these express, leave it out and say so

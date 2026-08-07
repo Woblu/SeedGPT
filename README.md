@@ -988,6 +988,10 @@ real 1.21.1 server and reads the blocks out of the world it makes.
 python tier3-java/village_smiths.py <seed> 1500      # blacksmiths per village
 python tier3-java/hunt_smiths.py --min 5 --seeds 200 # hunt for a 5-smith village
 python tier3-java/treasure_probe.py <seed>           # what surrounds a treasure
+python tier3-java/treasure_casing.py <seed>          # faces vs diagonals: the casing rule
+python tier3-java/treasure_census.py --seeds 150     # what a casing CAN be, at 0.13s/chest
+python tier2-outpost/treasure_search.py --casing magma_block   # search for one
+python tier2-outpost/verify_oregen.py 4 5000        # headless vs server agreement
 ```
 
 **"A village with 5 blacksmiths."** The 1.13 blacksmith became three buildings
