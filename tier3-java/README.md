@@ -153,13 +153,62 @@ neighbour might be the interesting one.
 | unidentified | **0** — the candidate list covers everything actually present |
 | unusual | 2 chests with an ore touching them (copper, coal) |
 
-So on this evidence a buried treasure **cannot** be encased in bedrock: it
+> **This said "cannot", and that was wrong.** The claim below generalised from
+> the y range of 108 chests to a statement about the rule, which the data never
+> supported. See *What can actually encase a treasure* further down: the scan
+> descends **through air and water**, so sediment over an open cave or ravine
+> drops the chest far below the seabed, and the pre-1.18 bedrock band is a random
+> mix of bedrock and stone — which lets a chest stop on the stone with bedrock
+> faces around it. Rare enough that 108 chests show none; not impossible.
+
+So on this evidence a buried treasure was not **observed** encased in bedrock: it
 generates at the ocean floor or beach surface, and bedrock is at y −64…−59,
-a hundred blocks below anything measured. No spawner was adjacent to any chest
+a hundred blocks below anything measured here. No spawner was adjacent to any chest
 either. The detector does fire when something unusual is there — the two ore
 cases prove it is not simply blind — so the negative is a measurement, not a
 silence. It is 108 chests, not a proof over all seeds; a wider hunt would
 strengthen or overturn it, and `--json` exists so one can accumulate.
+
+### What can actually encase a treasure
+
+Taken from the game's own rule, which `OutpostWorldgen.chestFloor()` extracts:
+
+```java
+floor = { SANDSTONE, STONE, ANDESITE, GRANITE, DIORITE }
+```
+
+Descend from the ocean floor until the block **below** is one of those five. The
+fill is the block at that spot — unless it is air or water, when the fill is the
+block below instead — and every air or water face gets it written in.
+
+Two consequences that the 108-chest sample never showed, both from the same
+clause: **the scan descends through air and water.**
+
+- **Depth is not bounded by the seabed.** Sediment lying over an open cave or
+  ravine does not stop the scan; it falls through the void and lands on the cave
+  floor, far below. That chest lands in air, so its fill is the floor block, and
+  every face around it gets written — genuinely encased in whatever the cave
+  floor is made of.
+- **Bedrock is reachable, in pre-1.18 worlds.** Bedrock is not in the floor set,
+  so the scan never *stops* on it — but it does not have to. The pre-1.18 bedrock
+  band is a random mix: y=0 solid, y=1–4 bedrock or stone per block. A chest can
+  stop at y≈2–5 where the block below happens to be stone, and its side faces,
+  already solid bedrock, are never overwritten. Both conditions must line up (an
+  open column most of the way down, and stone under the landing spot), which is
+  why it is vanishingly rare rather than impossible.
+
+**In 1.18+ this is blocked**, and not by rarity. The bedrock band moved to
+y −64…−59 and everything above it is **deepslate**, which is not in the floor
+set — so a scan that gets that deep finds nothing to stop on and the placement
+fails outright. Anything bedrock-encased is a pre-1.18 world.
+
+So the families are: the sediment it landed in (sand, gravel, dirt, clay); a
+floor block, when it landed in air or water; and **any solid block sitting
+directly on a floor block** — which is exactly why ore works, ore not being a
+stopping block and so being fallen through and landed on.
+
+`treasure_census.py` measures this at 0.09 s per chest instead of arguing from a
+hundred samples.
 
 ### treasure_casing.py — the chest writes its own walls
 
