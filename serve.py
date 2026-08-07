@@ -546,7 +546,10 @@ AI_SCHEMA = """\
 You translate a description of a Minecraft world into a JSON search query for a
 seed finder. Output ONLY JSON of the form:
   { "conditions": [ ... ], "notes": "one short sentence on anything you assumed or could not express" }
-(optionally with a "rank" key -- see Leaderboard below)
+(optionally with a "rank" key -- see Leaderboard below, and a "tool" key -- see
+ROUTING TO OTHER ENGINES. If a request needs another engine you MUST emit "tool";
+saying so in "notes" alone does nothing, because notes is prose and the tool
+field is what actually runs it.)
 
 Each condition is one object with a short lowercase "id". Distances ("within")
 are in BLOCKS (a chunk is 16). "of" is "origin", "spawn", or another condition's
@@ -806,6 +809,27 @@ def api_gemini(body) -> dict:
         except Exception:  # noqa: BLE001
             ver = v
     q = {"version": ver, "conditions": conds}
+    # The query is rebuilt from a whitelist, so anything not copied here is
+    # silently discarded. "tool" was not, which is exactly how a coal-ore casing
+    # request came back as a plain buried-treasure search WITH a note claiming it
+    # had been routed to the casing tool -- the prose survived and the thing that
+    # actually routes did not. Validated rather than passed through: an unknown
+    # name would send the UI to a panel that does not exist.
+    TOOLS = {"casing", "village_building", "exposed_treasure",
+             "fortress_overlap", "hunt"}
+    t = obj.get("tool")
+    if isinstance(t, dict) and t.get("name") in TOOLS:
+        keep = {"name": t["name"]}
+        if isinstance(t.get("casing"), str) and re.match(
+                r"^(minecraft:)?[a-z0-9_]{2,40}$", t["casing"]):
+            keep["casing"] = t["casing"].replace("minecraft:", "")
+        if isinstance(t.get("building"), str) and re.match(r"^[a-z_]{3,20}$", t["building"]):
+            keep["building"] = t["building"]
+        for k, lo, hi in (("radius", 1000, 60000), ("min", 1, 12),
+                          ("want", 1, 50), ("seeds", 1000, 5_000_000)):
+            if isinstance(t.get(k), (int, float)):
+                keep[k] = max(lo, min(hi, int(t[k])))
+        q["tool"] = keep
     # A leaderboard request survives only if it names a condition that exists;
     # a dangling "rank" would be a hard planner error rather than a search.
     # A budget the model emitted travels back to the UI, which owns the

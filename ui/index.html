@@ -2237,7 +2237,9 @@
       // A prompt that needs a different engine now RUNS it, rather than being
       // told which panel to click. The conditions still populate the builder so
       // what ran is visible and tweakable.
-      const t = d.query && d.query.tool;
+      // Accept it in either place: the server puts it on the query, but a
+      // model that emits it at the top level should not be silently ignored.
+      const t = (d.query && d.query.tool) || d.tool;
       if (t && t.name) {
         delete d.query.tool;
         try { loadQueryIntoBuilder(d.query); } catch (e) {}
@@ -2248,6 +2250,14 @@
       // Defensive: a malformed tool field must not reach the C engine, which
       // would reject the query outright over a key it never asked for.
       if (d.query) delete d.query.tool;
+      // The failure this guards against actually happened: a coal-ore casing
+      // request returned a note saying it had been routed to the casing tool,
+      // and then ran a plain buried-treasure search. Prose claiming a route
+      // while the ordinary search runs is worse than no route at all, so say so.
+      if (/routed?/i.test(d.notes || '')) {
+        aiNote((d.notes || '') + '  — but no tool was actually selected, so this '
+             + 'is the ORDINARY search, not that tool. Use the sidebar panel directly.', true);
+      }
       await runSearch(d.query, token);
     } catch (e) {
       if (token !== runToken) return;
