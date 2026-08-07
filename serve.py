@@ -27,6 +27,12 @@ Endpoints (all POST bodies are JSON):
                              job id immediately; poll /api/hunt/status, end with
                              /api/hunt/stop. The batch /api/search can only ever
                              answer "not in the first N seeds".
+    POST /api/confirmcasing -> settle ONE casing lead against a real server.
+                             The fast path is 88% right, so its hits are leads;
+                             this is what turns one into a result.
+    POST /api/fortressoverlap -> rank seeds by how far neighbouring nether
+                             fortresses GROW THROUGH each other (intersecting
+                             piece pairs), not by how close their starts are.
     POST /api/casingtreasure -> buried treasure ENCASED in a given block (magma,
                              ore...). The main search cannot express this: it
                              runs on cubiomes, which has no surface rules and no
@@ -834,6 +840,83 @@ def api_villagesmiths(body) -> dict:
     return {"hits": hits, "summary": summary}
 
 
+def api_confirmcasing(body) -> dict:
+    """Settle one casing lead against a REAL server. Slow (~60s), and the point.
+
+    The fast path agrees with a real server on 88% of chests, so its hits are
+    leads. Without a way to close that loop the caveat is just a disclaimer; with
+    one, a reported find is actually checked.
+    """
+    seed = str(body.get("seed", "")).strip()
+    if not re.match(r"^-?\d{1,20}$", seed):
+        raise Failure("confirm needs a seed")
+    try:
+        x, z = int(body.get("x")), int(body.get("z"))
+    except (TypeError, ValueError):
+        raise Failure("confirm needs x and z")
+    expect = str(body.get("expect", "")).strip()
+    if expect and not re.match(r"^(minecraft:)?[a-z0-9_]{2,40}$", expect):
+        raise Failure("bad block id")
+    script = ROOT / "tier3-java" / "confirm_casing.py"
+    if not (ROOT / "tier3-java" / "server.jar").exists():
+        raise Failure("tier3-java/server.jar not present -- see tier3-java/README.md")
+    args = [sys.executable, str(script), seed, str(x), str(z)]
+    if expect:
+        args += ["--expect", expect]
+    rc, out, err = run(args, TIMEOUTS["villagesmiths"])
+    faces = [ln.strip() for ln in out.splitlines()
+             if re.match(r"^\s+(west|east|down|up|north|south)\s", ln)]
+    m = re.search(r"^casing:\s*(\S+)\s*\((\d+) of 5", out, re.M)
+    return {"confirmed": rc == 0 and bool(expect),
+            "checked": rc in (0, 1),          # 2 = unknown, not a verdict
+            "casing": m.group(1) if m else None,
+            "agree": int(m.group(2)) if m else 0,
+            "faces": faces, "raw": out.strip(), "error": err.strip() or None}
+
+
+def api_fortressoverlap(body) -> dict:
+    """Rank seeds by how much neighbouring nether fortresses GROW THROUGH each other.
+
+    "Four fortresses close together" is the wrong measure and it is the one a
+    cluster search gives. A fortress is up to 257 pieces sprawling 112 blocks
+    from its start, and each is generated without knowledge of the others -- so
+    two starts 80 blocks apart do not sit near each other, they interpenetrate.
+    This measures intersecting piece pairs, which is what "inside each other"
+    actually means.
+    """
+    seed = str(body.get("seed", "")).strip()
+    version = check_version(str(body.get("version", "1.21")))
+    if seed:
+        if not re.match(r"^-?\d{1,20}$", seed):
+            raise Failure("bad seed")
+        rc, out, err = run([tool("fortoverlap"), seed, version], TIMEOUTS["describe"])
+    else:
+        seeds = max(1000, min(5_000_000, int(body.get("seeds", 200000))))
+        rc, out, err = run([tool("fortoverlap"), "0", version, "--rank", str(seeds)],
+                           TIMEOUTS["search"])
+    if rc != 0 and not out.strip():
+        raise Failure(err.strip() or "fortoverlap failed")
+    pairs, ranked = [], []
+    for ln in out.splitlines():
+        m = re.search(r"fortress (\d+) x (\d+)\s*:\s*(\d+) piece pairs intersect, (\d+) blocks", ln)
+        if m:
+            pairs.append({"a": int(m.group(1)), "b": int(m.group(2)),
+                          "pairs": int(m.group(3)), "blocks": int(m.group(4))})
+        # Written against the tool's real output rather than an assumed column
+        # layout: "seed 15500  3 fortresses  83 intersecting piece pairs  5254
+        # shared blocks". A guessed format parsed to an empty list and would have
+        # rendered as "no results" rather than as a parse failure.
+        m = re.match(r"^seed\s+(-?\d+)\s+(\d+) fortresses\s+(\d+) intersecting "
+                     r"piece pairs\s+(\d+) shared blocks", ln.strip())
+        if m:
+            ranked.append({"seed": m.group(1), "fortresses": int(m.group(2)),
+                           "pairs": int(m.group(3)), "blocks": int(m.group(4))})
+    m = re.search(r"(\d+) real fortresses, (\d+) intersecting piece pairs, (\d+) blocks", out)
+    summary = {"fortresses": int(m.group(1)), "pairs": int(m.group(2)),
+               "blocks": int(m.group(3))} if m else {}
+    return {"pairs": pairs, "ranked": ranked, "summary": summary, "raw": out.strip()}
+
+
 def api_casingtreasure(body) -> dict:
     """Find a buried treasure ENCASED in a given block (magma_block, iron_ore...).
 
@@ -923,7 +1006,7 @@ def _hunt_state(job):
         return dict(HUNTS.get(job) or {})
 
 
-def _hunt_loop(job, path, batch, want, threads, secs):
+def _hunt_loop(job, path, batch, want, threads, secs, casing=""):
     """Scan batch after batch, advancing FIND_OFFSET, until told to stop.
 
     Every batch covers seeds the previous ones did not: find.exe walks an index
@@ -944,12 +1027,21 @@ def _hunt_loop(job, path, batch, want, threads, secs):
         env["FIND_OFFSET"] = str(off)
         env["FIND_SECONDS"] = str(secs)
         try:
+            if casing:
+                # Same loop, different worker. A rare casing is the case that
+                # NEEDS resuming: at ~0.015% one batch is nowhere near enough,
+                # and without an offset a second batch would rescan the first.
+                cmd = [sys.executable, str(ROOT / "tier2-outpost" / "treasure_search.py"),
+                       "--casing", casing, "--range", str(batch),
+                       "--offset", str(off), "--limit", str(max(1, want)),
+                       "--workers", "4"]
+            else:
+                cmd = [str(tool("find")), str(path), str(batch), str(threads)]
             proc = subprocess.Popen(
-                [str(tool("find")), str(path), str(batch), str(threads)],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 cwd=str(ROOT), env=env)
             job_register(job, proc)
-            out, _ = proc.communicate(timeout=secs + 120)
+            out, _ = proc.communicate(timeout=secs + 900 if casing else secs + 120)
         except Exception as e:
             with HUNTS_LOCK:
                 if job in HUNTS:
@@ -959,7 +1051,21 @@ def _hunt_loop(job, path, batch, want, threads, secs):
         finally:
             job_done(job)
 
-        found = parse_seeds(out) or []
+        if casing:
+            # treasure_search emits one JSON object per hit, plus a summary.
+            found = []
+            for ln in out.splitlines():
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    o = json.loads(ln)
+                except ValueError:
+                    continue
+                if not o.get("summary"):
+                    found.append(o)
+        else:
+            found = parse_seeds(out) or []
         with HUNTS_LOCK:
             st = HUNTS.get(job)
             if not st:
@@ -993,7 +1099,12 @@ def api_hunt(body) -> dict:
     anything at the rates actually measured here (an ore-cased buried treasure
     is ~0.015%) that bound is the whole reason nothing turns up.
     """
-    path = write_query(body)
+    casing = str(body.get("casing", "")).strip()
+    if casing and not re.match(r"^(minecraft:)?[a-z0-9_]{2,40}$", casing):
+        raise Failure("casing must be a block id, e.g. magma_block or iron_ore")
+    # A casing hunt supplies its own query (buried treasure near origin), so the
+    # builder's query is neither needed nor meaningful for it.
+    path = ROOT / "queries" / "_ui.json" if casing else write_query(body)
     job = str(body.get("job", "")).strip()
     if not job:
         raise Failure("hunt needs a 'job' id so it can be polled and stopped")
@@ -1007,9 +1118,10 @@ def api_hunt(body) -> dict:
         HUNTS[job] = {"hits": [], "seen": set(), "scanned": 0, "offset": 0,
                       "batches": 0, "running": True, "stop": False, "error": None}
     threading.Thread(target=_hunt_loop,
-                     args=(job, path, batch, want, threads, secs),
+                     args=(job, path, batch, want, threads, secs, casing),
                      daemon=True).start()
-    return {"job": job, "started": True, "batch": batch, "want": want}
+    return {"job": job, "started": True, "batch": batch, "want": want,
+            "casing": casing or None}
 
 
 def api_hunt_status(body) -> dict:
@@ -1039,6 +1151,8 @@ ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/villagesmiths": api_villagesmiths,
           "/api/exposedtreasure": api_exposedtreasure,
           "/api/casingtreasure": api_casingtreasure,
+          "/api/confirmcasing": api_confirmcasing,
+          "/api/fortressoverlap": api_fortressoverlap,
           "/api/cancel": api_cancel,
           "/api/hunt": api_hunt,
           "/api/hunt/status": api_hunt_status,

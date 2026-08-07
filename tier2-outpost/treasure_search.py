@@ -47,6 +47,9 @@ def main():
     # ~6600 chests of scanning per expected hit.
     ap.add_argument("--casing", default="",
                     help="e.g. magma_block, iron_ore, copper_ore, gravel")
+    # Where in the seed walk to start. Without it every run rescans the same
+    # seeds, which for a ~0.015% casing means running it again buys nothing.
+    ap.add_argument("--offset", type=int, default=0)
     args = ap.parse_args()
 
     q = {"version": args.version, "conditions": [
@@ -63,6 +66,8 @@ def main():
     checked = [0]
 
     env = dict(os.environ); env["FIND_HITSTREAM"] = "1"
+    if args.offset:
+        env["FIND_OFFSET"] = str(args.offset)
     finder = subprocess.Popen([FIND, qpath, str(args.range), "16"],
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               text=True, cwd=ROOT, bufsize=1, env=env)

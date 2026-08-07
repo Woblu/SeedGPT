@@ -604,6 +604,8 @@
         <input type="number" id="tcRange" value="3000000" min="100000" max="200000000" step="500000"></div>
       <div class="btnrow">
         <button class="primary" id="tcBtn">Find casing</button>
+        <button id="tcKeep">Keep looking</button>
+        <button id="tcStop" disabled>Stop</button>
       </div>
     </section>
 
@@ -624,6 +626,43 @@
       <div class="btnrow">
         <button class="primary" id="huBtn">Keep looking</button>
         <button id="huStop" disabled>Stop</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Fortresses inside each other <span class="tag-exp">piece-level</span></h2>
+      <div class="hint" style="margin-top:0;margin-bottom:9px">
+        &ldquo;Four fortresses close together&rdquo; is the wrong measure, and it is the one a
+        cluster search gives you. A fortress is up to <b>257 pieces</b> sprawling 112
+        blocks from its start, and each is generated <b>without knowing the others
+        exist</b> — so two starts 80 blocks apart do not sit near each other, they
+        <b>grow through</b> each other. This counts intersecting piece pairs.
+      </div>
+      <div style="margin-top:9px"><label for="foSeeds">seeds to rank</label>
+        <input type="number" id="foSeeds" value="200000" min="1000" max="5000000" step="50000"></div>
+      <div style="margin-top:9px"><label for="foSeed">or inspect one seed</label>
+        <input type="text" id="foSeed" placeholder="e.g. 272750727216669"></div>
+      <div class="btnrow">
+        <button class="primary" id="foBtn">Measure overlap</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Exposed treasure <span class="tag-exp">real worldgen</span></h2>
+      <div class="hint" style="margin-top:0;margin-bottom:9px">
+        A buried treasure chest sitting in <b>open air</b> — no digging. The chest is
+        placed at the bottom of the sand column, so it is almost always covered or
+        underwater; this needs a beach with essentially no sand over the stone.
+        cubiomes cannot see it (no sand, no water), so real worldgen decides.
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
+        <div><label for="etRange">seeds to scan</label>
+          <input type="number" id="etRange" value="3000000" min="100000" max="200000000" step="500000"></div>
+        <div><label for="etLimit">want</label>
+          <input type="number" id="etLimit" value="3" min="1" max="20"></div>
+      </div>
+      <div class="btnrow">
+        <button class="primary" id="etBtn">Find exposed</button>
       </div>
     </section>
 
@@ -2289,12 +2328,78 @@
           tr.append(idCell('structure', 'buried_treasure', 'Buried treasure'),
                     el('td', null, `x=${h.x}  y=${h.y ?? '?'}  z=${h.z}`),
                     el('td', 'd', `/tp ${h.x} ${h.y ?? 64} ${h.z}`));
-          t.append(tr); box.append(t); c.append(box);
+          t.append(tr); box.append(t);
+          // Every hit is a lead until a real server says otherwise, so the way
+          // to settle it sits on the hit itself rather than in a footnote.
+          const cb = el('button', null, 'confirm on real server');
+          cb.onclick = () => confirmCasing(cb, h.seed, h.x, h.z, casing);
+          box.append(cb);
+          c.append(box);
         });
         out.append(c);
       }
       if (d.confirm) out.append(el('div', 'note', d.confirm));
     } catch (e) { fail(e.message); }
+  };
+
+  // A rare casing is exactly the case a single batch cannot answer: at ~0.015%
+  // one pass is nowhere near enough, and without an advancing offset a second
+  // pass would rescan the first. So the casing panel can run open-ended too.
+  let tcJob = null, tcPoll = null;
+  function tcStopUI() {
+    clearInterval(tcPoll); tcPoll = null; tcJob = null;
+    $('#tcStop').disabled = true; $('#tcKeep').disabled = false; $('#tcBtn').disabled = false;
+  }
+  $('#tcKeep').onclick = async () => {
+    const casing = $('#tcCasing').value;
+    const want = Math.max(1, Math.min(10, +$('#tcLimit').value || 1));
+    const batch = Math.max(100000, Math.min(50000000, +$('#tcRange').value || 3000000));
+    tcJob = 'casing-' + Date.now();
+    $('#tcKeep').disabled = true; $('#tcBtn').disabled = true; $('#tcStop').disabled = false;
+    busy(`hunting a ${pretty(casing)} casing across batch after batch of fresh seeds. `
+       + `At ~0.015% for the rare ones this is the only way it can succeed.`);
+    try {
+      await post('/api/hunt', { job: tcJob, casing, batch, want, secs: 600,
+                                query: { version: $('#version').value, conditions: [] } });
+    } catch (e) { fail(e.message); tcStopUI(); return; }
+    tcPoll = setInterval(async () => {
+      if (!tcJob) return;
+      let s; try { s = await post('/api/hunt/status', { job: tcJob }); } catch (e) { return; }
+      out.innerHTML = '';
+      out.append(statsCard('Casing hunt · ' + pretty(casing), [
+        ['batches', String(s.batches || 0)],
+        ['seeds scanned', (s.scanned || 0).toLocaleString()],
+        ['found', String((s.hits || []).length), (s.hits || []).length ? 'good' : ''],
+      ]));
+      if (s.error) out.append(el('div', 'note warn', s.error));
+      if ((s.hits || []).length) {
+        const c = el('div', 'card');
+        c.append(el('h3', null, 'Encased treasures'));
+        s.hits.forEach(h => {
+          const box = el('div', 'seed'), n = el('div', 'n');
+          const num = el('span', 'num', String(h.seed));
+          num.title = 'copy';
+          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
+            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          n.append(num, el('span', 'dim', `x=${h.x}  y=${h.y ?? '?'}  z=${h.z}`));
+          box.append(n);
+          const cb = el('button', null, 'confirm on real server');
+          cb.onclick = () => confirmCasing(cb, h.seed, h.x, h.z, casing);
+          box.append(cb); c.append(box);
+        });
+        out.append(c);
+      } else if (!s.error) {
+        out.append(el('div', 'note',
+          `Nothing yet after ${(s.scanned || 0).toLocaleString()} seeds. Each batch covers ` +
+          `seeds the earlier ones did not, so this is progress rather than a loop.`));
+      }
+      if (!s.running) tcStopUI();
+    }, 4000);
+  };
+  $('#tcStop').onclick = async () => {
+    if (!tcJob) return;
+    try { await post('/api/hunt/stop', { job: tcJob }); } catch (e) {}
+    tcStopUI();
   };
 
   // ---- open-ended hunt ---------------------------------------------------
@@ -2353,6 +2458,116 @@
     if (!huntJob) return;
     try { await post('/api/hunt/stop', { job: huntJob }); } catch (e) {}
     huntStopUI();
+  };
+
+  // ---- confirm a casing lead on a real server ----------------------------
+  // The fast path agrees with a real server on 88% of chests, so its hits are
+  // leads. Without this button that caveat is only a disclaimer.
+  async function confirmCasing(btn, seed, x, z, expect) {
+    btn.disabled = true; btn.textContent = 'confirming…';
+    try {
+      const d = await post('/api/confirmcasing', { seed, x, z, expect });
+      const row = btn.closest('.seed');
+      const note = el('div', 'note ' + (d.confirmed ? 'good' : 'warn'),
+        d.confirmed
+          ? `Confirmed on a real server: ${pretty(d.casing || expect)} on ${d.agree} of 5 faces.`
+          : (d.checked
+              ? `Not confirmed — the server says ${pretty(d.casing || 'something else')}. `
+                + `This is the 12% the fast path gets wrong, which is why it shortlists.`
+              : `Could not be checked: ${(d.error || 'unknown').slice(0, 160)}`));
+      row.append(note);
+      btn.textContent = d.confirmed ? 'confirmed' : 'not confirmed';
+    } catch (e) {
+      btn.disabled = false; btn.textContent = 'confirm';
+      fail(e.message);
+    }
+  }
+
+  // ---- fortress interpenetration ----------------------------------------
+  $('#foBtn').onclick = async () => {
+    const seed = $('#foSeed').value.trim();
+    const seeds = Math.max(1000, Math.min(5000000, +$('#foSeeds').value || 200000));
+    busy(seed ? `measuring how far the fortresses in ${seed} grow through each other`
+              : `building every fortress in ${seeds.toLocaleString()} seeds and ranking them by real piece overlap`);
+    try {
+      const d = await post('/api/fortressoverlap', seed ? { seed } : { seeds });
+      out.innerHTML = '';
+      if (seed) {
+        out.append(statsCard('Fortress interpenetration · seed ' + seed, [
+          ['fortresses', String(d.summary?.fortresses ?? 0)],
+          ['intersecting piece pairs', String(d.summary?.pairs ?? 0),
+           (d.summary?.pairs || 0) > 100 ? 'good' : ''],
+          ['shared blocks', (d.summary?.blocks ?? 0).toLocaleString()],
+        ]));
+        if (d.pairs.length) {
+          const c = el('div', 'card');
+          c.append(el('h3', null, 'Which pairs overlap'));
+          const t = el('table');
+          d.pairs.forEach(p => {
+            const tr = el('tr');
+            tr.append(el('td', 'id', `#${p.a} × #${p.b}`),
+                      el('td', null, `${p.pairs} piece pairs`),
+                      el('td', 'd', `${p.blocks.toLocaleString()} blocks`));
+            t.append(tr);
+          });
+          c.append(t); out.append(c);
+        }
+      } else {
+        out.append(statsCard('Fortress overlap · ranked', [
+          ['seeds scanned', seeds.toLocaleString()],
+          ['ranked', String(d.ranked.length), d.ranked.length ? 'good' : 'warn'],
+        ]));
+        const c = el('div', 'card');
+        c.append(el('h3', null, 'Best overlap — click a seed to copy'));
+        d.ranked.slice().reverse().forEach(r => {
+          const box = el('div', 'seed'), n = el('div', 'n');
+          const num = el('span', 'num', String(r.seed));
+          num.title = 'copy';
+          num.onclick = () => { navigator.clipboard?.writeText(String(r.seed));
+            num.textContent = 'copied'; setTimeout(() => num.textContent = r.seed, 800); };
+          n.append(num, el('span', 'dim',
+            `${r.pairs} piece pairs · ${r.blocks.toLocaleString()} blocks · ${r.fortresses} fortresses`));
+          box.append(n); c.append(box);
+        });
+        out.append(c);
+      }
+      if (!d.pairs.length && !d.ranked.length) {
+        out.append(el('div', 'note warn', 'No overlap found in what was scanned.'));
+      }
+    } catch (e) { fail(e.message); }
+  };
+
+  // ---- exposed treasure --------------------------------------------------
+  $('#etBtn').onclick = async () => {
+    const range = Math.max(100000, Math.min(200000000, +$('#etRange').value || 3000000));
+    const limit = Math.max(1, Math.min(20, +$('#etLimit').value || 3));
+    busy('looking for a buried treasure chest sitting in open air — real worldgen on every candidate.');
+    try {
+      const d = await post('/api/exposedtreasure', { range, limit });
+      out.innerHTML = '';
+      out.append(statsCard('Exposed buried treasure · real MC 1.21.1 worldgen', [
+        ['chests checked', String(d.summary?.checked ?? 0)],
+        ['exposed', String(d.hits.length), d.hits.length ? 'good' : 'warn'],
+      ]));
+      if (!d.hits.length) {
+        out.append(el('div', 'note warn',
+          `None among the ${d.summary?.checked ?? 0} chests scanned — not found in what was ` +
+          `scanned, rather than none existing. Scan more seeds.`));
+      } else {
+        const c = el('div', 'card');
+        c.append(el('h3', null, 'Exposed treasures — click a seed to copy'));
+        d.hits.forEach(h => {
+          const box = el('div', 'seed'), n = el('div', 'n');
+          const num = el('span', 'num', String(h.seed));
+          num.title = 'copy';
+          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
+            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          n.append(num, el('span', 'dim', `x=${h.x}  z=${h.z}`));
+          box.append(n); c.append(box);
+        });
+        out.append(c);
+      }
+    } catch (e) { fail(e.message); }
   };
 
   // ---- start -------------------------------------------------------------
