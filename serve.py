@@ -22,6 +22,16 @@ Endpoints (all POST bodies are JSON):
     POST /api/ask         -> natural language -> query JSON (needs ANTHROPIC_API_KEY)
     POST /api/gemini      -> natural language -> query JSON via Google Gemini
                              (key from the request body or GEMINI_API_KEY)
+    POST /api/hunt        -> open-ended search: batch after batch, advancing
+                             FIND_OFFSET, until satisfied or stopped. Returns a
+                             job id immediately; poll /api/hunt/status, end with
+                             /api/hunt/stop. The batch /api/search can only ever
+                             answer "not in the first N seeds".
+    POST /api/casingtreasure -> buried treasure ENCASED in a given block (magma,
+                             ore...). The main search cannot express this: it
+                             runs on cubiomes, which has no surface rules and no
+                             decoration, so the sand column and every ore and
+                             magma block are simply absent from that engine.
 """
 
 import json
@@ -800,6 +810,55 @@ def api_villagesmiths(body) -> dict:
     return {"hits": hits, "summary": summary}
 
 
+def api_casingtreasure(body) -> dict:
+    """Find a buried treasure ENCASED in a given block (magma_block, iron_ore...).
+
+    This is the one thing the main search genuinely cannot do. find.exe runs on
+    cubiomes, which has exact terrain but no surface rules and no decoration --
+    so it has no sand column, and no ore or magma anywhere. The casing is a
+    property of the finished world, so it is not slow to evaluate there, it is
+    absent. Tier 1 streams treasure candidates and OreGen decides.
+
+    Rates measured over 6646 chests: sand 78%, gravel 18%, dirt 2.7%, stone
+    0.9%, and copper_ore / magma_block at roughly 0.015% EACH -- about 6600
+    chests scanned per expected hit. Ask for a rare casing and expect to wait.
+    """
+    tier2 = ROOT / "tier2-outpost"
+    if not (tier2 / "out" / "OreGen.class").exists() or not (tier2 / "cp.txt").exists():
+        raise Failure("OreGen not built -- see tier2-outpost "
+                      "(gradle printcp, then javac OreGen.java)")
+    casing = str(body.get("casing", "")).strip()
+    if not re.match(r"^(minecraft:)?[a-z0-9_]{2,40}$", casing):
+        raise Failure("casing must be a block id, e.g. magma_block or iron_ore")
+    rng = max(100000, min(200_000_000, int(body.get("range", 3_000_000))))
+    limit = max(1, min(30, int(body.get("limit", 3))))
+    version = check_version(str(body.get("version", "1.21")))
+    args = [sys.executable, str(tier2 / "treasure_search.py"),
+            "--version", version, "--range", str(rng), "--limit", str(limit),
+            "--casing", casing, "--workers", str(max(1, min(8, int(body.get("workers", 4)))))]
+    rc, out, err = run(args, TIMEOUTS["villagesmiths"])
+    hits, summary = [], {}
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        (summary.update(obj) if obj.get("summary") else hits.append(obj))
+    if rc != 0 and not hits:
+        raise Failure(err.strip() or "casing search failed")
+    return {"hits": hits, "summary": summary,
+            # Never presented as settled. OreGen agrees with the real server on
+            # 88% of chests, so a hit is a lead worth confirming and a miss is
+            # not evidence that none exists.
+            "confirm": "OreGen agrees with a real server on 88% of chests -- "
+                       "confirm a hit with tier3-java/treasure_casing.py before "
+                       "trusting it, and read an empty result as 'not found in "
+                       "what was scanned', not as 'none exists'."}
+
+
 def api_exposedtreasure(body) -> dict:
     """Tier-2 search: find buried treasures whose chest is TOUCHING AIR (on land,
     not underwater). Tier 1 (cubiomes) can't see water, so the headless MC 1.21.1
@@ -955,6 +1014,7 @@ ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/ask": api_ask, "/api/gemini": api_gemini,
           "/api/villagesmiths": api_villagesmiths,
           "/api/exposedtreasure": api_exposedtreasure,
+          "/api/casingtreasure": api_casingtreasure,
           "/api/cancel": api_cancel,
           "/api/hunt": api_hunt,
           "/api/hunt/status": api_hunt_status,

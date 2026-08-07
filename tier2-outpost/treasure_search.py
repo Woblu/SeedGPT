@@ -40,6 +40,13 @@ def main():
     ap.add_argument("--range", type=int, default=80_000_000)
     ap.add_argument("--limit", type=int, default=4, help="stop after this many EXPOSED hits")
     ap.add_argument("--workers", type=int, default=6)
+    # The block the chest LANDED ON, which becomes its casing. Omit for the
+    # original "chest touching air" search. Rates measured over 6646 chests:
+    # sand 78%, gravel 18%, dirt 2.7%, stone 0.9%, and the interesting ones --
+    # copper_ore, magma_block -- at roughly 0.015% each, so a magma casing costs
+    # ~6600 chests of scanning per expected hit.
+    ap.add_argument("--casing", default="",
+                    help="e.g. magma_block, iron_ore, copper_ore, gravel")
     args = ap.parse_args()
 
     q = {"version": args.version, "conditions": [
@@ -75,8 +82,19 @@ def main():
                 try: cand_q.put(None)
                 except Exception: pass
 
+    # Two predicates over the same pipeline. "exposed" asks what is ABOVE the
+    # chest and needs only terrain+surface, so OutpostWorldgen answers it.
+    # "casing" asks what the chest LANDED ON -- the block the structure then
+    # writes into every air or water face around it -- and ore and magma are
+    # placed in decoration, so it needs OreGen, which runs applyBiomeDecoration.
+    casing = (args.casing or "").strip()
+    if casing and not casing.startswith("minecraft:"):
+        casing = "minecraft:" + casing
+    mode = ("OreGen", "oreserver", "fill") if casing \
+        else ("OutpostWorldgen", "treasure", "above")
+
     def worker():
-        p = subprocess.Popen([java_bin(), "-cp", cp, "OutpostWorldgen", "treasure"],
+        p = subprocess.Popen([java_bin(), "-Xmx2g", "-cp", cp, mode[0], mode[1]],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, text=True, cwd=HERE, bufsize=1)
         for line in p.stdout:               # READY
@@ -89,17 +107,25 @@ def main():
                     break
                 seed, x, z = item
                 p.stdin.write(f"{seed} {x} {z}\n"); p.stdin.flush()
-                cls = None
+                cls, y = None, None
+                key = "\t" + mode[2] + "="
                 for line in p.stdout:
-                    if "\tabove=" in line:
+                    if key in line:
                         kv = dict(kvp.split("=", 1) for kvp in line.strip().split("\t") if "=" in kvp)
-                        cls = kv.get("above")
+                        cls = kv.get(mode[2])
+                        y = kv.get("chestY")
                         break
+                    if "\terr=" in line:
+                        break               # this chest is unknown, not absent
                 with lock:
                     checked[0] += 1
-                    if cls == "air":
+                    hit = (cls == casing) if casing else (cls == "air")
+                    if hit:
                         found[0] += 1
-                        print(json.dumps({"seed": seed, "x": x, "z": z}), flush=True)
+                        rec = {"seed": seed, "x": x, "z": z}
+                        if casing:
+                            rec.update({"y": int(y) if y else None, "casing": cls})
+                        print(json.dumps(rec), flush=True)
                         if found[0] >= args.limit:
                             stop.set()
         finally:
@@ -117,7 +143,11 @@ def main():
     try: os.unlink(qpath)
     except Exception: pass
     print(json.dumps({"summary": True, "exposed": found[0], "checked": checked[0],
-                      "range": args.range}), flush=True)
+                      "range": args.range, "casing": args.casing or None,
+                      # OreGen's fill agrees with the server on 88% of chests, so
+                      # a casing hit is a LEAD to confirm, not a settled result --
+                      # and a miss is not evidence of absence.
+                      "confirm": bool(args.casing)}), flush=True)
 
 
 if __name__ == "__main__":
