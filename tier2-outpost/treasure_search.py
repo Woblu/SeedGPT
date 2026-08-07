@@ -15,6 +15,7 @@ import argparse, json, os, queue, subprocess, sys, tempfile, threading
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FIND = os.path.join(ROOT, "build", "find.exe")
+LOCATE = os.path.join(ROOT, "build", "locate.exe")
 CP_FILE = os.path.join(HERE, "cp.txt")
 
 
@@ -50,10 +51,19 @@ def main():
     # Where in the seed walk to start. Without it every run rescans the same
     # seeds, which for a ~0.015% casing means running it again buys nothing.
     ap.add_argument("--offset", type=int, default=0)
+    # How far out in each world to look. The old hardcoded 1500 gave 6 treasures
+    # per seed; 20000 gives 1431. Only meaningful with --per-seed.
+    ap.add_argument("--radius", type=int, default=10000)
+    # Check EVERY treasure in a seed rather than the single one find.exe
+    # reported. On by default: a casing hunt is bounded by chests examined, and
+    # one chest per world was leaving almost every world unexamined.
+    ap.add_argument("--per-seed", dest="per_seed", action="store_true", default=True)
+    ap.add_argument("--first-only", dest="per_seed", action="store_false")
     args = ap.parse_args()
 
     q = {"version": args.version, "conditions": [
-        {"id": "t", "structure": "buried_treasure", "within": 1500, "of": "origin"}]}
+        {"id": "t", "structure": "buried_treasure",
+         "within": min(args.radius, 2000), "of": "origin"}]}
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
                                      dir=os.path.join(ROOT, "build")) as f:
         json.dump(q, f); qpath = f.name
@@ -72,6 +82,29 @@ def main():
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               text=True, cwd=ROOT, bufsize=1, env=env)
 
+    def all_treasures(seed):
+        """Every treasure in the seed within --radius, not just the one find sent.
+
+        find.exe reports m.pos[0] -- the FIRST matched position -- so one HIT is
+        one chest, and the pipeline was checking a single treasure per world. For
+        a casing at ~0.015% that is the difference between searching a world and
+        glancing at it: seed 4 has 6 treasures within 1500 blocks and 1431 within
+        20000. Expanding each seed here also lets a worker reuse the seed's
+        generator state across chests instead of paying for it once per chest.
+        """
+        try:
+            r = subprocess.run([LOCATE, str(seed), args.version, "buried_treasure",
+                                str(args.radius)],
+                               capture_output=True, text=True, timeout=120)
+            out = []
+            for ln in r.stdout.splitlines():
+                p = ln.split()
+                if len(p) == 2:
+                    out.append((int(p[0]), int(p[1])))
+            return out
+        except Exception:
+            return []
+
     def producer():
         try:
             for line in finder.stdout:
@@ -79,7 +112,13 @@ def main():
                     break
                 if line.startswith("HIT "):
                     p = line.split()
-                    cand_q.put((p[1], int(p[2]), int(p[3])))
+                    if args.per_seed:
+                        for (tx, tz) in all_treasures(p[1]):
+                            if stop.is_set():
+                                break
+                            cand_q.put((p[1], tx, tz))
+                    else:
+                        cand_q.put((p[1], int(p[2]), int(p[3])))
         except Exception:
             pass
         finally:

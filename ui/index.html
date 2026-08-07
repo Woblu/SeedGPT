@@ -600,8 +600,19 @@
         <div><label for="tcLimit">want</label>
           <input type="number" id="tcLimit" value="1" min="1" max="10"></div>
       </div>
-      <div style="margin-top:9px"><label for="tcRange">seeds to scan</label>
-        <input type="number" id="tcRange" value="3000000" min="100000" max="200000000" step="500000"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px">
+        <div><label for="tcRange">seeds to scan</label>
+          <input type="number" id="tcRange" value="3000000" min="100000" max="200000000" step="500000"></div>
+        <div><label for="tcRadius">blocks per world</label>
+          <input type="number" id="tcRadius" value="10000" min="1000" max="60000" step="1000"></div>
+      </div>
+      <div class="hint" style="margin-top:6px">
+        <b>Blocks per world</b> decides how much of each world is actually examined.
+        The finder reports only the <i>first</i> treasure in a seed, so this expands it
+        to every treasure within that radius — 6 chests at 1&nbsp;500, <b>1&nbsp;431 at
+        20&nbsp;000</b>. For a rare casing that is the difference between searching a
+        world and glancing at it.
+      </div>
       <div class="btnrow">
         <button class="primary" id="tcBtn">Find casing</button>
         <button id="tcKeep">Keep looking</button>
@@ -2300,7 +2311,8 @@
     busy(`scanning for a buried treasure encased in ${pretty(casing)} — running real ` +
          `worldgen with decoration on every candidate. Rare ones take a while.`);
     try {
-      const d = await post('/api/casingtreasure', { casing, limit, range, workers: 4 });
+      const radius = Math.max(1000, Math.min(60000, +$('#tcRadius').value || 10000));
+      const d = await post('/api/casingtreasure', { casing, limit, range, radius, workers: 4 });
       out.innerHTML = '';
       out.append(statsCard('Buried treasure casing · real MC 1.21.1 worldgen', [
         ['chests checked', String(d.summary?.checked ?? 0)],
@@ -2359,7 +2371,8 @@
     busy(`hunting a ${pretty(casing)} casing across batch after batch of fresh seeds. `
        + `At ~0.015% for the rare ones this is the only way it can succeed.`);
     try {
-      await post('/api/hunt', { job: tcJob, casing, batch, want, secs: 600,
+      const tcRad = Math.max(1000, Math.min(60000, +$('#tcRadius').value || 10000));
+      await post('/api/hunt', { job: tcJob, casing, batch, want, secs: 600, radius: tcRad,
                                 query: { version: $('#version').value, conditions: [] } });
     } catch (e) { fail(e.message); tcStopUI(); return; }
     tcPoll = setInterval(async () => {

@@ -940,9 +940,14 @@ def api_casingtreasure(body) -> dict:
     rng = max(100000, min(200_000_000, int(body.get("range", 3_000_000))))
     limit = max(1, min(30, int(body.get("limit", 3))))
     version = check_version(str(body.get("version", "1.21")))
+    # How far out in EACH world to look. find.exe reports only the first
+    # treasure per seed, so without expanding a seed the search examines one
+    # chest per world -- which for a 0.015% casing is glancing, not searching.
+    radius = max(1000, min(60000, int(body.get("radius", 10000))))
     args = [sys.executable, str(tier2 / "treasure_search.py"),
             "--version", version, "--range", str(rng), "--limit", str(limit),
-            "--casing", casing, "--workers", str(max(1, min(8, int(body.get("workers", 4)))))]
+            "--casing", casing, "--radius", str(radius),
+            "--workers", str(max(1, min(8, int(body.get("workers", 4)))))]
     rc, out, err = run(args, TIMEOUTS["villagesmiths"])
     hits, summary = [], {}
     for line in out.splitlines():
@@ -1006,7 +1011,7 @@ def _hunt_state(job):
         return dict(HUNTS.get(job) or {})
 
 
-def _hunt_loop(job, path, batch, want, threads, secs, casing=""):
+def _hunt_loop(job, path, batch, want, threads, secs, casing="", radius=10000):
     """Scan batch after batch, advancing FIND_OFFSET, until told to stop.
 
     Every batch covers seeds the previous ones did not: find.exe walks an index
@@ -1034,7 +1039,7 @@ def _hunt_loop(job, path, batch, want, threads, secs, casing=""):
                 cmd = [sys.executable, str(ROOT / "tier2-outpost" / "treasure_search.py"),
                        "--casing", casing, "--range", str(batch),
                        "--offset", str(off), "--limit", str(max(1, want)),
-                       "--workers", "4"]
+                       "--radius", str(radius), "--workers", "4"]
             else:
                 cmd = [str(tool("find")), str(path), str(batch), str(threads)]
             proc = subprocess.Popen(
@@ -1112,13 +1117,14 @@ def api_hunt(body) -> dict:
     want = max(0, int(body.get("want", 1)))
     threads = int(body.get("threads", 16))
     secs = max(5, min(600, int(body.get("secs", 60))))
+    radius = max(1000, min(60000, int(body.get("radius", 10000))))
     with HUNTS_LOCK:
         if job in HUNTS and HUNTS[job].get("running"):
             raise Failure(f"hunt {job} is already running")
         HUNTS[job] = {"hits": [], "seen": set(), "scanned": 0, "offset": 0,
                       "batches": 0, "running": True, "stop": False, "error": None}
     threading.Thread(target=_hunt_loop,
-                     args=(job, path, batch, want, threads, secs, casing),
+                     args=(job, path, batch, want, threads, secs, casing, radius),
                      daemon=True).start()
     return {"job": job, "started": True, "batch": batch, "want": want,
             "casing": casing or None}
