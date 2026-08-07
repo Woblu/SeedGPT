@@ -665,14 +665,37 @@ temple (the church), library, mason, butcher and the smiths. If the request is
 about a building inside a village, say so in notes and emit a plain village
 condition.
 
-BLOCK-LEVEL SURROUNDINGS of a buried treasure -- "encased in magma", "sitting on
-iron ore", "surrounded by gravel", "buried in bedrock" -- are NOT expressible
-here either, and the reason is worth giving because it is not slowness. This
-engine is cubiomes: exact terrain, but NO surface rules and NO decoration. The
-sand column, every ore and every magma block are simply ABSENT from it. There is
-a separate real-worldgen tool in the UI ("Treasure casing") that does answer it.
-So for these: emit a plain buried_treasure condition, and in notes point at that
-tool by name.
+ROUTING TO OTHER ENGINES. This query schema drives ONE engine (cubiomes). Some
+requests need a different one, and for those you must set a top-level "tool"
+field. The UI runs that tool instead of the plain search, so a routed request
+actually EXECUTES rather than being handed back as advice. The conditions you
+emit are still used (they populate the builder), but the tool decides the run.
+
+  "tool": {"name": "casing", "casing": "<block>", "radius": <blocks>}
+      A buried treasure ENCASED in a block: "surrounded by magma", "generates on
+      iron ore", "walled in gravel". radius is how much of EACH world to examine
+      (default 10000; 20000 examines ~1431 treasures per world against 6 at
+      1500). Runs real Minecraft worldgen WITH decoration, then confirms every
+      candidate on an actual server before reporting it.
+  "tool": {"name": "village_building", "building": "<b>", "min": N}
+      N of a village building: smith, toolsmith, weaponsmith, armorer, library,
+      cartographer, mason, fletcher, butcher, shepherd, fisher, tannery, temple,
+      farm, animal_pen, stable.
+  "tool": {"name": "exposed_treasure"}
+      A treasure chest sitting in open air rather than buried.
+  "tool": {"name": "fortress_overlap", "seeds": N}
+      Nether fortresses that GROW THROUGH each other, ranked by intersecting
+      piece pairs -- not by how close their starts are.
+  "tool": {"name": "hunt"}
+      The user wants it to keep going: "don't stop until you find one", "search
+      forever", "keep looking". Use with plain conditions; it scans fresh seeds
+      batch after batch instead of restarting on the same ones.
+
+Omit "tool" entirely for anything the ordinary search handles -- most requests.
+
+Why casings need their own engine, if the user asks: this one is cubiomes, which
+has exact terrain but NO surface rules and NO decoration, so the sand column,
+every ore and every magma block are ABSENT from it rather than slow to find.
 
 How a casing works, if the user asks: the game scans down from the ocean floor
 until the block BELOW is sandstone/stone/andesite/granite/diorite, and writes the
@@ -1069,6 +1092,32 @@ def _hunt_loop(job, path, batch, want, threads, secs, casing="", radius=10000):
                     continue
                 if not o.get("summary"):
                     found.append(o)
+            # EVERY casing candidate is confirmed on a real server before it is
+            # reported. cubiomes can place a treasure the game does not -- a
+            # magma "hit" at (-2103,20,6969) had no chest in the column at all --
+            # so an unconfirmed hit is a claim the tool cannot back. Candidates
+            # are rare, so this costs a server boot per hit rather than per chest.
+            confirmed = []
+            for h in found:
+                try:
+                    rc, cout, _ = run(
+                        [sys.executable, str(ROOT / "tier3-java" / "confirm_casing.py"),
+                         str(h.get("seed")), str(h.get("x")), str(h.get("z")),
+                         "--expect", casing], 1200)
+                    if rc == 0:
+                        h["confirmed"] = True
+                        m = re.search(r"^casing:\s*(\S+)\s*\((\d+) of 5", cout, re.M)
+                        if m:
+                            h["faces"] = int(m.group(2))
+                        confirmed.append(h)
+                except Exception:
+                    pass                    # unconfirmed is dropped, never reported
+            with HUNTS_LOCK:
+                st = HUNTS.get(job)
+                if st:
+                    st["candidates"] = st.get("candidates", 0) + len(found)
+                    st["rejected"] = st.get("rejected", 0) + (len(found) - len(confirmed))
+            found = confirmed
         else:
             found = parse_seeds(out) or []
         with HUNTS_LOCK:
@@ -1122,7 +1171,8 @@ def api_hunt(body) -> dict:
         if job in HUNTS and HUNTS[job].get("running"):
             raise Failure(f"hunt {job} is already running")
         HUNTS[job] = {"hits": [], "seen": set(), "scanned": 0, "offset": 0,
-                      "batches": 0, "running": True, "stop": False, "error": None}
+                      "batches": 0, "running": True, "stop": False, "error": None,
+                      "candidates": 0, "rejected": 0}
     threading.Thread(target=_hunt_loop,
                      args=(job, path, batch, want, threads, secs, casing, radius),
                      daemon=True).start()
@@ -1138,6 +1188,11 @@ def api_hunt_status(body) -> dict:
     return {"job": job, "known": True, "running": st.get("running", False),
             "hits": st.get("hits", []), "scanned": st.get("scanned", 0),
             "batches": st.get("batches", 0), "offset": st.get("offset", 0),
+            # A casing hunt reports its funnel, because "0 found" after 40
+            # candidates all failing confirmation means something very different
+            # from "0 found" after no candidates at all.
+            "candidates": st.get("candidates", 0),
+            "rejected": st.get("rejected", 0),
             "error": st.get("error")}
 
 

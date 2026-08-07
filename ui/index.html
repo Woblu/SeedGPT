@@ -2234,6 +2234,20 @@
                            runCtl && runCtl.signal);
       if (token !== runToken) return;
       aiNote(d.notes ? d.notes : '');
+      // A prompt that needs a different engine now RUNS it, rather than being
+      // told which panel to click. The conditions still populate the builder so
+      // what ran is visible and tweakable.
+      const t = d.query && d.query.tool;
+      if (t && t.name) {
+        delete d.query.tool;
+        try { loadQueryIntoBuilder(d.query); } catch (e) {}
+        setBusyUI(false); endRun();
+        await routeTool(t, token);
+        return;
+      }
+      // Defensive: a malformed tool field must not reach the C engine, which
+      // would reject the query outright over a key it never asked for.
+      if (d.query) delete d.query.tool;
       await runSearch(d.query, token);
     } catch (e) {
       if (token !== runToken) return;
@@ -2251,6 +2265,46 @@
   nlBox.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitPrompt(); }
   });
+
+  // ---- prompt -> the engine that can actually answer it ------------------
+  // The prompt box drives one engine by default (cubiomes). Some questions need
+  // another, and being told to go click a panel is not an answer -- so a routed
+  // prompt fills in that panel's controls and presses its button.
+  async function routeTool(t, token) {
+    const set = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
+    switch (t.name) {
+      case 'casing':
+        set('#tcCasing', String(t.casing || 'magma_block').replace(/^minecraft:/, ''));
+        set('#tcRadius', t.radius || 10000);
+        set('#tcLimit', t.want || 1);
+        // "Keep looking", not the single batch: a casing worth asking for by
+        // name is rare enough that one batch is the wrong tool.
+        $('#tcKeep').click();
+        return;
+      case 'village_building':
+        set('#vsBuilding', t.building || 'smith');
+        set('#vsMin', t.min || 5);
+        set('#vsSeeds', t.seeds || 200);
+        $('#vsBtn').click();
+        return;
+      case 'exposed_treasure':
+        set('#etLimit', t.want || 3);
+        $('#etBtn').click();
+        return;
+      case 'fortress_overlap':
+        set('#foSeeds', t.seeds || 200000);
+        $('#foBtn').click();
+        return;
+      case 'hunt':
+        set('#huWant', t.want || 1);
+        $('#huBtn').click();
+        return;
+      default:
+        aiNote(`I routed this to "${t.name}", which is not a tool I have. `
+             + `Running the ordinary search instead.`, true);
+        await runSearch({ version: $('#version').value, conditions: [] }, token);
+    }
+  }
 
   // ---- village smith search (real worldgen, tier-2 backend) --------------
   function prettyBuildings(s) {
