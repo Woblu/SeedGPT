@@ -302,9 +302,17 @@ public class OreGen {
                     int y = OutpostWorldgen.chestPlacementY(c, x, z);
                     sb.append("O\t").append(s).append('\t').append(x)
                       .append('\t').append(z).append("\tchestY=").append(y);
-                    // The block the chest lands on IS the fill block, so it is
-                    // reported directly rather than inferred from neighbours.
-                    sb.append("\tfill=").append(name(c.getBlockState(new BlockPos(x, y, z))));
+                    // The fill is the block the chest lands on -- EXCEPT where
+                    // that is air or water, when the game takes the block below
+                    // instead. Reporting the raw block skipped the second half
+                    // and emitted "fill=air", which no chest can be walled in:
+                    // it made the world look wrong when the readout was.
+                    BlockState atPos = c.getBlockState(new BlockPos(x, y, z));
+                    BlockState under = c.getBlockState(new BlockPos(x, y - 1, z));
+                    BlockState fillState =
+                        (atPos.isAir() || !atPos.getFluidState().isEmpty())
+                            ? under : atPos;
+                    sb.append("\tfill=").append(name(fillState));
                     int[][] f = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
                     for (int[] d : f)
                         sb.append('\t').append(name(

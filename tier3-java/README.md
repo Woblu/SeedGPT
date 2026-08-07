@@ -286,12 +286,24 @@ which is what found `getLevelData`, `getFluidTicks`, `isStateAtPosition` and
 | | agreement |
 |---|---|
 | `chestY` | **47/49 (96%)** |
-| `fill` (the casing block) | **38/49 (78%)** |
+| `fill` (the casing block) | **42/48 (88%)** |
 | speed | 0.125 s vs 6.5 s — **52×** |
 
-The fill misses have a shape: headless says `sand` where the server says
-`sandstone`, `dirt` where it says `sand` — the sediment column running one block
-deeper, so the chest lands on sediment instead of on water over rock. None of the
+Fill first measured 78%, and two of those misses were mine rather than OreGen's.
+The yardstick counted the DOWN face, which is the floor that stopped the descent
+— solid by definition, never overwritten, so not evidence of the fill at all;
+excluding it took 78% to 88%. Separately the readout reported the raw landing
+block, skipping vanilla's "unless it is air or water, take the block below", and
+emitted `fill=air`, which no chest can be walled in. That one cost no accuracy
+but made the world look wrong when the readout was.
+
+The remaining 12% all have one shape — `dirt` vs `sand`, `sand` vs `sandstone`,
+`gravel` vs `andesite`: sediment where the server has the rock beneath it. That
+is the single-chunk decoration. Sand and gravel *disks* span chunk borders, and
+writes landing outside the chunk are dropped, so the sediment column differs by
+about a block. It is also why `chestY` holds at 96% while `fill` does not: the
+landing scan only asks "is the block below me rock?", which stays true either
+way, while the *identity* of the block it stops on shifts. None of the
 disagreements involved ore, but with almost no ore in 49 chests that is not
 evidence either way.
 

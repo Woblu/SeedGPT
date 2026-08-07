@@ -75,8 +75,14 @@ def main():
                         continue                    # ambiguous column, skipped
                     sy = ys[0]
                     full = face_probe(srv, x, sy, z, CANDIDATES)
+                    # The DOWN face is the floor the chest landed on. It is solid
+                    # by definition -- that is what stopped the descent -- so it
+                    # is never overwritten and is not evidence of the fill.
+                    # Counting it dragged the mode toward the floor block and
+                    # produced "disagreements" that were the yardstick's fault.
+                    sides = {o: b for o, b in full.items() if o != (0, -1, 0)}
                     modal, n = Counter("?" if b is None else b
-                                       for b in full.values()).most_common(1)[0]
+                                       for b in sides.values()).most_common(1)[0]
                     gy, gfill = ask(p, seed, x, z)
                     if gy is None:
                         err += 1
