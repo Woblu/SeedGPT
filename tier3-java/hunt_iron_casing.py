@@ -62,8 +62,12 @@ class OrePath:
     """
 
     def __init__(self):
+        self.restarts = 0
+        self._spawn()
+
+    def _spawn(self):
         self.p = subprocess.Popen(
-            [java_bin(), "-cp", classpath(), "OreGen", "oreserver"],
+            [java_bin(), "-Xmx2g", "-cp", classpath(), "OreGen", "oreserver"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, cwd=FAST, bufsize=1)
         for line in self.p.stdout:
@@ -72,8 +76,20 @@ class OrePath:
         raise RuntimeError("OreGen never reported READY")
 
     def probe(self, seed, x, z):
-        self.p.stdin.write(f"{seed} {x} {z}\n")
-        self.p.stdin.flush()
+        # A dead worker used to take the whole run with it via a broken pipe,
+        # losing every chest scanned so far. It is restarted instead, and the
+        # one chest that died is reported as unknown rather than as a result.
+        try:
+            self.p.stdin.write(f"{seed} {x} {z}\n")
+            self.p.stdin.flush()
+        except (OSError, ValueError):
+            self.restarts += 1
+            try:
+                self.p.terminate()
+            except Exception:
+                pass
+            self._spawn()
+            return None, None
         for line in self.p.stdout:
             if line.startswith("O\t"):
                 t = line.rstrip("\n").split("\t")

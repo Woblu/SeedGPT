@@ -242,6 +242,14 @@ public class OreGen {
 
     /** Terrain + surface + decoration (ores included), for one chunk. */
     static ChunkAccess genDecoratedChunk(long seed, int chunkX, int chunkZ) {
+        // Cleared per call, for two reasons and the second is the bad one.
+        // It grows by a ProtoChunk per neighbour per chest, which ran a census
+        // out of heap at 2918 chests. And it was keyed on chunk coordinates
+        // ALONE, so the same entry was handed to a different seed later: any
+        // feature writing into a neighbour chunk would leave blocks behind that
+        // the next seed's decoration would then read as its own terrain. A slow
+        // leak is obvious when it kills the run; stale world state is not.
+        EMPTY.clear();
         ChunkAccess chunk = OutpostWorldgen.genFullChunk(seed, chunkX, chunkZ);
         NoiseBasedChunkGenerator gen = OutpostWorldgen.cachedGen;
         RandomState rs = RandomState.create(
