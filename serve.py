@@ -828,12 +828,137 @@ def api_exposedtreasure(body) -> dict:
     return {"hits": hits, "summary": summary}
 
 
+# Open-ended hunts, keyed by job id. A batch search answers "is it in the first
+# N seeds", which is a different question from "find me one", and for anything
+# rare the answer to the first is no. These keep going.
+HUNTS = {}
+HUNTS_LOCK = threading.Lock()
+
+
+def _hunt_state(job):
+    with HUNTS_LOCK:
+        return dict(HUNTS.get(job) or {})
+
+
+def _hunt_loop(job, path, batch, want, threads, secs):
+    """Scan batch after batch, advancing FIND_OFFSET, until told to stop.
+
+    Every batch covers seeds the previous ones did not: find.exe walks an index
+    through mix64, and FIND_OFFSET moves where that walk starts. Without it each
+    pass re-scanned indices 0..range, so "search longer" bought the same seeds
+    over again -- which is the actual reason rare things were never found rather
+    than any shortage of patience.
+    """
+    off = 0
+    while True:
+        with HUNTS_LOCK:
+            st = HUNTS.get(job)
+            if not st or st.get("stop"):
+                break
+            if want and len(st["hits"]) >= want:
+                break
+        env = dict(os.environ)
+        env["FIND_OFFSET"] = str(off)
+        env["FIND_SECONDS"] = str(secs)
+        try:
+            proc = subprocess.Popen(
+                [str(tool("find")), str(path), str(batch), str(threads)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                cwd=str(ROOT), env=env)
+            job_register(job, proc)
+            out, _ = proc.communicate(timeout=secs + 120)
+        except Exception as e:
+            with HUNTS_LOCK:
+                if job in HUNTS:
+                    HUNTS[job]["error"] = str(e)
+                    HUNTS[job]["running"] = False
+            return
+        finally:
+            job_done(job)
+
+        found = parse_seeds(out) or []
+        with HUNTS_LOCK:
+            st = HUNTS.get(job)
+            if not st:
+                return
+            if st.get("stop"):
+                st["running"] = False
+                return
+            seen = st["seen"]
+            for h in found:
+                s = str(h.get("seed"))
+                if s not in seen:
+                    seen.add(s)
+                    st["hits"].append(h)
+            st["batches"] += 1
+            st["offset"] = off + batch
+            # Reported so a quiet hunt is legible: "nothing yet" and "not
+            # actually scanning" look identical from outside otherwise.
+            st["scanned"] += batch
+        off += batch
+
+    with HUNTS_LOCK:
+        if job in HUNTS:
+            HUNTS[job]["running"] = False
+
+
+def api_hunt(body) -> dict:
+    """Start an open-ended hunt. Returns immediately; poll /api/hunt/status.
+
+    The batch search behind /api/search is bounded twice over -- by `range` and
+    by an HTTP timeout -- so it can only ever report "not in the first N". For
+    anything at the rates actually measured here (an ore-cased buried treasure
+    is ~0.015%) that bound is the whole reason nothing turns up.
+    """
+    path = write_query(body)
+    job = str(body.get("job", "")).strip()
+    if not job:
+        raise Failure("hunt needs a 'job' id so it can be polled and stopped")
+    batch = max(10_000, min(50_000_000, int(body.get("batch", 2_000_000))))
+    want = max(0, int(body.get("want", 1)))
+    threads = int(body.get("threads", 16))
+    secs = max(5, min(600, int(body.get("secs", 60))))
+    with HUNTS_LOCK:
+        if job in HUNTS and HUNTS[job].get("running"):
+            raise Failure(f"hunt {job} is already running")
+        HUNTS[job] = {"hits": [], "seen": set(), "scanned": 0, "offset": 0,
+                      "batches": 0, "running": True, "stop": False, "error": None}
+    threading.Thread(target=_hunt_loop,
+                     args=(job, path, batch, want, threads, secs),
+                     daemon=True).start()
+    return {"job": job, "started": True, "batch": batch, "want": want}
+
+
+def api_hunt_status(body) -> dict:
+    job = str(body.get("job", "")).strip()
+    st = _hunt_state(job)
+    if not st:
+        return {"job": job, "known": False}
+    return {"job": job, "known": True, "running": st.get("running", False),
+            "hits": st.get("hits", []), "scanned": st.get("scanned", 0),
+            "batches": st.get("batches", 0), "offset": st.get("offset", 0),
+            "error": st.get("error")}
+
+
+def api_hunt_stop(body) -> dict:
+    job = str(body.get("job", "")).strip()
+    with HUNTS_LOCK:
+        st = HUNTS.get(job)
+        if st:
+            st["stop"] = True
+    api_cancel({"job": job})       # kill the batch currently in flight
+    return {"job": job, "stopping": True}
+
+
 ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/search": api_search, "/api/describe": api_describe,
           "/api/ask": api_ask, "/api/gemini": api_gemini,
           "/api/villagesmiths": api_villagesmiths,
           "/api/exposedtreasure": api_exposedtreasure,
-          "/api/cancel": api_cancel}
+          "/api/cancel": api_cancel,
+          "/api/hunt": api_hunt,
+          "/api/hunt/status": api_hunt_status,
+          "/api/hunt/stop": api_hunt_stop}
 
 
 class Handler(BaseHTTPRequestHandler):

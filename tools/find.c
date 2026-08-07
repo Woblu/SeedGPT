@@ -70,6 +70,7 @@ typedef struct {
 static volatile LONG g_found = 0;
 static volatile LONG64 g_scanned = 0;   // total seeds scanned across all threads
 static int g_want = MAX_HITS;
+static uint64_t g_offset = 0;   // FIND_OFFSET: index base, so runs can resume
 // Stream mode (env FIND_STREAM): emit "@TICK <seed>" heartbeats so the web UI
 // can show the seeds being scanned scroll past live. Time-throttled per thread
 // so the rate is readable regardless of how fast the query scans.
@@ -439,6 +440,17 @@ int main(int argc, char **argv)
         printf("time budget: %.0f seconds -- the scan stops when it expires, "
                "whatever it has found by then\n", atof(secs));
     }
+    // FIND_OFFSET: where in the index space to start. Without it every run
+    // walks indices 0..range and therefore rescans the SAME seeds, so "search
+    // longer" meant "search the same ground again, slower". A caller that wants
+    // to keep looking advances the offset by the range it just covered, and each
+    // batch is fresh seeds. The index goes through mix64 either way, so a later
+    // batch is no more a corner of the space than the first one.
+    const char *off = getenv("FIND_OFFSET");
+    g_offset = off ? strtoull(off, NULL, 10) : 0;
+    if (g_offset)
+        printf("offset     : starting at index %llu -- these are seeds a run "
+               "from 0 would not reach\n", (unsigned long long)g_offset);
     g_stream = getenv("FIND_STREAM") != NULL;
     g_hitstream = getenv("FIND_HITSTREAM") != NULL;
     if (g_hitstream) g_want = 0x7fffffff;   // don't stop early; stream them all
@@ -530,6 +542,11 @@ int main(int argc, char **argv)
         jobs[i].cand = cand;
         jobs[i].lo = (uint64_t)i * chunk;
         jobs[i].hi = (i == nthreads-1) ? range : (uint64_t)(i+1) * chunk;
+        // The offset shifts the INDEX walk only. When `cand` is set, [lo,hi)
+        // indexes the solver's candidate array rather than counting seeds, so
+        // shifting it would read off the end of that array -- a resumable search
+        // and a solved one are different things and must not be mixed.
+        if (!cand) { jobs[i].lo += g_offset; jobs[i].hi += g_offset; }
         th[i] = CreateThread(NULL, 0, worker, &jobs[i], 0, NULL);
     }
     WaitForMultipleObjects(nthreads, th, TRUE, INFINITE);
