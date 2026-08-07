@@ -118,11 +118,29 @@ def api_cancel(body) -> dict:
     # indistinguishable from a normal failure, so the stream handler needs an
     # explicit flag to know the empty result was deliberate.
     proc.sc_cancelled = True
-    try:
-        proc.terminate()
-    except OSError:
-        pass
+    _kill_tree(proc)
     return {"cancelled": True}
+
+
+def _kill_tree(proc):
+    """Kill the process AND its children.
+
+    A casing hunt is python -> treasure_search.py -> find.exe. Terminating only
+    the process we registered leaves find.exe running: it then holds an open
+    handle on build/find.exe, and the next build fails with "permission denied"
+    -- which is how a stopped hunt broke the test suite rather than the hunt.
+    """
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=30)
+        else:
+            proc.terminate()
+    except Exception:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
 
 
 def run(args, timeout, stdin=None):

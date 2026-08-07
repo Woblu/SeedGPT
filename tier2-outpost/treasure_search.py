@@ -182,8 +182,18 @@ def main():
     for w in ws: w.start()
     for w in ws: w.join()
     stop.set()
-    try: finder.terminate()
-    except Exception: pass
+    # Kill the finder's whole tree, not just the handle we hold. An orphaned
+    # find.exe keeps an open handle on build/find.exe and the next build fails
+    # with "permission denied" -- a stopped hunt should not break the build.
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(finder.pid)],
+                           capture_output=True, timeout=30)
+        else:
+            finder.terminate()
+    except Exception:
+        try: finder.terminate()
+        except Exception: pass
     try: os.unlink(qpath)
     except Exception: pass
     print(json.dumps({"summary": True, "exposed": found[0], "checked": checked[0],

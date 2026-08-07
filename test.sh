@@ -24,6 +24,23 @@ section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 # ---------------------------------------------------------------- build
 section "build"
+# A find.exe left over from an earlier run -- or from a hunt that was stopped --
+# keeps an open handle on build/find.exe, and the link then fails with
+# "permission denied". That is a stale process reported as a broken build, which
+# sent two investigations at the compiler. Clear it before building.
+# Both binaries a hunt spawns, not just the finder: the per-seed expansion runs
+# locate.exe, and an orphan of EITHER blocks the link. Narrowing this to find.exe
+# only moved the same failure one build down the chain.
+if command -v taskkill >/dev/null 2>&1; then
+  for exe in find.exe locate.exe fortoverlap.exe describe.exe; do
+    if tasklist //FI "IMAGENAME eq $exe" 2>/dev/null | grep -q "$exe"; then
+      taskkill //F //IM "$exe" >/dev/null 2>&1 || true
+      printf "  [33mnote[0m killed stale %s holding the binary
+" "$exe"
+    fi
+  done
+  sleep 1
+fi
 if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
 && ./build.sh tools/vocab.c  >/tmp/sc_test/b2 2>&1 \
 && ./build.sh tools/xval.c   >/tmp/sc_test/b3 2>&1 \
@@ -1189,6 +1206,93 @@ done < <(awk '/^SEED/{print $2}' /tmp/sc_test/findat.out)
 ./build/findat.exe 1.21 village 30 30 2>/dev/null | grep -q "^IMPOSSIBLE" \
   && ok "an unreachable chunk is called impossible, not searched for" \
   || bad "did not recognise an unreachable chunk offset" ""
+
+
+# ------------------------------------------- regressions from the casing work
+# Each of these is a bug that actually shipped and was found by hand. A suite
+# that only covers what was designed correctly does not stop the same class
+# recurring, and every one of these was invisible until something downstream
+# looked wrong.
+section "regressions (casing / routing / resume)"
+
+# FIND_OFFSET: without it every run walked indices 0..range and rescanned the
+# SAME seeds, so "search longer" bought nothing. Two offsets must not overlap.
+cat > /tmp/sc_test/off.json <<'JSON'
+{"version":"1.21","conditions":[{"id":"b","biome":"jungle","within":250,"of":"origin"}]}
+JSON
+a=$(FIND_SECONDS=6 ./build/find.exe /tmp/sc_test/off.json 3000000 8 2>/dev/null     | grep "^SEED " | awk '{print $2}' | sort -u)
+b=$(FIND_OFFSET=50000000 FIND_SECONDS=6 ./build/find.exe /tmp/sc_test/off.json 3000000 8 2>/dev/null     | grep "^SEED " | awk '{print $2}' | sort -u)
+nov=$(comm -12 <(printf '%s
+' "$a") <(printf '%s
+' "$b") | grep -c . || true)
+if [ -n "$a" ] && [ -n "$b" ] && [ "$nov" -eq 0 ]; then
+  ok "FIND_OFFSET reaches seeds a run from 0 never sees (no overlap)"
+else
+  bad "FIND_OFFSET did not produce disjoint seeds" "overlap=$nov"
+fi
+
+# The natural-language layer rebuilds the query from a whitelist. "tool" was not
+# on it, so a routed request came back as a plain search WITH a note claiming it
+# had been routed -- prose surviving while the thing that routes was discarded.
+python - <<'PY' > /tmp/sc_test/tool.txt 2>&1
+import json, sys, urllib.request
+sys.path.insert(0, '.')
+import serve
+def canned(payload):
+    class R:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def read(self):
+            return json.dumps({"candidates":[{"content":{"parts":[
+                {"text": json.dumps(payload)}]}}]}).encode()
+    return lambda req, timeout=None: R()
+base = [{"id":"t","structure":"buried_treasure","within":1500,"of":"origin"}]
+urllib.request.urlopen = canned({"conditions":base,"notes":"x",
+    "tool":{"name":"casing","casing":"coal_ore","radius":20000}})
+t = serve.api_gemini({"text":"x","key":"k","version":"1.21"})["query"].get("tool")
+print("ROUTED", t == {"name":"casing","casing":"coal_ore","radius":20000})
+urllib.request.urlopen = canned({"conditions":base,"notes":"x",
+    "tool":{"name":"not_a_real_tool"}})
+print("REJECTED", serve.api_gemini({"text":"x","key":"k","version":"1.21"})["query"].get("tool") is None)
+urllib.request.urlopen = canned({"conditions":base,"notes":"x",
+    "tool":{"name":"casing","casing":"magma_block","radius":999999999}})
+print("CLAMPED", serve.api_gemini({"text":"x","key":"k","version":"1.21"})["query"]["tool"]["radius"] == 60000)
+PY
+grep -q "ROUTED True" /tmp/sc_test/tool.txt   && ok "a routed prompt survives the query whitelist instead of being discarded"   || bad "tool routing dropped by api_gemini" "$(head -3 /tmp/sc_test/tool.txt)"
+grep -q "REJECTED True" /tmp/sc_test/tool.txt   && ok "an invented tool name is rejected, not sent to a panel that does not exist"   || bad "invalid tool name accepted" ""
+grep -q "CLAMPED True" /tmp/sc_test/tool.txt   && ok "tool parameters are clamped to a sane range"   || bad "tool radius not clamped" ""
+
+# The casing readout reported the raw landing block, skipping vanilla's "unless
+# it is air or water, the fill is the block BELOW". It emitted fill=air, which no
+# chest can be walled in.
+#
+# The first version of this check used `java` from PATH -- JDK 17 here, while
+# OreGen is built with 21 -- so it never ran, and then reported the empty output
+# as "OreGen said air". That merged COULD NOT RUN with RAN AND WAS WRONG, which
+# is the precise bug this suite exists to catch, written into the test for it.
+# The three outcomes are now kept apart.
+JAVA21=""
+for cand in "${JAVA21_HOME:-}" "${JAVA_HOME:-}" "/c/Program Files/Java/jdk-21"; do
+  [ -n "$cand" ] && [ -x "$cand/bin/java.exe" ] && JAVA21="$cand/bin/java.exe" && break
+done
+if [ ! -f tier2-outpost/out/OreGen.class ] || [ ! -f tier2-outpost/cp.txt ]; then
+  ok "OreGen not built -- casing fill rule NOT CHECKED (skipped, not passed)"
+elif [ -z "$JAVA21" ]; then
+  ok "no JDK 21 found -- casing fill rule NOT CHECKED (skipped, not passed)"
+else
+  ocp="out;$(tr -d '\r' < tier2-outpost/cp.txt | paste -sd';' -)"
+  fills=$(printf '4 425 1977\n4 1737 153\n4 521 -1799\n4 1065 905\nquit\n' \
+    | (cd tier2-outpost && timeout 300 "$JAVA21" -cp "$ocp" OreGen oreserver 2>/dev/null) \
+    | grep -o "fill=[a-z:_]*" || true)
+  if [ -z "$fills" ]; then
+    bad "OreGen produced no fill at all -- the worker did not run" \
+        "UNKNOWN, which is not a passing or a failing casing"
+  elif printf '%s' "$fills" | grep -q "fill=minecraft:air"; then
+    bad "OreGen reported fill=air, which no chest can be encased in" "$fills"
+  else
+    ok "a casing is never reported as air (the air/water -> block-below rule)"
+  fi
+fi
 
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"
