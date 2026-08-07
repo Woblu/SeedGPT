@@ -36,6 +36,17 @@ from treasure_probe import locate                      # noqa: E402
 from hunt_iron_casing import OrePath                   # noqa: E402
 
 
+# Measured over 6646 chests: sand 5204, gravel 1186, dirt 179, stone 59,
+# sandstone 13. Everything else was a one-off -- mud, grass_block, copper_ore,
+# magma_block -- and the one-offs are the whole point of running this.
+COMMON_FILL = {
+    "minecraft:sand", "minecraft:gravel", "minecraft:dirt", "minecraft:stone",
+    "minecraft:sandstone", "minecraft:andesite", "minecraft:granite",
+    "minecraft:diorite", "minecraft:clay", "minecraft:coarse_dirt",
+    "minecraft:red_sand", "minecraft:deepslate", "minecraft:tuff",
+}
+
+
 def main():
     nseeds, start, radius, deep_at = 150, 20000, 4000, 30
     for i, a in enumerate(sys.argv):
@@ -48,7 +59,7 @@ def main():
     t0 = time.time()
     w = OrePath()
     fills, depths = Counter(), Counter()
-    n, deepest = 0, []
+    n, deepest, odd = 0, [], []
     try:
         for seed in range(start, start + nseeds):
             for (x, z) in locate(seed, "1.21", radius):
@@ -61,6 +72,14 @@ def main():
                 depths[y // 10 * 10] += 1
                 if y <= deep_at:
                     deepest.append((y, seed, x, z, fill))
+                # The first run tallied one copper_ore casing in 6646 chests and
+                # then could not say WHERE, having kept only counts. A rate of
+                # 0.015% means each hit is the entire result of hours of
+                # scanning; losing its coordinates wastes the whole run.
+                if fill not in COMMON_FILL:
+                    odd.append((y, seed, x, z, fill))
+                    print(f"  ODD  y={y} seed {seed} ({x},{z}) on "
+                          f"{fill.split(':')[-1]}", flush=True)
             if (seed - start + 1) % 25 == 0:
                 el = time.time() - t0
                 print(f"  {n} chests, {el/60:.1f} min, {len(deepest)} below y{deep_at}",
@@ -77,6 +96,17 @@ def main():
     print("\nwhat the chest lands on (headless view, 88% agreement with server):")
     for b, c in fills.most_common(25):
         print(f"  {c:6d}  {b}")
+
+    if odd:
+        print(f"\nUNUSUAL CASINGS ({len(odd)} in {n} chests = "
+              f"{100*len(odd)/max(n,1):.3f}%) -- confirm on the server:")
+        for (y, seed, x, z, fill) in sorted(odd):
+            print(f"  y={y:4d}  seed {seed:>9}  ({x},{z})  on {fill}")
+            print(f"        python treasure_casing.py {seed}   # then /tp {x} {y} {z}")
+    else:
+        print(f"\nno unusual casing in {n} chests. At the measured ~0.015% "
+              f"that is unremarkable below ~7000 chests, and is NOT evidence "
+              f"that none exists.")
 
     deepest.sort()
     if deepest:
