@@ -599,10 +599,13 @@ Condition types (use EXACTLY these keys):
     drop >= D blocks in the disc = STEEP terrain. Without "exact" it uses the
     SMOOTHED estimate (cheap, but blind to sharp cliffs). With "exact":true it uses
     Minecraft's REAL block-level terrain (accurate but SLOW, 1.18+ only).
-    NOTE: there is no "glitched / tall-cobblestone pillager outpost" in Java --
-    Java never builds a support pillar down to the ground (that is Bedrock). If
-    asked for one, say so in notes and emit a plain outpost condition, optionally
-    with height/relief for a dramatically-placed one.
+    NOTE: a "glitched / tall-cobblestone pillager outpost" does not exist in
+    JAVA -- Java drops a small dirt platform under a structure that lands in air,
+    while BEDROCK fills a foundation to the ground out of the structure's own
+    material. Do NOT substitute a Java mountain outpost for it: a Java seed does
+    not carry over, because Bedrock places structures differently, so the
+    substitute answers a question nobody asked. Route it instead:
+    "tool": {"name": "bedrock_outpost", "min_drop": N}
 - Ore density:    {"id","ore":<material>,"count":N,"within","of"}  materials:
     diamond iron gold emerald redstone lapis copper coal quartz ancient_debris nether_gold
     "vein":N  -> at least N of that ore in ONE connected blob ("a big diamond
@@ -707,6 +710,13 @@ emit are still used (they populate the builder), but the tool decides the run.
   "tool": {"name": "fortress_overlap", "seeds": N}
       Nether fortresses that GROW THROUGH each other, ranked by intersecting
       piece pairs -- not by how close their starts are.
+  "tool": {"name": "bedrock_outpost", "seeds": "<comma-separated>", "min_drop": N}
+      A BEDROCK outpost on a tall cobblestone foundation -- the "glitched" /
+      "floating" outpost from screenshots. Runs a real Bedrock Dedicated Server
+      and measures the column block by block. min_drop is the terrain drop that
+      makes a tall foundation possible at all (20 is a good default; lower finds
+      more and shorter). Use this for ANY Bedrock Edition request, since the
+      ordinary search is a Java engine and its seeds do not transfer.
   "tool": {"name": "hunt"}
       The user wants it to keep going: "don't stop until you find one", "search
       forever", "keep looking". Use with plain conditions; it scans fresh seeds
@@ -834,7 +844,7 @@ def api_gemini(body) -> dict:
     # actually routes did not. Validated rather than passed through: an unknown
     # name would send the UI to a panel that does not exist.
     TOOLS = {"casing", "village_building", "exposed_treasure",
-             "fortress_overlap", "hunt"}
+             "fortress_overlap", "hunt", "bedrock_outpost"}
     t = obj.get("tool")
     if isinstance(t, dict) and t.get("name") in TOOLS:
         keep = {"name": t["name"]}
@@ -843,8 +853,12 @@ def api_gemini(body) -> dict:
             keep["casing"] = t["casing"].replace("minecraft:", "")
         if isinstance(t.get("building"), str) and re.match(r"^[a-z_]{3,20}$", t["building"]):
             keep["building"] = t["building"]
+        if isinstance(t.get("seeds"), str) and re.match(
+                r"^-?\d{1,20}(,-?\d{1,20})*$", t["seeds"]):
+            keep["seed_list"] = t["seeds"]      # bedrock takes explicit seeds
         for k, lo, hi in (("radius", 1000, 60000), ("min", 1, 12),
-                          ("want", 1, 50), ("seeds", 1000, 5_000_000)):
+                          ("want", 1, 50), ("seeds", 1000, 5_000_000),
+                          ("min_drop", 4, 120)):
             if isinstance(t.get(k), (int, float)):
                 keep[k] = max(lo, min(hi, int(t[k])))
         q["tool"] = keep
@@ -980,6 +994,56 @@ def api_fortressoverlap(body) -> dict:
     summary = {"fortresses": int(m.group(1)), "pairs": int(m.group(2)),
                "blocks": int(m.group(3))} if m else {}
     return {"pairs": pairs, "ranked": ranked, "summary": summary, "raw": out.strip()}
+
+
+def api_bedrockoutpost(body) -> dict:
+    """Bedrock outposts standing on a tall COBBLESTONE foundation.
+
+    This is the thing the prompt used to call impossible. It is impossible in
+    JAVA -- Java drops a small dirt platform under a structure that lands in air
+    -- but Bedrock fills a foundation down to the ground out of the structure's
+    own material, so a watchtower on a cliff edge grows a cobblestone column
+    beneath it. Those are the screenshots, and tier3-bedrock finds them.
+
+    Saying "not in Java, here is a mountain outpost instead" was worse than
+    unhelpful: a Java seed does not transfer, because Bedrock places structures
+    differently, so the substitute answered a question nobody asked.
+    """
+    tier = ROOT / "tier3-bedrock"
+    if not (tier / "server" / "bedrock_server.exe").exists():
+        raise Failure("Bedrock Dedicated Server not unpacked -- see "
+                      "tier3-bedrock (unzip bds.zip into tier3-bedrock/server). "
+                      "This search runs a real Bedrock server; nothing else can "
+                      "answer it.")
+    seeds = str(body.get("seeds", "")).strip() or "12345"
+    if not re.match(r"^-?\d{1,20}(,-?\d{1,20})*$", seeds):
+        raise Failure("seeds must be a comma-separated list of numbers")
+    min_drop = max(4, min(120, int(body.get("min_drop", 20))))
+    reach = max(200, min(10000, int(body.get("reach", 1500))))
+    verify = max(1, min(10, int(body.get("verify_top", 2))))
+    args = [sys.executable, str(tier / "glitched_outposts.py"),
+            "--seeds", seeds, "--min-drop", str(min_drop),
+            "--reach", str(reach), "--verify-top", str(verify)]
+    rc, out, err = run(args, TIMEOUTS["villagesmiths"])
+    hits = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            hits.append(json.loads(line))
+        except ValueError:
+            continue
+    if rc != 0 and not hits:
+        raise Failure(err.strip() or "bedrock outpost search failed")
+    # cobblestone_height is measured block by block in the real world, so a hit
+    # is confirmed rather than predicted -- unlike predicted_drop, which is only
+    # the terrain prefilter that decided the candidate was worth probing.
+    hits.sort(key=lambda h: -(h.get("cobblestone_height") or 0))
+    return {"hits": hits, "raw": out.strip()[-4000:],
+            "note": "cobblestone_height is measured in the real Bedrock world, "
+                    "block by block. predicted_drop is only the terrain "
+                    "prefilter that chose the candidate."}
 
 
 def api_casingtreasure(body) -> dict:
@@ -1256,6 +1320,7 @@ ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/casingtreasure": api_casingtreasure,
           "/api/confirmcasing": api_confirmcasing,
           "/api/fortressoverlap": api_fortressoverlap,
+          "/api/bedrockoutpost": api_bedrockoutpost,
           "/api/cancel": api_cancel,
           "/api/hunt": api_hunt,
           "/api/hunt/status": api_hunt_status,

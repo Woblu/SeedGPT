@@ -677,6 +677,29 @@
       </div>
     </section>
 
+    <section>
+      <h2>Bedrock glitched outpost <span class="tag-exp">Bedrock Edition</span></h2>
+      <div class="hint" style="margin-top:0;margin-bottom:9px">
+        The outpost standing on a <b>tall cobblestone pillar</b> from the screenshots.
+        This does <b>not exist in Java</b> — Java drops a small dirt platform under a
+        structure that lands in air, while <b>Bedrock fills a foundation to the ground</b>
+        out of the structure's own material. Runs a real <b>Bedrock Dedicated Server</b>
+        and measures the column block by block, so the height reported is measured
+        rather than predicted. <b>Slow.</b>
+      </div>
+      <div><label for="boSeeds">seeds (comma separated)</label>
+        <input type="text" id="boSeeds" value="12345"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px">
+        <div><label for="boDrop">min terrain drop</label>
+          <input type="number" id="boDrop" value="20" min="4" max="120"></div>
+        <div><label for="boVerify">verify top</label>
+          <input type="number" id="boVerify" value="2" min="1" max="10"></div>
+      </div>
+      <div class="btnrow">
+        <button class="primary" id="boBtn">Find glitched outpost</button>
+      </div>
+    </section>
+
   </div>
 </aside>
 
@@ -2276,6 +2299,48 @@
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitPrompt(); }
   });
 
+  // ---- bedrock glitched outpost -----------------------------------------
+  $('#boBtn').onclick = async () => {
+    const seeds = $('#boSeeds').value.trim() || '12345';
+    const min_drop = Math.max(4, Math.min(120, +$('#boDrop').value || 20));
+    const verify_top = Math.max(1, Math.min(10, +$('#boVerify').value || 2));
+    busy('running a real Bedrock Dedicated Server and measuring cobblestone under each outpost. Slow.');
+    try {
+      const d = await post('/api/bedrockoutpost', { seeds, min_drop, verify_top });
+      out.innerHTML = '';
+      const tall = d.hits.filter(h => (h.cobblestone_height || 0) > 0);
+      out.append(statsCard('Bedrock glitched outpost · real BDS', [
+        ['candidates probed', String(d.hits.length)],
+        ['with a cobblestone column', String(tall.length), tall.length ? 'good' : 'warn'],
+        ['tallest', tall.length ? (tall[0].cobblestone_height + ' blocks') : '—'],
+      ]));
+      if (!tall.length) {
+        out.append(el('div', 'note warn',
+          'No cobblestone foundation among the candidates probed — not found in what was '
+          + 'scanned, rather than none existing. Lower the minimum drop or add seeds.'));
+      } else {
+        const c = el('div', 'card');
+        c.append(el('h3', null, 'Outposts on a cobblestone column'));
+        tall.forEach(h => {
+          const box = el('div', 'seed'), n = el('div', 'n');
+          const num = el('span', 'num', String(h.seed));
+          num.title = 'copy';
+          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
+            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          n.append(num, el('span', 'dim', h.cobblestone_height + ' blocks of cobblestone'));
+          box.append(n);
+          const t = el('table'), tr = el('tr');
+          tr.append(idCell('structure', 'pillager_outpost', 'Outpost'),
+                    el('td', null, `x=${h.x}  z=${h.z}`),
+                    el('td', 'd', `drop ${h.predicted_drop}`));
+          t.append(tr); box.append(t); c.append(box);
+        });
+        out.append(c);
+      }
+      if (d.note) out.append(el('div', 'note', d.note));
+    } catch (e) { fail(e.message); }
+  };
+
   // ---- prompt -> the engine that can actually answer it ------------------
   // The prompt box drives one engine by default (cubiomes). Some questions need
   // another, and being told to go click a panel is not an answer -- so a routed
@@ -2304,6 +2369,14 @@
       case 'fortress_overlap':
         set('#foSeeds', t.seeds || 200000);
         $('#foBtn').click();
+        return;
+      case 'bedrock_outpost':
+        // Bedrock requests must NOT fall back to the Java search: its seeds do
+        // not transfer, so an approximate Java answer is not an approximate
+        // answer at all.
+        if (t.seed_list) set('#boSeeds', t.seed_list);
+        set('#boDrop', t.min_drop || 20);
+        $('#boBtn').click();
         return;
       case 'hunt':
         set('#huWant', t.want || 1);
