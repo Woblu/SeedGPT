@@ -617,6 +617,19 @@ Condition types (use EXACTLY these keys):
     village generated on top of a shipwreck", "two structures colliding". "pad"
     adds slack in blocks (use ~16 for "practically touching"). Footprints are
     nominal boxes, so a hit is a strong candidate, not a proof.
+    COMPOSING IT: hang other conditions off the STRUCTURE, not off the overlap.
+    An overlap reports one position between the two footprints, so
+    "outpost within 48 of ov" asks for an outpost near that midpoint and can be
+    unsatisfiable even though the outpost is right there. Write the structure
+    with its modifiers first and point the overlap AT it:
+      {"id":"o","structure":"outpost","cave_below":30,"within":1500,"of":"origin"}
+      {"id":"ov","overlap":["outpost","mansion"],"within":64,"of":"o","pad":16}
+    That is 1 in ~84k structure seeds -- instant. The same shape composed the
+    other way round sampled 0 in 200000 and looked impossible.
+    This is how the spectacular compound requests are built ("an outpost on a
+    cliff hanging over a mansion", "a village on a crust above a huge cavern
+    next to a ruined portal"): one structure carrying the terrain modifiers,
+    everything else anchored to it.
 - Over a cave:    {"id","structure":<name>,"cave_below":N,"within","of"}  the
     structure stands on a crust above an open cavern at least N blocks tall.
     Use for "village over/above/on top of a cave", "a village in a cave", "a
