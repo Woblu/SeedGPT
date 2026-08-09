@@ -35,7 +35,37 @@ int main(int argc, char **argv)
         const char *n = struct2str(i);
         if (n && !strcmp(n, argv[3])) st = i;
     }
-    if (st < 0) { fprintf(stderr, "unknown structure \"%s\"\n", argv[3]); return 2; }
+    // Accept the names the QUERY engine accepts, not only cubiomes' own. The
+    // query language says "outpost" and cubiomes says "pillager_outpost", so
+    // `locate <seed> 1.21 outpost` printed nothing at all -- and a caller that
+    // redirected stderr read that silence as "this seed has no outposts". It
+    // does not: this exact mismatch produced a confident report that a real
+    // outpost did not exist.
+    if (st < 0) {
+        static const struct { const char *alias, *real; } kAlias[] = {
+            {"outpost",  "pillager_outpost"},
+            {"treasure", "buried_treasure"},
+            {"pyramid",  "desert_pyramid"},
+            {"temple",   "jungle_temple"},
+            {"hut",      "swamp_hut"},
+            {"geode",    "amethyst_geode"},
+            {"portal",   "ruined_portal"},
+        };
+        for (size_t a = 0; a < sizeof kAlias / sizeof *kAlias && st < 0; a++) {
+            if (strcmp(kAlias[a].alias, argv[3])) continue;
+            for (int i = 0; i < 64 && st < 0; i++) {
+                const char *n = struct2str(i);
+                if (n && !strcmp(n, kAlias[a].real)) st = i;
+            }
+        }
+    }
+    if (st < 0) {
+        // Printed on STDOUT too, so suppressing stderr cannot turn "I do not
+        // know that name" into "there are none of those here".
+        printf("ERROR unknown structure \"%s\"\n", argv[3]);
+        fprintf(stderr, "unknown structure \"%s\"\n", argv[3]);
+        return 2;
+    }
 
     int radius = atoi(argv[4]);
     int cx = (argc > 5 && argv[5][0] != '-') ? atoi(argv[5]) : 0;
