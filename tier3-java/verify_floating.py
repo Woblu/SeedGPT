@@ -75,13 +75,25 @@ def top_solid(srv, x, z, y0, y1):
 # trustworthy as its confirmer, and a confirmer that quietly reports a wrong
 # surface height would certify islands that are not there. The repair is a
 # binary search for the surface per column instead of a full sweep.
-BROKEN = ("verify_floating is under repair and will not report a verdict.\n"
-          "  - top_solid() references a deleted SOLID list (NameError)\n"
-          "  - the batched column scan loses results: surrounding surfaces read\n"
-          "    y=1 and y=14 where the terrain is 60-80\n"
-          "Fix: binary-search each column for its surface instead of sweeping\n"
-          "260 heights across nine columns in one batch. Until then this is\n"
-          "UNKNOWN, which is not a statement about whether anything floats.")
+BROKEN = (
+    "verify_floating will not report a verdict. Two attempts, both wrong:\n"
+    "\n"
+    "  1. Full sweep. Reading every height across nine columns in one batch\n"
+    "     lost results -- surrounding surfaces came back y=1 and y=14 where the\n"
+    "     terrain is 60-80.\n"
+    "  2. Binary search. Cheaper, and STRUCTURALLY invalid here. Bisection needs\n"
+    "     a column that is air above and solid below; a floating island is\n"
+    "     exactly the shape that breaks it (solid, air, solid), so the search\n"
+    "     settles on an arbitrary boundary. Measured: island top read as y=45\n"
+    "     and surrounding ground as y=9-35, where the real terrain is 62-81.\n"
+    "\n"
+    "The workable shape is a bounded sweep batched ONE COLUMN AT A TIME -- the\n"
+    "sweep was right, the batching was not. Not attempted yet.\n"
+    "\n"
+    "This is UNKNOWN, and deliberately not a statement about whether anything\n"
+    "floats: a confirmer that guesses would certify islands that are not there,\n"
+    "which is the one failure this pipeline exists to prevent."
+)
 
 
 def main():
