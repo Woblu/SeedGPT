@@ -405,9 +405,16 @@ public class OreGen {
                     // it made the world look wrong when the readout was.
                     BlockState atPos = c.getBlockState(new BlockPos(x, y, z));
                     BlockState under = c.getBlockState(new BlockPos(x, y - 1, z));
+                    // Read from the game's own bytecode, not inferred:
+                    // BuriedTreasurePieces$BuriedTreasurePiece uses a HARDCODED
+                    // Blocks.SAND when the landing block is air or liquid -- it
+                    // does NOT fall back to the block below, which is what this
+                    // assumed. That single constant is why sand was 78% of the
+                    // census: every chest landing in water is cased in sand no
+                    // matter what it is sitting on.
                     BlockState fillState =
                         (atPos.isAir() || !atPos.getFluidState().isEmpty())
-                            ? under : atPos;
+                            ? Blocks.SAND.defaultBlockState() : atPos;
                     sb.append("\tfill=").append(name(fillState));
                     int[][] f = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
                     for (int[] d : f)
