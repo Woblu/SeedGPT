@@ -60,9 +60,35 @@ def top_solid(srv, x, z, y0, y1):
     return best
 
 
+# UNDER REPAIR -- this script does not currently give a trustworthy answer.
+#
+# Two faults are known and neither is fixed:
+#   1. top_solid() still references a SOLID list that was deleted when the
+#      classification moved to is_terrain(). It raises NameError.
+#   2. Before that, the batched column scan was returning implausible readings --
+#      surrounding surfaces at y=1 and y=14 where the real terrain is 60-80 --
+#      which means results were being lost, not measured. Sweeping ~260 heights
+#      across nine columns in one batch is the likely cause.
+#
+# It refuses rather than answering, because everything downstream treats this as
+# ground truth: the floating-island condition is only ever going to be as
+# trustworthy as its confirmer, and a confirmer that quietly reports a wrong
+# surface height would certify islands that are not there. The repair is a
+# binary search for the surface per column instead of a full sweep.
+BROKEN = ("verify_floating is under repair and will not report a verdict.\n"
+          "  - top_solid() references a deleted SOLID list (NameError)\n"
+          "  - the batched column scan loses results: surrounding surfaces read\n"
+          "    y=1 and y=14 where the terrain is 60-80\n"
+          "Fix: binary-search each column for its surface instead of sweeping\n"
+          "260 heights across nine columns in one batch. Until then this is\n"
+          "UNKNOWN, which is not a statement about whether anything floats.")
+
+
 def main():
     if len(sys.argv) < 4:
         sys.exit(__doc__)
+    print(BROKEN)
+    return 2
     seed, x, z = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
     gap = 24
     for i, a in enumerate(sys.argv):
