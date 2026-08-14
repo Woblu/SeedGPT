@@ -416,6 +416,16 @@ public class OreGen {
                         (atPos.isAir() || !atPos.getFluidState().isEmpty())
                             ? Blocks.SAND.defaultBlockState() : atPos;
                     sb.append("\tfill=").append(name(fillState));
+                    // TWO blocks can end up as casing, decoded from the loop's
+                    // bytecode. For each air/water face: if the block BENEATH
+                    // that face is also air/water and the direction is not UP,
+                    // the game writes the block BELOW THE CHEST instead of the
+                    // fill. So an overhanging face is cased in the floor block
+                    // while a supported one gets the fill. That is why seed 4
+                    // (1737,153) reads andesite x4 plus gravel x2 -- gravel was
+                    // the fill and andesite the floor, which looked like a
+                    // contradiction until the loop was read.
+                    sb.append("\tfloor=").append(name(under));
                     int[][] f = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
                     for (int[] d : f)
                         sb.append('\t').append(name(
