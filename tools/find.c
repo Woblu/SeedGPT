@@ -351,8 +351,16 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
                spawnRel ? "from spawn" : "from origin");
         if (cd->structType == Geode && mm->geodeSize[c] > 0)
             printf(", size %d", mm->geodeSize[c]);
-        if (mm->caveHeight[c] > 0)
-            printf(", %d-block cave below", mm->caveHeight[c]);
+        if (mm->caveHeight[c] > 0) {
+            // A floating island and a cave roof both fill caveHeight, and they
+            // are very different finds -- so say which one this is rather than
+            // letting "cave below" stand for both.
+            if (cd->floatVoid > 0)
+                printf(", FLOATING island: %d-block gap under it, underside y=%d",
+                       mm->caveHeight[c], mm->floatCap[c]);
+            else
+                printf(", %d-block cave below", mm->caveHeight[c]);
+        }
         printf("\n");
     }
     // machine-readable twin, for piping into verifiers

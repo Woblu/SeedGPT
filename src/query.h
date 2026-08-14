@@ -102,6 +102,9 @@ typedef struct {
     int      reqExposed;    // CT_STRUCTURE (buried_treasure): chest on dry land
                             // at/above sea level (exposed), not submerged
     int      reqShip;       // CT_STRUCTURE (end_city): require an end ship (elytra)
+    int      floatVoid;     // CT_STRUCTURE: require a FLOATING island under it
+    int      floatRing;     // how far out the air gap is checked (blocks)
+    int      floatNeed;     // how many of 8 directions must be open
     int      caveBelow;     // CT_STRUCTURE: require an open void at least this
                             // many blocks tall UNDER the structure -- a village
                             // perched over a cavern. Real block terrain, 1.18+.
@@ -242,6 +245,7 @@ typedef struct {
     int veinMax[MAX_COND];    // CT_ORE: largest single connected vein found
     int geodeSize[MAX_COND];  // CT_STRUCTURE (geode): the matched geode's size
     int caveHeight[MAX_COND]; // CT_STRUCTURE: tallest void found under it
+    int floatCap[MAX_COND];   // CT_STRUCTURE: world Y of the island's underside
     Pos partner[MAX_COND];    // CT_OVERLAP: position of the SECOND structure
     int overlapArea[MAX_COND];// CT_OVERLAP: footprint intersection, blocks^2
     int cactusTall[MAX_COND]; // CT_CACTUS: tallest cactus found, in blocks

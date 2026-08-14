@@ -149,6 +149,9 @@ static double viabCost(const Query *q, int i)
         // footprint: by far the most expensive thing a structure condition can
         // ask for, so the planner must see it.
         if (c->caveBelow > 0) cost += 5.0 * 16.0 * NS_TERRAIN_CELL;
+        // centre column plus 8 ring columns, each its own chunk gen --
+        // nearly twice cave_below, so the planner must order it later.
+        if (c->floatVoid > 0) cost += 9.0 * 16.0 * NS_TERRAIN_CELL;
         // A population-seeded feature is also LOCATED here, chunk by chunk,
         // because pass 1 could not place it.
         if (isPopulationFeature(c->structType)) {
@@ -702,6 +705,29 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                     goto done;
                 }
                 c->reqCracked = cJSON_IsTrue(jcr) ? 1 : -1;
+            }
+            cJSON *jfloat = cJSON_GetObjectItem(e, "floating");
+            if (jfloat && cJSON_IsNumber(jfloat)) {
+                if (q->mc < MC_1_18) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"floating\" needs MC 1.18+ "
+                        "(block-level terrain)", c->id);
+                    goto done;
+                }
+                if (sc.dim != DIM_OVERWORLD) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"floating\" is overworld-only", c->id);
+                    goto done;
+                }
+                c->floatVoid = jfloat->valueint;
+                if (c->floatVoid < 1) c->floatVoid = 1;
+                cJSON *jr = cJSON_GetObjectItem(e, "gap");
+                c->floatRing = (jr && cJSON_IsNumber(jr)) ? jr->valueint : 24;
+                if (c->floatRing < 4) c->floatRing = 4;
+                cJSON *jn = cJSON_GetObjectItem(e, "sides");
+                c->floatNeed = (jn && cJSON_IsNumber(jn)) ? jn->valueint : 6;
+                if (c->floatNeed < 1) c->floatNeed = 1;
+                if (c->floatNeed > 8) c->floatNeed = 8;
             }
             // "cave_below": N -- the structure stands over an open cavern at
             // least N blocks tall. Real block terrain, so this sees 1.18's
@@ -2149,6 +2175,25 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 if (best < c->caveBelow) return 0;
                 fixed->caveHeight[k] = best;
                 (void)top;
+            }
+            if (c->floatVoid > 0) {
+                // Same five-point sample as cave_below, for the same reason: a
+                // structure is wide and the interesting geometry rarely sits
+                // exactly under its anchor. The BEST of the five decides.
+                static const int FOFF[5][2] =
+                    {{0,0},{16,16},{-16,-16},{16,-16},{-16,16}};
+                int bestv = 0, bestcap = 0;
+                for (int i = 0; i < 5; i++) {
+                    int cap = 0;
+                    int v = terrainFloating(q->mc, worldSeed, queryGenFlags(q),
+                                            p.x + FOFF[i][0], p.z + FOFF[i][1],
+                                            c->floatVoid, c->floatRing,
+                                            c->floatNeed, &cap);
+                    if (v > bestv) { bestv = v; bestcap = cap; }
+                }
+                if (bestv < c->floatVoid) return 0;
+                fixed->caveHeight[k] = bestv;
+                fixed->floatCap[k] = bestcap;
             }
             if (c->reqShip) {
                 // Enumerate the end city's jigsaw and require an END_SHIP piece

@@ -109,3 +109,76 @@ int terrainVoidBelow(int mc, uint64_t worldSeed, uint32_t flags, int x, int z,
     if (topOut) *topOut = bestTop + TERRAIN_Y_MIN;
     return best;
 }
+
+// A FLOATING island: solid ground with a void beneath it AND air at the same
+// height all around, so it is disconnected rather than the roof of a cave.
+//
+// terrainVoidBelow alone cannot tell those apart -- a cave roof also has a solid
+// cap over a void, and it is attached to the world on every side. What makes an
+// island an island is the horizontal gap, so that is what this measures: take
+// the cap's own height, then ask whether the ring of columns at `ring` blocks
+// away is AIR at that same height. Ground that continues outward disqualifies
+// it, however deep the cavern underneath happens to be.
+//
+// Returns the void height under the cap (0 if it is not a floating island), and
+// writes the cap's world Y to *capOut. `need` is how many of the 8 ring
+// directions must be open: 8 is a true sky island, 5-6 allows one attached
+// side, which is what most "floating" screenshots actually show.
+int terrainFloating(int mc, uint64_t worldSeed, uint32_t flags, int x, int z,
+                    int minVoid, int ring, int need, int *capOut)
+{
+    TerrainNoise *tn = terrainFor(mc, worldSeed, flags);
+    if (!tn) return 0;
+
+    int cap = 0;
+    int voidH = terrainVoidBelow(mc, worldSeed, flags, x, z, 128, NULL);
+    if (voidH < minVoid) return 0;
+
+    // The cap is the lowest solid block of the surface slab -- the underside of
+    // the island, not its peak. Measuring the gap at the peak would call a
+    // mountain with a cave under it an island.
+    {
+        static _Thread_local int (*blocks)[TERRAIN_COLUMN];
+        if (!blocks) blocks = malloc(16 * 16 * sizeof(*blocks));
+        if (!blocks) return 0;
+        int cx = x >> 4, cz = z >> 4;
+        generateRegion(tn, cx, cz, 1, 1, blocks, NULL, 0);
+        const int *col = blocks[(x - (cx << 4)) * 16 + (z - (cz << 4))];
+        int surf = -1;
+        for (int i = TERRAIN_COLUMN - 1; i >= 0; i--)
+            if (col[i]) { surf = i; break; }
+        if (surf < 0) return 0;
+        int base = surf;
+        while (base > 0 && col[base - 1]) base--;   // down through the slab
+        cap = base;
+    }
+    if (capOut) *capOut = cap + TERRAIN_Y_MIN;
+
+    // Is the ring open at the cap's height? Eight directions, so a peninsula
+    // attached on one side is distinguishable from a true sky island.
+    static const int DIR[8][2] = {{1,0},{-1,0},{0,1},{0,-1},
+                                  {1,1},{1,-1},{-1,1},{-1,-1}};
+    int open = 0;
+    for (int d = 0; d < 8; d++) {
+        int rx = x + DIR[d][0] * ring, rz = z + DIR[d][1] * ring;
+        static _Thread_local int (*rb)[TERRAIN_COLUMN];
+        if (!rb) rb = malloc(16 * 16 * sizeof(*rb));
+        if (!rb) return 0;
+        int cx = rx >> 4, cz = rz >> 4;
+        generateRegion(tn, cx, cz, 1, 1, rb, NULL, 0);
+        const int *rcol = rb[(rx - (cx << 4)) * 16 + (rz - (cz << 4))];
+        // Two weaker tests were tried first and both called hillsides islands:
+        // "air at the cap's height" passed for ~24% of outposts, and adding
+        // "air 4 blocks lower" still passed 18%, because on a slope the ground
+        // really is absent at those heights. What actually distinguishes a
+        // floating island is that the surrounding GROUND ITSELF lies below the
+        // island's underside -- there is nothing beside it at any height, not
+        // merely a gap at one altitude.
+        int rsurf = -1;
+        for (int i = TERRAIN_COLUMN - 1; i >= 0; i--)
+            if (rcol[i]) { rsurf = i; break; }
+        if (rsurf < cap) open++;
+    }
+    if (open < need) return 0;
+    return voidH;
+}
