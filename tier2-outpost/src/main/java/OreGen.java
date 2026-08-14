@@ -289,8 +289,96 @@ public class OreGen {
         return chunk;
     }
 
+
+    /** 1 = terrain, 0 = air/fluid, indexed from world y=-64. Real game terrain. */
+    static int[] column(long seed, int x, int z) {
+        ChunkAccess c = OutpostWorldgen.genFullChunk(seed, x >> 4, z >> 4);
+        int[] out = new int[384];
+        for (int i = 0; i < 384; i++) {
+            BlockState st = c.getBlockState(new BlockPos(x, i - 64, z));
+            // Fluids are not ground: a seabed under 30 blocks of water is not a
+            // floating island, and counting water as solid would call it one.
+            out[i] = (st.isAir() || !st.getFluidState().isEmpty()) ? 0 : 1;
+        }
+        return out;
+    }
+
+    static int topSolid(int[] col) {
+        for (int i = col.length - 1; i >= 0; i--) if (col[i] == 1) return i;
+        return -1;
+    }
+
     public static void main(String[] argv) throws Exception {
         OutpostWorldgen.bootstrapRegistries();
+        if (argv.length > 0 && argv[0].equals("floatserver")) {
+            // "seed x z gap" -> is (x,z) a FLOATING island, from the GAME'S OWN
+            // terrain rather than a reimplementation of it.
+            //
+            // Three earlier attempts asked a running server through chat
+            // commands and all three failed: a full sweep lost results when ~260
+            // heights went out in one batch, and a binary search is structurally
+            // invalid because an island makes the column non-monotone (solid,
+            // air, solid) which is exactly what bisection cannot handle.
+            //
+            // None of that was necessary. This backend already runs Minecraft's
+            // own NoiseBasedChunkGenerator, so the column is an array in memory:
+            // no commands, no batching limit, no cubiomes. Reading it directly is
+            // both exact and faster than either attempt.
+            Bootstrap0.println("READY");
+            java.io.BufferedReader in = new java.io.BufferedReader(
+                new java.io.InputStreamReader(System.in));
+            String line;
+            while ((line = in.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                if (line.equals("quit")) break;
+                String[] t = line.split("\s+");
+                long s = Long.parseLong(t[0]);
+                int x = Integer.parseInt(t[1]), z = Integer.parseInt(t[2]);
+                int gap = t.length > 3 ? Integer.parseInt(t[3]) : 24;
+                StringBuilder sb = new StringBuilder();
+                try {
+                    int[] c = column(s, x, z);
+                    int top = topSolid(c);
+                    if (top < 0) {
+                        sb.append("F	").append(s).append('	').append(x)
+                          .append('	').append(z).append("	empty=1");
+                    } else {
+                        int base = top;
+                        while (base > 0 && c[base - 1] == 1) base--;
+                        int voidH = 0, y = base - 1;
+                        while (y >= 0 && c[y] == 0) { voidH++; y--; }
+                        int capY = base - 64, topY = top - 64;
+                        // The ring decides island vs cave roof: ground that
+                        // continues outward at the cap's height is not an island,
+                        // however deep the cavern under it happens to be.
+                        int lower = 0;
+                        int[][] dir = {{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
+                        StringBuilder ring = new StringBuilder();
+                        for (int[] d : dir) {
+                            int[] rc = column(s, x + d[0]*gap, z + d[1]*gap);
+                            int rt = topSolid(rc);
+                            int rtY = rt < 0 ? -999 : rt - 64;
+                            if (rt >= 0 && rt < base) lower++;
+                            ring.append(',').append(rtY);
+                        }
+                        sb.append("F	").append(s).append('	').append(x)
+                          .append('	').append(z)
+                          .append("	top=").append(topY)
+                          .append("	cap=").append(capY)
+                          .append("	void=").append(voidH)
+                          .append("	lower=").append(lower)
+                          .append("	ring=").append(ring.substring(1));
+                    }
+                } catch (Throwable ex) {
+                    sb.setLength(0);
+                    sb.append("F	").append(s).append('	').append(x)
+                      .append('	').append(z).append("	err=").append(ex);
+                }
+                Bootstrap0.println(sb.toString());
+            }
+            return;
+        }
         if (argv.length > 0 && argv[0].equals("oreserver")) {
             // "seed x z" -> chest Y and the six face blocks, WITH ores.
             Bootstrap0.println("READY");
