@@ -258,7 +258,12 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
             int dz = mm->partner[c].z - mm->pos[c].z;
             printf("   %-14s x=%6d z=%6d   %s\n", cd->id,
                    mm->pos[c].x, mm->pos[c].z, struct2str(cd->structType));
-            printf("   %-14s x=%6d z=%6d   %s, %d blocks away, %d overlap\n", "",
+            // Say WHICH distance this is. It is origin-to-origin, and a mansion
+            // sprawls far past its origin marker -- so a pair reported "57
+            // blocks away" had buildings about 15-20 apart, and the number read
+            // as evidence against the overlap on the very same line.
+            printf("   %-14s x=%6d z=%6d   %s, %d blocks origin-to-origin "
+                   "(buildings sit closer), %d blocks of footprint overlap\n", "",
                    mm->partner[c].x, mm->partner[c].z, struct2str(cd->structType2),
                    (int)sqrt((double)(dx*dx + dz*dz)), mm->overlapArea[c]);
             continue;

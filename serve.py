@@ -730,6 +730,11 @@ emit are still used (they populate the builder), but the tool decides the run.
       makes a tall foundation possible at all (20 is a good default; lower finds
       more and shorter). Use this for ANY Bedrock Edition request, since the
       ordinary search is a Java engine and its seeds do not transfer.
+  "tool": {"name": "struct_overlap", "a": "<structure>", "b": "<structure>"}
+      "are these two structures REALLY overlapping / inside each other". The
+      ordinary overlap condition compares nominal boxes; this intersects real
+      piece bounding boxes. Exact for fortress and end_city; for anything else it
+      answers UNKNOWN, which must not be reported as "they do not overlap".
   "tool": {"name": "hunt"}
       The user wants it to keep going: "don't stop until you find one", "search
       forever", "keep looking". Use with plain conditions; it scans fresh seeds
@@ -857,7 +862,7 @@ def api_gemini(body) -> dict:
     # actually routes did not. Validated rather than passed through: an unknown
     # name would send the UI to a panel that does not exist.
     TOOLS = {"casing", "village_building", "exposed_treasure",
-             "fortress_overlap", "hunt", "bedrock_outpost"}
+             "fortress_overlap", "hunt", "bedrock_outpost", "struct_overlap"}
     t = obj.get("tool")
     if isinstance(t, dict) and t.get("name") in TOOLS:
         keep = {"name": t["name"]}
@@ -866,6 +871,9 @@ def api_gemini(body) -> dict:
             keep["casing"] = t["casing"].replace("minecraft:", "")
         if isinstance(t.get("building"), str) and re.match(r"^[a-z_]{3,20}$", t["building"]):
             keep["building"] = t["building"]
+        for side in ("a", "b"):
+            if isinstance(t.get(side), str) and re.match(r"^[a-z_]{3,30}$", t[side]):
+                keep[side] = t[side]
         if isinstance(t.get("seeds"), str) and re.match(
                 r"^-?\d{1,20}(,-?\d{1,20})*$", t["seeds"]):
             keep["seed_list"] = t["seeds"]      # bedrock takes explicit seeds
@@ -1057,6 +1065,52 @@ def api_bedrockoutpost(body) -> dict:
             "note": "cobblestone_height is measured in the real Bedrock world, "
                     "block by block. predicted_drop is only the terrain "
                     "prefilter that chose the candidate."}
+
+
+def api_structoverlap(body) -> dict:
+    """Do two structures ACTUALLY share space, piece by piece?
+
+    The `overlap` condition compares nominal boxes -- a good candidate filter and
+    a poor answer. This intersects the structures' real piece bounding boxes, so
+    it is arithmetic rather than inference. It is exact where cubiomes can
+    assemble a structure (fortresses, end cities) and returns UNKNOWN where it
+    cannot (mansions and most overworld builds), which is deliberately not the
+    same as reporting that they do not overlap.
+    """
+    seed = str(body.get("seed", "")).strip()
+    if not re.match(r"^-?\d{1,20}$", seed):
+        raise Failure("structoverlap needs a seed")
+    version = check_version(str(body.get("version", "1.21")))
+    try:
+        a = str(body["a"]); ax = int(body["ax"]); az = int(body["az"])
+        b = str(body["b"]); bx = int(body["bx"]); bz = int(body["bz"])
+    except (KeyError, TypeError, ValueError):
+        raise Failure("needs a/ax/az and b/bx/bz")
+    for n in (a, b):
+        if not re.match(r"^[a-z_]{3,30}$", n):
+            raise Failure(f"bad structure name {n!r}")
+    rc, out, err = run([tool("structoverlap"), seed, version,
+                        a, str(ax), str(az), b, str(bx), str(bz)],
+                       TIMEOUTS["describe"])
+    txt = out.strip()
+    m = re.search(r"OVERLAP: (\d+) piece pairs intersect, (\d+) blocks", txt)
+    gap = re.search(r"nearest\s+pieces are (\d+) blocks apart", txt)
+    pcs = re.findall(r"^\s+\S+: (-?\d+) pieces$", txt, re.M)
+    return {
+        "verdict": ("overlap" if m else
+                    "unknown" if ("UNKNOWN" in txt or "ERROR" in txt) else
+                    "separate"),
+        "pairs": int(m.group(1)) if m else 0,
+        "blocks": int(m.group(2)) if m else 0,
+        "gap": int(gap.group(1)) if gap else None,
+        "pieces": [int(x) for x in pcs],
+        "raw": txt,
+        # An engine that cannot assemble a structure must not be read as one
+        # that checked and found nothing.
+        "note": ("Piece-exact. cubiomes can assemble fortresses and end cities; "
+                 "for other structures this returns UNKNOWN rather than a "
+                 "verdict, which is not the same as 'they do not overlap'."),
+    }
 
 
 def api_casingtreasure(body) -> dict:
@@ -1334,6 +1388,7 @@ ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/confirmcasing": api_confirmcasing,
           "/api/fortressoverlap": api_fortressoverlap,
           "/api/bedrockoutpost": api_bedrockoutpost,
+          "/api/structoverlap": api_structoverlap,
           "/api/cancel": api_cancel,
           "/api/hunt": api_hunt,
           "/api/hunt/status": api_hunt_status,

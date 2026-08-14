@@ -700,6 +700,35 @@
       </div>
     </section>
 
+    <section>
+      <h2>Really overlapping? <span class="tag-exp">piece-exact</span></h2>
+      <div class="hint" style="margin-top:0;margin-bottom:9px">
+        The search compares <b>nominal boxes</b>, and its distance is measured
+        <b>origin to origin</b> — a mansion sprawls far past its origin, so a pair
+        reported 57 blocks apart had buildings ~15–20 apart. This intersects the
+        structures' <b>real piece bounding boxes</b>. Exact for <b>fortress</b> and
+        <b>end_city</b>; for anything else it answers <b>UNKNOWN</b>, which is not
+        the same as “they don't overlap”.
+      </div>
+      <div><label for="soSeed">seed</label>
+        <input type="text" id="soSeed" placeholder="272750727216669"></div>
+      <div style="display:grid;grid-template-columns:1fr 70px 70px;gap:9px;margin-top:9px">
+        <div><label for="soA">structure A</label>
+          <input type="text" id="soA" value="fortress"></div>
+        <div><label for="soAx">x</label><input type="number" id="soAx" value="352"></div>
+        <div><label for="soAz">z</label><input type="number" id="soAz" value="352"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 70px 70px;gap:9px;margin-top:9px">
+        <div><label for="soB">structure B</label>
+          <input type="text" id="soB" value="fortress"></div>
+        <div><label for="soBx">x</label><input type="number" id="soBx" value="352"></div>
+        <div><label for="soBz">z</label><input type="number" id="soBz" value="432"></div>
+      </div>
+      <div class="btnrow">
+        <button class="primary" id="soBtn">Check overlap</button>
+      </div>
+    </section>
+
   </div>
 </aside>
 
@@ -2341,6 +2370,39 @@
     } catch (e) { fail(e.message); }
   };
 
+  // ---- piece-exact structure overlap -------------------------------------
+  $('#soBtn').onclick = async () => {
+    const seed = $('#soSeed').value.trim();
+    if (!seed) { fail('need a seed'); return; }
+    const body = { seed, a: $('#soA').value.trim(), ax: +$('#soAx').value, az: +$('#soAz').value,
+                   b: $('#soB').value.trim(), bx: +$('#soBx').value, bz: +$('#soBz').value };
+    busy('assembling both structures and intersecting their real piece boxes.');
+    try {
+      const d = await post('/api/structoverlap', body);
+      out.innerHTML = '';
+      const v = d.verdict;
+      out.append(statsCard('Piece-exact overlap', [
+        ['verdict', v === 'overlap' ? 'THEY OVERLAP' : v === 'separate' ? 'separate' : 'UNKNOWN',
+         v === 'overlap' ? 'good' : v === 'unknown' ? 'warn' : ''],
+        ['intersecting piece pairs', String(d.pairs || 0)],
+        ['shared volume', (d.blocks || 0).toLocaleString() + ' blocks'],
+      ]));
+      if (v === 'unknown') {
+        // Never render this as a negative -- it is the engine saying it cannot
+        // assemble one of the structures, not that it checked and found nothing.
+        out.append(el('div', 'note warn',
+          'UNKNOWN — this engine cannot assemble one of those structures, so whether '
+          + 'they overlap is not decidable here. That is NOT a finding that they are separate.'));
+      } else if (v === 'separate' && d.gap != null) {
+        out.append(el('div', 'note',
+          `No piece of one meets any piece of the other; nearest pieces are ${d.gap} blocks apart.`));
+      }
+      if (d.note) out.append(el('div', 'note', d.note));
+      const pre = el('div', 'card'); pre.append(el('h3', null, 'Raw'));
+      const p = el('pre'); p.textContent = d.raw || ''; pre.append(p); out.append(pre);
+    } catch (e) { fail(e.message); }
+  };
+
   // ---- prompt -> the engine that can actually answer it ------------------
   // The prompt box drives one engine by default (cubiomes). Some questions need
   // another, and being told to go click a panel is not an answer -- so a routed
@@ -2377,6 +2439,12 @@
         if (t.seed_list) set('#boSeeds', t.seed_list);
         set('#boDrop', t.min_drop || 20);
         $('#boBtn').click();
+        return;
+      case 'struct_overlap':
+        if (t.a) set('#soA', t.a);
+        if (t.b) set('#soB', t.b);
+        aiNote('This needs a seed and both structure positions — fill them in on '
+             + 'the "Really overlapping?" panel and press Check overlap.', true);
         return;
       case 'hunt':
         set('#huWant', t.want || 1);
