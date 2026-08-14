@@ -356,7 +356,8 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
             // are very different finds -- so say which one this is rather than
             // letting "cave below" stand for both.
             if (cd->floatVoid > 0)
-                printf(", FLOATING island: %d-block gap under it, underside y=%d",
+                printf(", FLOATING island at (%d,%d): %d-block gap, underside y=%d",
+                       mm->floatAt[c].x, mm->floatAt[c].z,
                        mm->caveHeight[c], mm->floatCap[c]);
             else
                 printf(", %d-block cave below", mm->caveHeight[c]);

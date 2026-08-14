@@ -246,6 +246,8 @@ typedef struct {
     int geodeSize[MAX_COND];  // CT_STRUCTURE (geode): the matched geode's size
     int caveHeight[MAX_COND]; // CT_STRUCTURE: tallest void found under it
     int floatCap[MAX_COND];   // CT_STRUCTURE: world Y of the island's underside
+    Pos floatAt[MAX_COND];    // where the island IS -- up to 16 blocks from
+                              // the anchor, because five offsets are sampled
     Pos partner[MAX_COND];    // CT_OVERLAP: position of the SECOND structure
     int overlapArea[MAX_COND];// CT_OVERLAP: footprint intersection, blocks^2
     int cactusTall[MAX_COND]; // CT_CACTUS: tallest cactus found, in blocks

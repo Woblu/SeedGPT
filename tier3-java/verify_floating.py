@@ -20,12 +20,33 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from java_oracle import JavaServer      # noqa: E402
 
-SOLID = ["minecraft:stone", "minecraft:deepslate", "minecraft:andesite",
-         "minecraft:granite", "minecraft:diorite", "minecraft:dirt",
-         "minecraft:grass_block", "minecraft:gravel", "minecraft:sand",
-         "minecraft:sandstone", "minecraft:tuff", "minecraft:calcite",
-         "minecraft:snow_block", "minecraft:packed_ice", "minecraft:coarse_dirt",
-         "minecraft:terracotta", "minecraft:moss_block", "minecraft:clay"]
+# Classify by what is NOT terrain, not by a list of what is. An 18-block SOLID
+# list called y=103 empty when it held pale_oak_leaves, which made a tree canopy
+# read as absent and a real disagreement look like a different one. The set of
+# things that are NOT ground is small and enumerable; the set of things that ARE
+# is not, so the whitelist was always going to lie eventually.
+NOT_TERRAIN = [
+    "minecraft:air", "minecraft:cave_air", "minecraft:void_air",
+    "minecraft:water", "minecraft:lava", "minecraft:vine", "minecraft:snow",
+    "minecraft:short_grass", "minecraft:tall_grass", "minecraft:fern",
+    "minecraft:large_fern", "minecraft:dead_bush", "minecraft:seagrass",
+    "minecraft:kelp", "minecraft:kelp_plant", "minecraft:glow_lichen",
+    "minecraft:hanging_roots", "minecraft:moss_carpet",
+]
+LEAFY = ("_leaves", "_log", "_wood", "_sapling", "_stem", "_hyphae",
+         "_planks", "_fence", "_slab", "_stairs")
+AIRY = ("minecraft:air", "minecraft:cave_air", "minecraft:void_air")
+
+
+def is_terrain(block):
+    """Ground, as opposed to air, liquid, plants or anything built."""
+    if block is None:
+        return None                      # UNKNOWN -- never silently "no"
+    if block in NOT_TERRAIN:
+        return False
+    return not any(block.endswith(sfx) for sfx in LEAFY)
+
+
 DIRS = [(1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1)]
 
 

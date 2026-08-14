@@ -2182,18 +2182,26 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 // exactly under its anchor. The BEST of the five decides.
                 static const int FOFF[5][2] =
                     {{0,0},{16,16},{-16,-16},{16,-16},{-16,16}};
-                int bestv = 0, bestcap = 0;
+                int bestv = 0, bestcap = 0; Pos bestat = p;
                 for (int i = 0; i < 5; i++) {
                     int cap = 0;
                     int v = terrainFloating(q->mc, worldSeed, queryGenFlags(q),
                                             p.x + FOFF[i][0], p.z + FOFF[i][1],
                                             c->floatVoid, c->floatRing,
                                             c->floatNeed, &cap);
-                    if (v > bestv) { bestv = v; bestcap = cap; }
+                    if (v > bestv) {
+                        bestv = v; bestcap = cap;
+                        // WHICH offset matched matters: the island can sit 22
+                        // blocks from the anchor, and reporting only the anchor
+                        // sends you to a column that is not floating at all.
+                        bestat.x = p.x + FOFF[i][0];
+                        bestat.z = p.z + FOFF[i][1];
+                    }
                 }
                 if (bestv < c->floatVoid) return 0;
                 fixed->caveHeight[k] = bestv;
                 fixed->floatCap[k] = bestcap;
+                fixed->floatAt[k] = bestat;
             }
             if (c->reqShip) {
                 // Enumerate the end city's jigsaw and require an END_SHIP piece
