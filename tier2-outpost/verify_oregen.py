@@ -59,10 +59,14 @@ def ask(p, seed, x, z):
             if any(f.startswith("err=") for f in t):
                 return None, None
             kv = dict(f.split("=", 1) for f in t if "=" in f)
-            if "cased" not in kv:
-                raise RuntimeError("OreGen did not emit cased= -- rebuild "
+            if "final" not in kv:
+                raise RuntimeError("OreGen did not emit final= -- rebuild "
                                    "tier2-outpost before verifying against it")
-            return int(kv.get("chestY", -1)), kv["cased"].split(",")
+            # `final`, not `cased`. The server shows a finished chunk, so the
+            # only fair comparison is against the faces AFTER decoration has run
+            # over the casing. Comparing `cased` would score the structure's own
+            # write against a world that has moved on from it.
+            return int(kv.get("chestY", -1)), kv["final"].split(",")
     return None, None
 
 
@@ -91,7 +95,7 @@ def main():
                     full = face_probe(srv, x, sy, z, SCREEN)
                     if any(b is None for b in full.values()):
                         full = face_probe(srv, x, sy, z, CANDIDATES)
-                    gy, gcased = ask(p, seed, x, z)
+                    gy, gfinal = ask(p, seed, x, z)
                     if gy is None:
                         err += 1
                         continue
@@ -107,7 +111,7 @@ def main():
                         continue
                     faces_agree = True
                     for i, off in enumerate(FACES):
-                        want, got = full.get(off), gcased[i]
+                        want, got = full.get(off), gfinal[i]
                         if want is None:
                             unknown += 1
                             faces_agree = False

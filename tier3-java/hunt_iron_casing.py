@@ -76,11 +76,14 @@ class OrePath:
         raise RuntimeError("OreGen never reported READY")
 
     def full(self, seed, x, z):
-        """(chestY, {fill, floor, raw[6], cased[6]}), or (None, None).
+        """(chestY, {fill, floor, raw[6], cased[6], final[6]}), or (None, None).
 
-        `cased` is the six faces the chest is ACTUALLY walled in, with the
-        piece's own loop applied. Everything before this returned `fill` alone,
-        which is one of three blocks that can end up on a face -- see probe().
+        `cased` is what the structure writes. `final` is what is there once
+        decoration has run over the top of it, which is what a player digs up
+        and the only one a hunt should score -- buried treasure is placed in
+        SURFACE_STRUCTURES and ore in UNDERGROUND_ORES, so ore routinely lands
+        on a finished chest. Everything before this returned `fill` alone, one
+        of three blocks that can reach a face; see probe().
         """
         # A dead worker used to take the whole run with it via a broken pipe,
         # losing every chest scanned so far. It is restarted instead, and the
@@ -105,13 +108,16 @@ class OrePath:
                 # An OreGen too old to emit raw=/cased= must not silently read
                 # as "six faces of nothing" -- that is the unknown-as-absent bug
                 # again, and it would make an ore hunt report a clean zero.
-                if "cased" not in kv or "raw" not in kv:
+                if not {"cased", "raw", "final"} <= set(kv):
                     raise RuntimeError(
-                        "OreGen did not emit raw=/cased= -- rebuild tier2-outpost; "
-                        "scoring fill alone misses ore standing in the terrain")
+                        "OreGen did not emit raw=/cased=/final= -- rebuild "
+                        "tier2-outpost; scoring fill alone misses ore standing "
+                        "in the terrain, and scoring `cased` misses ore that "
+                        "decoration writes over the casing afterwards")
                 return int(kv.get("chestY", -1)), {
                     "fill": kv.get("fill"), "floor": kv.get("floor"),
                     "raw": kv["raw"].split(","), "cased": kv["cased"].split(","),
+                    "final": kv["final"].split(","),
                 }
         return None, None
 
@@ -203,7 +209,7 @@ def main():
                 # fill agrees with the server only 78% of the time, so trusting
                 # any block reading alone would drop real candidates it merely
                 # misread as sand.
-                ore_face = any(b.endswith("_ore") for b in d["cased"])
+                ore_face = any(b.endswith("_ore") for b in d["final"])
                 if ore_face or (d["fill"] or "").endswith("_ore") or 0 < y <= max_y:
                     deep.append((seed, x, z, y))
             if (seed - start + 1) % 20 == 0:

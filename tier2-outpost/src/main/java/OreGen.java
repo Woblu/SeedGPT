@@ -280,6 +280,20 @@ public class OreGen {
 
     /** Terrain + surface + decoration (ores included), for one chunk. */
     static ChunkAccess genDecoratedChunk(long seed, int chunkX, int chunkZ) {
+        EMPTY.clear();
+        return decorate(seed, OutpostWorldgen.genFullChunk(seed, chunkX, chunkZ));
+    }
+
+    /** Run applyBiomeDecoration over a chunk the caller may already have written to.
+     *
+     *  Split out because ORDER IS PART OF THE ANSWER. Vanilla places buried
+     *  treasure in the SURFACE_STRUCTURES step and ore in UNDERGROUND_ORES,
+     *  which runs later -- so the chest is positioned against terrain that has
+     *  no ore in it yet, and ore may then overwrite the very block that stopped
+     *  its descent. Decorating first and placing afterwards inverts that and
+     *  moves chests. Callers that care must place, then call this.
+     */
+    static ChunkAccess decorate(long seed, ChunkAccess chunk) {
         // Cleared per call, for two reasons and the second is the bad one.
         // It grows by a ProtoChunk per neighbour per chest, which ran a census
         // out of heap at 2918 chests. And it was keyed on chunk coordinates
@@ -287,8 +301,6 @@ public class OreGen {
         // feature writing into a neighbour chunk would leave blocks behind that
         // the next seed's decoration would then read as its own terrain. A slow
         // leak is obvious when it kills the run; stale world state is not.
-        EMPTY.clear();
-        ChunkAccess chunk = OutpostWorldgen.genFullChunk(seed, chunkX, chunkZ);
         NoiseBasedChunkGenerator gen = OutpostWorldgen.cachedGen;
         RandomState rs = RandomState.create(
             OutpostWorldgen.noiseSettings.value(),
@@ -414,6 +426,30 @@ public class OreGen {
                       .append('	').append(z).append("	err=").append(ex);
                 }
                 Bootstrap0.println(sb.toString());
+            }
+            return;
+        }
+        if (argv.length > 0 && argv[0].equals("column")) {
+            // "column <seed> <x> <z> <y0> <y1>": one column, terrain-only beside
+            // decorated. Buried treasure is placed in the SURFACE_STRUCTURES
+            // step and ore in UNDERGROUND_ORES, which runs LATER -- so the block
+            // under a finished chest is not necessarily the block that stopped
+            // its descent. This shows both, which is the only way to tell a
+            // placement-rule violation from a later overwrite.
+            long s = Long.parseLong(argv[1]);
+            int x = Integer.parseInt(argv[2]), z = Integer.parseInt(argv[3]);
+            int y0 = Integer.parseInt(argv[4]), y1 = Integer.parseInt(argv[5]);
+            ChunkAccess plain = OutpostWorldgen.genFullChunk(s, x >> 4, z >> 4);
+            java.util.List<String> before = new java.util.ArrayList<>();
+            for (int y = y1; y >= y0; y--)
+                before.add(name(plain.getBlockState(new BlockPos(x, y, z))));
+            ChunkAccess dec = genDecoratedChunk(s, x >> 4, z >> 4);
+            System.out.println("y	terrain-only	decorated");
+            for (int y = y1, i = 0; y >= y0; y--, i++) {
+                String a = before.get(i);
+                String b = name(dec.getBlockState(new BlockPos(x, y, z)));
+                System.out.println(y + "	" + a + "	" + b
+                    + (a.equals(b) ? "" : "	<== CHANGED BY DECORATION"));
             }
             return;
         }
@@ -605,68 +641,51 @@ public class OreGen {
                 int x = Integer.parseInt(t[1]), z = Integer.parseInt(t[2]);
                 StringBuilder sb = new StringBuilder();
                 try {
-                    ChunkAccess c = genDecoratedChunk(s, x >> 4, z >> 4);
+                    // ORDER MATTERS AND THIS HAD IT BACKWARDS.
+                    // Vanilla runs SURFACE_STRUCTURES (buried treasure) before
+                    // UNDERGROUND_ORES, so the chest is positioned against
+                    // terrain with no ore in it, and ore is free to overwrite
+                    // the block that stopped the descent afterwards. This
+                    // decorated first and scanned second, so wherever an ore
+                    // blob had replaced the floor the scan fell straight through
+                    // it -- ore is not a stopping block -- and landed too low.
+                    //
+                    // Measured at seed 20094 (-1783,41): terrain-only y49 is
+                    // stone, decorated y49 is coal_ore. Vanilla stops at y=50,
+                    // where the server really has the chest; scanning the
+                    // decorated chunk fell through y49 and y48 and answered 48.
+                    //
+                    // Invisible until the tag fix, because a decorator that
+                    // places no ore makes the decorated chunk identical to the
+                    // plain one and the order cannot matter.
+                    EMPTY.clear();
+                    ChunkAccess c = OutpostWorldgen.genFullChunk(s, x >> 4, z >> 4);
                     int y = OutpostWorldgen.chestPlacementY(c, x, z);
-                    sb.append("O\t").append(s).append('\t').append(x)
-                      .append('\t').append(z).append("\tchestY=").append(y);
-                    // The fill is the block the chest lands on -- EXCEPT where
-                    // that is air or water, when the game takes the block below
-                    // instead. Reporting the raw block skipped the second half
-                    // and emitted "fill=air", which no chest can be walled in:
-                    // it made the world look wrong when the readout was.
+                    sb.append("O	").append(s).append('	').append(x)
+                      .append('	').append(z).append("	chestY=").append(y);
                     BlockState atPos = c.getBlockState(new BlockPos(x, y, z));
                     BlockState under = c.getBlockState(new BlockPos(x, y - 1, z));
-                    // Read from the game's own bytecode, not inferred:
-                    // BuriedTreasurePieces$BuriedTreasurePiece uses a HARDCODED
-                    // Blocks.SAND when the landing block is air or liquid -- it
-                    // does NOT fall back to the block below, which is what this
-                    // assumed. That single constant is why sand was 78% of the
-                    // census: every chest landing in water is cased in sand no
-                    // matter what it is sitting on.
+                    // From the game's bytecode, not inferred: the piece uses a
+                    // HARDCODED Blocks.SAND when the landing block is air or
+                    // liquid. It does NOT fall back to the block below. That one
+                    // constant is why sand dominates the census -- every chest
+                    // landing in water is cased in sand whatever it sits on.
                     BlockState fillState =
                         (atPos.isAir() || isLiquid(atPos))
                             ? Blocks.SAND.defaultBlockState() : atPos;
-                    sb.append("\tfill=").append(name(fillState));
-                    // TWO blocks can end up as casing, decoded from the loop's
-                    // bytecode. For each air/water face: if the block BENEATH
-                    // that face is also air/water and the direction is not UP,
-                    // the game writes the block BELOW THE CHEST instead of the
-                    // fill. So an overhanging face is cased in the floor block
-                    // while a supported one gets the fill.
-                    //
-                    // Seed 4 (1737,44,153) is the worked example: gravel is the
-                    // fill, andesite the floor. I briefly "corrected" that to the
-                    // reverse, arguing the server saw andesite on the UP face and
-                    // UP cannot take the floor block. The rule was right and the
-                    // reading of the data was not: README's face list comes from
-                    // shell_probe, which builds offsets by nested dx,dy,dz loops
-                    // and so prints west,down,north,south,up,east -- NOT the
-                    // west,east,down,up,north,south of FACES. Under the real
-                    // order the server's line is up=gravel, east=gravel, and the
-                    // four andesites are west/down/north/south. With tags bound
-                    // this path reproduces that face for face.
-                    //
-                    // Worth keeping as a warning: two orderings of the same six
-                    // blocks agreed on every count and disagreed on every
-                    // position, and the multiset looked like confirmation.
-                    //
-                    // But `floor` is NOT a free variable, and this is the whole
-                    // reason to stop hunting it: the placement scan only STOPS
-                    // where the block below is sandstone/stone/andesite/granite/
-                    // diorite, so the floor is always one of those five. It can
-                    // never be ore. Emitted anyway, because it is a real half of
-                    // the casing and the readout should show what is there.
-                    sb.append("\tfloor=").append(name(under));
-                    // Raw = the decorated terrain before the piece writes.
-                    // Cased = what the chest is ACTUALLY walled in, replicating
-                    // the six-direction loop exactly. They differ on every face
-                    // the piece leaves alone -- and a face that was already
-                    // SOLID is left alone, keeping whatever decoration put
-                    // there. That is the third source of an ore casing, and the
-                    // only one no census ever scored: fill and floor were
-                    // counted, the standing terrain never was.
+                    sb.append("	fill=").append(name(fillState));
+                    // `floor` is not free: the scan only STOPS where the block
+                    // below is sandstone/stone/andesite/granite/diorite, so at
+                    // PLACEMENT TIME it is always one of those five and can
+                    // never be ore. What sits under a finished chest in the
+                    // world may well be ore, because decoration gets there
+                    // afterwards. Different questions; this is the first.
+                    sb.append("	floor=").append(name(under));
                     int[][] f = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
                     StringBuilder raw = new StringBuilder(), cased = new StringBuilder();
+                    // The casing is WRITTEN INTO THE CHUNK, not merely computed,
+                    // so that decoration afterwards sees what the piece built
+                    // and can overwrite it exactly as it does in a real world.
                     for (int[] d : f) {
                         BlockPos fp = new BlockPos(x + d[0], y + d[1], z + d[2]);
                         BlockState fs = c.getBlockState(fp);
@@ -680,11 +699,22 @@ public class OreGen {
                         } else {
                             out = fillState;
                         }
+                        if (out != fs) c.setBlockState(fp, out, false);
                         raw.append(',').append(name(fs));
                         cased.append(',').append(name(out));
                     }
-                    sb.append("\traw=").append(raw.substring(1));
-                    sb.append("\tcased=").append(cased.substring(1));
+                    sb.append("	raw=").append(raw.substring(1));
+                    sb.append("	cased=").append(cased.substring(1));
+                    // ...and only now the ores. `final` is what a player digs
+                    // up; `cased` is what the structure wrote. They differ
+                    // wherever a later feature landed on the chest, which is a
+                    // real thing the game does and not an error.
+                    decorate(s, c);
+                    StringBuilder fin = new StringBuilder();
+                    for (int[] d : f)
+                        fin.append(',').append(name(c.getBlockState(
+                            new BlockPos(x + d[0], y + d[1], z + d[2]))));
+                    sb.append("	final=").append(fin.substring(1));
                 } catch (Throwable ex) {
                     if (System.getenv("OREGEN_TRACE") != null) ex.printStackTrace();
                     sb.setLength(0);

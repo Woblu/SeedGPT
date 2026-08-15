@@ -40,8 +40,17 @@ a guaranteed zero.
 
 The untouched-solid face is the one that was never scored at all. A chest whose
 neighbour is iron ore keeps that iron ore -- the piece does not overwrite it --
-and every run so far logged that chest by its sand fill. This census now scores
-all six FINAL faces.
+and every run so far logged that chest by its sand fill.
+
+And there is a FOURTH source, which is not a face rule at all: decoration runs
+AFTER the structure. Buried treasure is placed in SURFACE_STRUCTURES and ore in
+UNDERGROUND_ORES, so an ore blob can land on a finished chest and overwrite the
+casing the piece just wrote. Confirmed on a server at seed 20094 (-1783,50,41),
+where the block under the chest is coal_ore -- which the placement rule forbids
+as a floor, because it was stone when the chest was placed and became ore later.
+
+This census scores `final`: all six faces after decoration, which is what a
+player actually digs up.
 """
 import os
 import sys
@@ -89,7 +98,7 @@ def main():
                 fill = d["fill"]
                 fills[fill] += 1
                 floors[d["floor"]] += 1
-                for b in d["cased"]:
+                for b in d["final"]:
                     faces[b] += 1
                 depths[y // 10 * 10] += 1
                 if y <= deep_at:
@@ -102,10 +111,10 @@ def main():
                 # then could not say WHERE, having kept only counts. A rate of
                 # 0.015% means each hit is the entire result of hours of
                 # scanning; losing its coordinates wastes the whole run.
-                unusual = sorted({b for b in d["cased"] if b not in COMMON_FILL})
+                unusual = sorted({b for b in d["final"] if b not in COMMON_FILL})
                 if unusual:
                     odd.append((y, seed, x, z, ",".join(unusual), d))
-                    counts = Counter(d["cased"])
+                    counts = Counter(d["final"])
                     shown = " ".join(f"{b.split(':')[-1]}x{counts[b]}"
                                      for b in unusual)
                     print(f"  ODD  y={y} seed {seed} ({x},{z})  {shown}"
@@ -134,7 +143,8 @@ def main():
         flag = "" if b.split(":")[-1] in (
             "sandstone", "stone", "andesite", "granite", "diorite") else "   <-- RULE VIOLATED"
         print(f"  {c:6d}  {b}{flag}")
-    print(f"\nACTUAL CASING -- all six faces of {n} chests ({6*n} faces):")
+    print(f"\nWHAT IS ACTUALLY THERE -- six faces of {n} chests "
+          f"({6*n} faces), AFTER decoration has run over the casing:")
     for b, c in faces.most_common(25):
         print(f"  {c:6d}  {b}")
 
@@ -143,6 +153,7 @@ def main():
               f"{100*len(odd)/max(n,1):.3f}%) -- confirm on the server:")
         for (y, seed, x, z, unusual, d) in sorted(odd):
             print(f"  y={y:4d}  seed {seed:>9}  ({x},{z})  {unusual}")
+            print(f"        final {d['final']}")
             print(f"        cased {d['cased']}")
             print(f"        fill {d['fill']}  floor {d['floor']}")
             print(f"        python treasure_casing.py {seed}   # then /tp {x} {y} {z}")
