@@ -95,6 +95,25 @@ public class OutpostWorldgen {
         // Composite so block/item (STATIC layer) AND biomes/structures (WORLDGEN) resolve.
         worldgen = layered.replaceFrom(RegistryLayer.WORLDGEN, wg).compositeAccess();
 
+        // Bind TAGS. RegistryDataLoader loads registry CONTENTS; it does not
+        // load tags, and nothing else here did either, so every tag was unbound
+        // -- BuiltInRegistries.BLOCK.getTag(STONE_ORE_REPLACEABLES) was absent
+        // entirely and state.is(anyTag) was false for every block in the world.
+        //
+        // That is not a cosmetic gap. Every ore's RuleTest is a TagMatchTest, so
+        // an unbound tag makes each one reject stone it is standing in, and the
+        // feature writes nothing and returns false. Decoration then produces
+        // only the features whose configs use inline block lists rather than
+        // tags -- springs and glow lichen -- which is exactly the ten-blocks-a-
+        // chunk signature measured before this call existed. A whole subsystem
+        // read as "this world has no ore".
+        //
+        // Bound for EVERY registry rather than just BLOCK on purpose: picking
+        // the registry whose tags we happen to know about is how this failed in
+        // the first place, and a feature consulting some other registry's tags
+        // would fail the same silent way.
+        bindAllTags(rm, worldgen);
+
         java.nio.file.Path tmp = java.nio.file.Files.createTempDirectory("owg");
         net.minecraft.world.level.storage.LevelStorageSource lss =
             net.minecraft.world.level.storage.LevelStorageSource.createDefault(tmp);
@@ -108,6 +127,32 @@ public class OutpostWorldgen {
         outpost = worldgen.lookupOrThrow(Registries.STRUCTURE)
                           .getOrThrow(ResourceKey.create(Registries.STRUCTURE,
                               ResourceLocation.withDefaultNamespace("pillager_outpost")));
+    }
+
+    /** Load and bind datapack tags for every registry in `ra`. */
+    static void bindAllTags(net.minecraft.server.packs.resources.ResourceManager rm,
+                            RegistryAccess.Frozen ra) {
+        ra.registries().forEach(entry -> bindTagsFor(rm, entry));
+    }
+
+    private static <T> void bindTagsFor(net.minecraft.server.packs.resources.ResourceManager rm,
+                                        RegistryAccess.RegistryEntry<T> entry) {
+        ResourceKey<? extends net.minecraft.core.Registry<T>> key = entry.key();
+        net.minecraft.core.Registry<T> reg = entry.value();
+        if (!(reg instanceof net.minecraft.core.MappedRegistry)) return;
+        net.minecraft.tags.TagLoader<net.minecraft.core.Holder<T>> loader =
+            new net.minecraft.tags.TagLoader<>(
+                id -> reg.getHolder(ResourceKey.create(
+                          (ResourceKey<net.minecraft.core.Registry<T>>) key, id))
+                         .map(h -> (net.minecraft.core.Holder<T>) h),
+                Registries.tagsDirPath(key));
+        java.util.Map<ResourceLocation, java.util.Collection<net.minecraft.core.Holder<T>>> built =
+            loader.loadAndBuild(rm);
+        java.util.Map<net.minecraft.tags.TagKey<T>,
+                      List<net.minecraft.core.Holder<T>>> bound = new java.util.HashMap<>();
+        built.forEach((id, members) -> bound.put(
+            net.minecraft.tags.TagKey.create(key, id), List.copyOf(members)));
+        ((net.minecraft.core.MappedRegistry<T>) reg).bindTags(bound);
     }
 
     static void mainBody(String[] args) throws Exception {

@@ -28,29 +28,35 @@ import java.util.TreeMap;
 
 // Ore decoration, headless.
 //
-// READ THIS BEFORE TRUSTING ANY ORE RESULT FROM THIS CLASS.
+// FIXED 2026-08-14, after this class spent months reporting "no ore" everywhere.
 //
-// It does not currently work, and it fails in the direction that looks like an
-// answer. `OreGen orescan <seed> <x> <z>` tallies the chunk with and without
-// applyBiomeDecoration and prints the diff. Measured over four chunks -- one
-// ocean, three land -- the entire contribution of decoration is:
+// Symptom: applyBiomeDecoration contributed about ten blocks per chunk -- glow
+// lichen, springs -- and zero ore, zero andesite/granite/diorite, zero
+// vegetation. An 8057-chest census scored 48342 casing faces and found ore on
+// none of them, which measured this bug rather than Minecraft.
 //
-//     glow_lichen, lava springs, water springs, magma_block.  ~10 blocks.
-//     ZERO ore. Zero andesite, granite, diorite. Zero vegetation.
+// Cause: block TAGS were never bound. RegistryDataLoader loads registry
+// contents, not tags, and nothing else bound them, so
+// BuiltInRegistries.BLOCK.getTag(STONE_ORE_REPLACEABLES) was absent outright and
+// state.is(anyTag) was false for every block in the world. Every ore's RuleTest
+// is a TagMatchTest, so each one rejected the stone it stood in and wrote
+// nothing. Only features configured with inline block lists -- springs, glow
+// lichen -- survived, which is exactly the signature that was measured.
 //
-// The whole UNDERGROUND_ORES step places nothing. The deepslate_iron_ore,
-// raw_iron_block and tuff that show up in a scan are ALREADY THERE before
-// decoration runs -- they come from the noise ore-vein generator during terrain
-// generation, and they are the only ore this path has ever been able to see.
+// Fix: OutpostWorldgen.bindAllTags, called from bootstrapBody.
 //
-// So a hunt built on this reports "no ore" everywhere and is not wrong about
-// the world, it is silent about it: an 8057-chest census scored 48342 casing
-// faces and found ore on none, which measures this bug and not Minecraft. That
-// is the unknown-reported-as-absent failure the project keeps rediscovering,
-// and it is the reason to distrust every empty ore result taken through here.
+// Diagnostics kept, because each one answers a question the others cannot:
+//   OreGen tags                        are tags bound at all
+//   OreGen orescan <seed> <x> <z>      chunk diff with vs without decoration
+//   OreGen orefeature <seed> <x> <z> <ids>
+//                                      run named placed features alone, counting
+//                                      positions through each placement modifier
 //
-// Whatever the cause, the discriminating fact is that the features which DO
-// place (springs, glow lichen, magma) survive while every ore feature does not.
+// The general lesson, which this project keeps paying for: a subsystem that is
+// switched off answers every question with "nothing here", and that is a valid-
+// looking answer to every question anyone thought to ask. The chunk diff is what
+// broke it open, because it compares against a control instead of asking the
+// broken thing to describe itself.
 //
 // The tier-2 path generates terrain and surface rules but stops before
 // applyBiomeDecoration, which is where ore is placed -- so it can say where a
@@ -78,6 +84,9 @@ public class OreGen {
 
     static final Set<String> UNIMPLEMENTED = new java.util.TreeSet<>();
 
+    /** Non-null to record every proxy method a feature invokes. */
+    static TreeMap<String, Integer> TRACE = null;
+
     /** A WorldGenLevel backed by one ProtoChunk. */
     static WorldGenLevel levelFor(long seed, ChunkAccess chunk,
                                   NoiseBasedChunkGenerator gen, RandomState rs,
@@ -87,6 +96,11 @@ public class OreGen {
 
         InvocationHandler h = (proxy, method, args) -> {
             String n = method.getName();
+            // TRACE exists because "place() returned false" names nothing. The
+            // proxy is the only surface between the feature and the world, so
+            // the call log IS the story of what the feature asked for and what
+            // it was told.
+            if (TRACE != null) TRACE.merge(n, 1, Integer::sum);
             switch (n) {
                 case "getBlockState": {
                     BlockPos p = (BlockPos) args[0];
@@ -403,6 +417,145 @@ public class OreGen {
             }
             return;
         }
+        if (argv.length > 0 && argv[0].equals("tags")) {
+            // Every ore's RuleTest is TagMatchTest(STONE_ORE_REPLACEABLES) or
+            // its deepslate twin, and TagMatchTest.test is just state.is(tag).
+            // An unbound tag makes that false for every block in the world,
+            // which is indistinguishable from "there is no ore here" -- the
+            // feature reads the stone, rejects it, and writes nothing.
+            for (Object[] t : new Object[][]{
+                    {"STONE_ORE_REPLACEABLES", net.minecraft.tags.BlockTags.STONE_ORE_REPLACEABLES},
+                    {"DEEPSLATE_ORE_REPLACEABLES", net.minecraft.tags.BlockTags.DEEPSLATE_ORE_REPLACEABLES},
+                    {"BASE_STONE_OVERWORLD", net.minecraft.tags.BlockTags.BASE_STONE_OVERWORLD},
+                    {"DIRT", net.minecraft.tags.BlockTags.DIRT}}) {
+                @SuppressWarnings("unchecked")
+                net.minecraft.tags.TagKey<net.minecraft.world.level.block.Block> key =
+                    (net.minecraft.tags.TagKey<net.minecraft.world.level.block.Block>) t[1];
+                long size = net.minecraft.core.registries.BuiltInRegistries.BLOCK
+                    .getTag(key).map(h -> (long) h.size()).orElse(-1L);
+                System.out.println(t[0] + ": members=" + size
+                    + "  stone.is()=" + Blocks.STONE.defaultBlockState().is(key)
+                    + "  deepslate.is()=" + Blocks.DEEPSLATE.defaultBlockState().is(key));
+            }
+            return;
+        }
+        if (argv.length > 0 && argv[0].equals("orefeature")) {
+            // "orefeature <seed> <x> <z> <placed_feature_id>": place ONE named
+            // placed feature onto the proxy level by hand and diff the chunk.
+            //
+            // This bisects the failure. applyBiomeDecoration does two separable
+            // things -- decide WHICH features to run, then run them -- and the
+            // chunk diff cannot tell which half is broken. Calling the feature
+            // directly answers it: if ore places here, the features work and the
+            // enumeration is dropping them; if it does not, the feature itself
+            // cannot run against this proxy.
+            long s = Long.parseLong(argv[1]);
+            int x = Integer.parseInt(argv[2]), z = Integer.parseInt(argv[3]);
+            String[] ids = argv[4].split(",");  // several per JVM boot: the boot dominates
+            int cx = x >> 4, cz = z >> 4;
+            EMPTY.clear();
+            ChunkAccess chunk = OutpostWorldgen.genFullChunk(s, cx, cz);
+            TreeMap<String, Integer> before = tallyChunk(chunk, cx, cz);
+            NoiseBasedChunkGenerator gen = OutpostWorldgen.cachedGen;
+            RandomState rs = RandomState.create(
+                OutpostWorldgen.noiseSettings.value(),
+                OutpostWorldgen.registries().lookupOrThrow(Registries.NOISE), s);
+            Registry<Biome> biomeReg =
+                OutpostWorldgen.registries().registryOrThrow(Registries.BIOME);
+            BiomeManager bm = new BiomeManager(
+                (bx, by, bz) -> gen.getBiomeSource().getNoiseBiome(bx, by, bz, rs.sampler()), s);
+            WorldGenLevel level = levelFor(s, chunk, gen, rs, bm, biomeReg);
+            for (String id : ids) {
+                Registry<net.minecraft.world.level.levelgen.placement.PlacedFeature> pfReg =
+                    OutpostWorldgen.registries().registryOrThrow(Registries.PLACED_FEATURE);
+                net.minecraft.world.level.levelgen.placement.PlacedFeature pf =
+                    pfReg.get(net.minecraft.resources.ResourceLocation.parse(id));
+                if (pf == null) {
+                    System.out.println(id + ": NO SUCH PLACED FEATURE");
+                    continue;
+                }
+                System.out.println("--- " + id + " ---");
+                // Which biome is actually here, and does its generation settings
+                // list this feature at all? A feature absent from the biome is a
+                // legitimate reason for zero, and must not read as a broken proxy.
+                Holder<Biome> biome = gen.getBiomeSource().getNoiseBiome(
+                    x >> 2, 64 >> 2, z >> 2, rs.sampler());
+                boolean listed = biome.value().getGenerationSettings().features().stream()
+                    .flatMap(hs -> java.util.stream.StreamSupport.stream(hs.spliterator(), false))
+                    .anyMatch(h -> h.value() == pf);
+                System.out.println("biome=" + biome.unwrapKey().map(Object::toString).orElse("?")
+                    + "  feature_listed_in_biome=" + listed);
+                // Walk the placement modifiers one at a time. placeWithBiomeCheck
+                // collapses the whole pipeline into a single boolean, and "false"
+                // is the same answer whether a rarity filter rolled badly or the
+                // proxy is starving a modifier -- so it names nothing. Counting the
+                // positions in and out of each stage says exactly which one is
+                // eating them.
+                net.minecraft.world.level.levelgen.placement.PlacementContext ctx =
+                    new net.minecraft.world.level.levelgen.placement.PlacementContext(
+                        level, gen, java.util.Optional.of(pf));
+                net.minecraft.util.RandomSource rnd =
+                    net.minecraft.util.RandomSource.create(s);
+                java.util.List<BlockPos> cur =
+                    java.util.List.of(new BlockPos(cx * 16, 0, cz * 16));
+                for (net.minecraft.world.level.levelgen.placement.PlacementModifier mod
+                         : pf.placement()) {
+                    java.util.List<BlockPos> next = new java.util.ArrayList<>();
+                    for (BlockPos p : cur) mod.getPositions(ctx, rnd, p).forEach(next::add);
+                    System.out.println("  " + mod.getClass().getSimpleName()
+                        + ": " + cur.size() + " -> " + next.size()
+                        + (next.isEmpty() ? "   <== KILLED HERE" : ""));
+                    cur = next;
+                    if (cur.isEmpty()) break;
+                }
+                // How many surviving positions are even in rock? An ore feature
+                // aimed above the terrain places nothing and is not broken -- the
+                // upper iron band does exactly that most of the time. Separating
+                // "aimed at air" from "aimed at stone and refused" is the whole
+                // difference between normal and a bug.
+                int inRock = 0;
+                for (BlockPos p : cur) {
+                    BlockState st = chunk.getBlockState(p);
+                    if (!st.isAir() && st.getFluidState().isEmpty()) inRock++;
+                }
+                System.out.println("  surviving positions: " + cur.size()
+                    + ", of which in solid rock: " + inRock);
+                for (int i = 0; i < Math.min(4, cur.size()); i++)
+                    System.out.println("    " + cur.get(i) + " = "
+                        + name(chunk.getBlockState(cur.get(i))));
+                // The heightmap gate in OreFeature.place is the one call that
+                // can reject a position sitting in solid stone, so read it
+                // through the proxy exactly as the feature does.
+                if (!cur.isEmpty()) {
+                    BlockPos q = cur.get(0);
+                    System.out.println("  proxy getHeight(OCEAN_FLOOR_WG," + q.getX()
+                        + "," + q.getZ() + ") = "
+                        + level.getHeight(Heightmap.Types.OCEAN_FLOOR_WG, q.getX(), q.getZ())
+                        + "   (feature needs this >= about y" + (q.getY() - 4) + ")");
+                    System.out.println("  proxy getMinSection=" + level.getMinSection()
+                        + " getSectionsCount=" + level.getSectionsCount()
+                        + " getSectionIndex(" + q.getY() + ")=" + level.getSectionIndex(q.getY()));
+                }
+                TRACE = new TreeMap<>();
+                boolean placed = pf.placeWithBiomeCheck(level, gen,
+                    net.minecraft.util.RandomSource.create(s), new BlockPos(cx * 16, 0, cz * 16));
+                System.out.println("  proxy calls: " + TRACE);
+                TRACE = null;
+                TreeMap<String, Integer> after = tallyChunk(chunk, cx, cz);
+                java.util.TreeSet<String> keys = new java.util.TreeSet<>(before.keySet());
+                keys.addAll(after.keySet());
+                System.out.println("place() returned " + placed);
+                for (String k : keys) {
+                    int b = before.getOrDefault(k, 0), a = after.getOrDefault(k, 0);
+                    if (a != b) System.out.println("  " + k + "  " + b + " -> " + a
+                                                   + "  (" + (a - b > 0 ? "+" : "") + (a - b) + ")");
+                }
+
+            }
+            if (!UNIMPLEMENTED.isEmpty())
+                System.out.println("UNIMPLEMENTED: " + UNIMPLEMENTED);
+            return;
+        }
         if (argv.length > 0 && argv[0].equals("orescan")) {
             // "orescan <seed> <x> <z>": tally EVERY block in the decorated
             // chunk. This exists because a census of 8057 chests found ore on
@@ -481,15 +634,21 @@ public class OreGen {
                     // fill. So an overhanging face is cased in the floor block
                     // while a supported one gets the fill.
                     //
-                    // This comment used to read seed 4 (1737,44,153) -- andesite
-                    // x4 plus gravel x2 -- as "gravel was the fill and andesite
-                    // the floor". That is backwards, and the bytecode refutes it
-                    // without needing a server: the server saw andesite on the
-                    // UP face, and the UP direction is excluded from the floor
-                    // branch, so an up face that was air or water can ONLY be
-                    // the fill. Andesite is the fill. The two gravel faces were
-                    // already solid and were never written at all -- which is
-                    // the reading tier3-java/README.md had right the first time.
+                    // Seed 4 (1737,44,153) is the worked example: gravel is the
+                    // fill, andesite the floor. I briefly "corrected" that to the
+                    // reverse, arguing the server saw andesite on the UP face and
+                    // UP cannot take the floor block. The rule was right and the
+                    // reading of the data was not: README's face list comes from
+                    // shell_probe, which builds offsets by nested dx,dy,dz loops
+                    // and so prints west,down,north,south,up,east -- NOT the
+                    // west,east,down,up,north,south of FACES. Under the real
+                    // order the server's line is up=gravel, east=gravel, and the
+                    // four andesites are west/down/north/south. With tags bound
+                    // this path reproduces that face for face.
+                    //
+                    // Worth keeping as a warning: two orderings of the same six
+                    // blocks agreed on every count and disagreed on every
+                    // position, and the multiset looked like confirmation.
                     //
                     // But `floor` is NOT a free variable, and this is the whole
                     // reason to stop hunting it: the placement scan only STOPS
