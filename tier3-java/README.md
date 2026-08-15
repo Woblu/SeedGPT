@@ -281,11 +281,20 @@ guaranteed zero, provable from the bytecode without running anything.
 Measured by `tier2-outpost/verify_oregen.py` against a real server, 33 chests of
 seed 20094, after both the tag fix and the generation-order fix:
 
-| | agreement |
-|---|---|
-| `chestY` | 33/33 (**100%**) |
-| individual faces | 185/198 (93%) |
-| **all six faces of a chest** | 26/33 (**79%**) |
+| | before the seed fix | after |
+|---|---|---|
+| `chestY` | 33/33 (100%) | 33/33 (**100%**) |
+| individual faces | 185/198 (93%) | 196/198 (**99%**) |
+| **all six faces of a chest** | 26/33 (79%) | 32/33 (**97%**) |
+
+**Root cause found: the BiomeManager was built with the raw seed.**
+`WorldGenRegion`'s constructor builds its own as
+`new BiomeManager(this, BiomeManager.obfuscateSeed(seed))`, and that seed drives
+the per-block fuzzy offset in `getBiome(BlockPos)`. Surface rules consult
+`getBiome`, so a raw seed resolves some individual blocks to a different biome
+and lays down different sediment -- which is exactly the sand/gravel/dirt/
+sandstone pattern the disagreements showed. Fixed in `genFullChunk` and both of
+`OreGen`'s biome managers.
 
 The last row is the number a hunt depends on, and it is why this path
 **shortlists rather than decides**. Every lead still goes to the server.

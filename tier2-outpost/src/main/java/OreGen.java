@@ -382,9 +382,16 @@ public class OreGen {
             OutpostWorldgen.registries().lookupOrThrow(Registries.NOISE), seed);
         Registry<Biome> biomeReg =
             OutpostWorldgen.registries().registryOrThrow(Registries.BIOME);
+        // obfuscateSeed, NOT the raw seed. WorldGenRegion's constructor builds
+        // its BiomeManager as new BiomeManager(this, obfuscateSeed(seed)), and
+        // BiomeManager uses that seed for the per-block fuzzy offset in
+        // getBiome(BlockPos). Surface rules consult getBiome, so a raw seed
+        // resolves some individual blocks to a different biome and lays down
+        // different sediment -- which is exactly the sand/gravel/dirt/sandstone
+        // disagreement measured against the server.
         BiomeManager bm = new BiomeManager(
             (x, y, z) -> gen.getBiomeSource().getNoiseBiome(x, y, z, rs.sampler()),
-            seed);
+            BiomeManager.obfuscateSeed(seed));
         // generateStructures MUST be true, and this is not a detail.
         // applyBiomeDecoration advances one shared counter k across a step:
         // first over every structure REGISTERED for that step, then over that
@@ -574,7 +581,8 @@ public class OreGen {
             Registry<Biome> biomeReg =
                 OutpostWorldgen.registries().registryOrThrow(Registries.BIOME);
             BiomeManager bm = new BiomeManager(
-                (bx, by, bz) -> gen.getBiomeSource().getNoiseBiome(bx, by, bz, rs.sampler()), s);
+                (bx, by, bz) -> gen.getBiomeSource().getNoiseBiome(bx, by, bz, rs.sampler()),
+                BiomeManager.obfuscateSeed(s));
             WorldGenLevel level = levelFor(s, chunk, gen, rs, bm, biomeReg);
             for (String id : ids) {
                 Registry<net.minecraft.world.level.levelgen.placement.PlacedFeature> pfReg =

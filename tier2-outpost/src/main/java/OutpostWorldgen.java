@@ -376,7 +376,8 @@ public class OutpostWorldgen {
         chunkGen.fillFromNoise(Blender.empty(), rs, sm, chunk).join();
         WorldGenerationContext wgc = new WorldGenerationContext(chunkGen, OVERWORLD_HEIGHT);
         BiomeManager bm = new BiomeManager(
-            (x, y, z) -> biomeSource.getNoiseBiome(x, y, z, rs.sampler()), seed);
+            (x, y, z) -> biomeSource.getNoiseBiome(x, y, z, rs.sampler()),
+            net.minecraft.world.level.biome.BiomeManager.obfuscateSeed(seed));
         chunkGen.buildSurface(chunk, wgc, rs, sm, bm, biomeReg, Blender.empty());
         return chunk;
     }
