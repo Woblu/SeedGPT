@@ -210,6 +210,55 @@ stopping block and so being fallen through and landed on.
 `treasure_census.py` measures this at 0.09 s per chest instead of arguing from a
 hundred samples.
 
+#### What the census actually measures — and the two bugs that made it lie
+
+Scored over 8057 chests (270 seeds, radius 3000). The same run was made twice,
+either side of a fix to headless decoration, and the difference is the whole
+point:
+
+| | broken decorator | fixed |
+|---|---|---|
+| ore faces | **0** / 48342 | **111** / 48342 |
+| ore-cased chests | **0** | **63** (0.78%) |
+| casing block types | 10 | 16 |
+
+`coal_ore` 58 faces, `copper_ore` 43, `iron_ore` 6, `lapis_ore` 4.
+
+Two separate defects stacked, and they split the result almost evenly:
+
+1. **Only `fill` was scored.** Three blocks reach a face — the fill, the floor,
+   and, on any face that was already solid, the standing terrain the piece never
+   touches. **32 of the 63** ore-cased chests carry ore *only* on an untouched
+   face; their fill is plain sand or gravel. Fill-only scoring cannot see those.
+2. **Block tags were never bound** in the headless bootstrap, so every ore's
+   `TagMatchTest` returned false and decoration placed no ore at all. Face
+   scoring cannot see anything without a decorator. See `OreGen`'s header.
+
+Either fix alone would have found about half of this. Every empty ore result
+predating both is UNKNOWN, not evidence.
+
+**The stronger result is one nobody was hunting.** The floor block — the one the
+descent stops on — came back as all five permitted blocks with **zero violations
+in 8057 chests**:
+
+```
+sandstone 6271   stone 1423   diorite 133   granite 117   andesite 113
+```
+
+The broken run saw sandstone, stone and a single granite, which read as weak
+confirmation of a five-block rule. It could not have seen otherwise: andesite,
+granite and diorite are decoration blobs and decoration was placing none of
+them. The rule is now confirmed across every member instead of two of five.
+
+It also kills a hunt worth hours: since the scan only *stops* where the block
+below is one of those five, the floor can never be ore. Scoring it is a
+guaranteed zero, provable from the bytecode without running anything.
+
+**Iron stays genuinely scarce** — 6 faces in 8057 chests. That one is not a bug.
+Treasure lands at y 40–70 and 1.18+ iron peaks at y 16, so the depth argument in
+`hunt_iron_casing.py` was right all along. The empty iron hunts had two causes
+stacked on one real constraint, and only two of the three were defects.
+
 ### treasure_casing.py — the chest writes its own walls
 
 The probe above answers "what is next to the chest", which turned out to be the
