@@ -91,6 +91,98 @@ public class VillageWorldgen {
             }
             return;
         }
+        if (args.length > 0 && args[0].equals("carveserver")) {
+            // Persistent worker: "seed x z" -> how far down the column is carved
+            // open, and what is at the bottom. One JVM for a whole hunt.
+            //
+            // This is the buried-treasure-in-bedrock search. A chest is encased
+            // in bedrock only when it lands INSIDE the bedrock band (y1-4),
+            // which needs the placement scan to fall all the way down an open
+            // column -- bedrock is not a stopping block, so the chest falls
+            // THROUGH the band until the block below is finally stone, and the
+            // block at its own position is then bedrock, which becomes the fill
+            // and is written into every air/liquid face.
+            //
+            // The rare part is the column, not the casing: it needs a ravine
+            // reaching from the ocean floor into the bedrock band at exactly the
+            // treasure's (9,9). So that is what this screens for.
+            System.out.println("READY");
+            System.out.flush();
+            java.io.BufferedReader in = new java.io.BufferedReader(
+                new java.io.InputStreamReader(System.in));
+            String line;
+            long cachedSeed = Long.MIN_VALUE;
+            OverworldBiomeSource bs = null;
+            NoiseBasedChunkGenerator cg = null;
+            while ((line = in.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                if (line.equals("quit")) break;
+                String[] t = line.split("\\s+");
+                long sd = Long.parseLong(t[0]);
+                int x = Integer.parseInt(t[1]), z = Integer.parseInt(t[2]);
+                StringBuilder sb = new StringBuilder();
+                try {
+                    if (cg == null || cachedSeed != sd) {
+                        bs = new OverworldBiomeSource(sd, false, false,
+                                                      BuiltinRegistries.BIOME);
+                        cg = new NoiseBasedChunkGenerator(bs, sd, () -> overworld);
+                        cachedSeed = sd;
+                    }
+                    ChunkPos cp = new ChunkPos(x >> 4, z >> 4);
+                    net.minecraft.world.level.chunk.ProtoChunk chunk =
+                        new net.minecraft.world.level.chunk.ProtoChunk(
+                            cp, net.minecraft.world.level.chunk.UpgradeData.EMPTY);
+                    net.minecraft.core.BlockPos.MutableBlockPos mp =
+                        new net.minecraft.core.BlockPos.MutableBlockPos();
+                    for (int bx = 0; bx < 16; bx++)
+                    for (int bz = 0; bz < 16; bz++) {
+                        int wx = cp.getMinBlockX() + bx, wz = cp.getMinBlockZ() + bz;
+                        net.minecraft.world.level.BlockGetter c = cg.getBaseColumn(wx, wz);
+                        for (int y = 0; y < 256; y++) {
+                            net.minecraft.world.level.block.state.BlockState st =
+                                c.getBlockState(mp.set(wx, y, wz));
+                            if (!st.isAir()) chunk.setBlockState(mp.set(wx, y, wz), st, false);
+                        }
+                    }
+                    net.minecraft.world.level.biome.BiomeManager bm =
+                        new net.minecraft.world.level.biome.BiomeManager(bs, sd,
+                            net.minecraft.world.level.biome.FuzzyOffsetBiomeZoomer.INSTANCE);
+                    cg.applyCarvers(sd, bm, chunk,
+                        net.minecraft.world.level.levelgen.GenerationStep.Carving.AIR);
+                    cg.applyCarvers(sd, bm, chunk,
+                        net.minecraft.world.level.levelgen.GenerationStep.Carving.LIQUID);
+                    // Walk down from the ocean floor exactly as the placement
+                    // scan does, but only through what carving can produce:
+                    // stop at the first block that is neither air nor liquid.
+                    int floor = cg.getBaseHeight(x, z,
+                        net.minecraft.world.level.levelgen.Heightmap.Types.OCEAN_FLOOR_WG);
+                    int y = Math.min(floor, 255), openTo = y;
+                    while (y > 0) {
+                        net.minecraft.world.level.block.state.BlockState st =
+                            chunk.getBlockState(new net.minecraft.core.BlockPos(x, y, z));
+                        boolean passable = st.isAir() || !st.getFluidState().isEmpty();
+                        if (!passable) break;
+                        openTo = y;
+                        y--;
+                    }
+                    net.minecraft.world.level.block.state.BlockState bottom =
+                        chunk.getBlockState(new net.minecraft.core.BlockPos(x, y, z));
+                    sb.append("C\t").append(sd).append('\t').append(x).append('\t').append(z)
+                      .append("\toceanFloor=").append(floor)
+                      .append("\topenTo=").append(openTo)
+                      .append("\tbottom=").append(Registry.BLOCK.getKey(bottom.getBlock()))
+                      .append("\tbottomY=").append(y);
+                } catch (Throwable ex) {
+                    sb.setLength(0);
+                    sb.append("C\t").append(sd).append('\t').append(x).append('\t').append(z)
+                      .append("\terr=").append(ex);
+                }
+                System.out.println(sb);
+                System.out.flush();
+            }
+            return;
+        }
         if (args.length > 0 && args[0].equals("carved")) {
             // "carved <seed> <x> <z> [y0 y1]" -- terrain WITH caves and ravines.
             //
