@@ -300,10 +300,28 @@ Two things worth knowing about the 13 remaining face disagreements: they are the
 separate defect; and **none of them involves an ore block**. They are all
 sediment confusions -- dirt/sand, gravel/stone, sand/gravel, sandstone/stone --
 and they cluster 2-3 faces to a chest, which is the signature of the *fill*
-block differing rather than of individual faces going wrong. The most likely
-cause is the documented single-chunk limitation: OreGen decorates only the
-chest's own chunk, while vanilla decorates a 3x3 neighbourhood whose blobs write
-across chunk borders. Not yet confirmed.
+block differing rather than of individual faces going wrong.
+
+**The single-chunk hypothesis is REFUTED.** `OreGen oreserver hood` backs the
+proxy with a real 3x3 of generated chunks, routes every read and write to the
+owning chunk, and decorates all nine (neighbours first, centre last). Run over
+the seven disagreeing chests it produces output **byte-identical** to the
+single-chunk path. Cross-border decoration is not the cause, and the standing
+explanation in this file was wrong.
+
+That is worth knowing on its own: the documented "only the chunk itself is
+decorated" caveat turns out not to matter for a chest at chunk-local (9,9). The
+geometry argument in `OreGen`'s header -- 8 blocks of margin against a blob
+reach of about 4 -- holds up empirically.
+
+**Leading candidate now: carvers.** `OutpostWorldgen.genFullChunk` runs
+`createBiomes` + `fillFromNoise` + `buildSurface` and *never* `applyCarvers`,
+but a real server chunk is carved between SURFACE and FEATURES. Untested,
+because 1.21.1's `applyCarvers` requires a `WorldGenRegion` -- a concrete class,
+so the dynamic-proxy trick that made decoration reachable does not work on it.
+(1.16.5's signature takes only a `BiomeManager`, which is why the ravine dump in
+`tier2` was possible at all. The API got harder to reach headlessly, not
+easier.)
 
 **Iron stays genuinely scarce** — 6 faces in 8057 chests. That one is not a bug.
 Treasure lands at y 40–70 and 1.18+ iron peaks at y 16, so the depth argument in

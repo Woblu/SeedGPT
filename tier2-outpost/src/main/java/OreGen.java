@@ -91,6 +91,21 @@ public class OreGen {
     static WorldGenLevel levelFor(long seed, ChunkAccess chunk,
                                   NoiseBasedChunkGenerator gen, RandomState rs,
                                   BiomeManager biomes, Registry<Biome> biomeReg) {
+        return levelFor(seed, chunk, gen, rs, biomes, biomeReg, null);
+    }
+
+    /** As above, but backed by a REAL neighbourhood instead of empty stand-ins.
+     *
+     *  `hood` maps chunk key -> generated chunk. Null keeps the old
+     *  single-chunk behaviour: neighbours read as air, writes to them are
+     *  dropped. Supplied, reads and writes route to the actual neighbouring
+     *  chunk -- which is what vanilla does, since decoration writes across
+     *  chunk borders and a blob originating next door can reach into this one.
+     */
+    static WorldGenLevel levelFor(long seed, ChunkAccess chunk,
+                                  NoiseBasedChunkGenerator gen, RandomState rs,
+                                  BiomeManager biomes, Registry<Biome> biomeReg,
+                                  Map<Long, ChunkAccess> hood) {
         ChunkPos cp = chunk.getPos();
         int minX = cp.getMinBlockX(), minZ = cp.getMinBlockZ();
 
@@ -104,20 +119,25 @@ public class OreGen {
             switch (n) {
                 case "getBlockState": {
                     BlockPos p = (BlockPos) args[0];
-                    if (!inChunk(p, minX, minZ)) return Blocks.AIR.defaultBlockState();
-                    return chunk.getBlockState(p);
+                    ChunkAccess c = at(chunk, hood, p, minX, minZ);
+                    return c == null ? Blocks.AIR.defaultBlockState() : c.getBlockState(p);
                 }
                 case "getFluidState": {
                     BlockPos p = (BlockPos) args[0];
-                    if (!inChunk(p, minX, minZ)) return Blocks.AIR.defaultBlockState().getFluidState();
-                    return chunk.getFluidState(p);
+                    ChunkAccess c = at(chunk, hood, p, minX, minZ);
+                    return c == null ? Blocks.AIR.defaultBlockState().getFluidState()
+                                     : c.getFluidState(p);
                 }
                 case "setBlock": {
                     BlockPos p = (BlockPos) args[0];
-                    // Writes outside this chunk are dropped rather than
-                    // misapplied. Vanilla would route them to the neighbour.
-                    if (!inChunk(p, minX, minZ)) return false;
-                    chunk.setBlockState(p, (BlockState) args[1], false);
+                    // With a neighbourhood these route to the owning chunk, as
+                    // vanilla does. Without one they are dropped rather than
+                    // misapplied: ProtoChunk masks x/z by 15, so writing a
+                    // neighbour position into this chunk would silently corrupt
+                    // a block on the far side of it.
+                    ChunkAccess c = at(chunk, hood, p, minX, minZ);
+                    if (c == null) return false;
+                    c.setBlockState(p, (BlockState) args[1], false);
                     return true;
                 }
                 case "getBlockEntity":   return null;
@@ -130,17 +150,19 @@ public class OreGen {
                     @SuppressWarnings("unchecked")
                     java.util.function.Predicate<BlockState> pred =
                         (java.util.function.Predicate<BlockState>) args[1];
-                    return pred.test(inChunk(p, minX, minZ)
-                        ? chunk.getBlockState(p) : Blocks.AIR.defaultBlockState());
+                    ChunkAccess c = at(chunk, hood, p, minX, minZ);
+                    return pred.test(c == null ? Blocks.AIR.defaultBlockState()
+                                               : c.getBlockState(p));
                 }
                 case "isFluidAtPosition": {
                     BlockPos p = (BlockPos) args[0];
                     @SuppressWarnings("unchecked")
                     java.util.function.Predicate<net.minecraft.world.level.material.FluidState> pred =
                         (java.util.function.Predicate<net.minecraft.world.level.material.FluidState>) args[1];
-                    return pred.test(inChunk(p, minX, minZ)
-                        ? chunk.getFluidState(p)
-                        : Blocks.AIR.defaultBlockState().getFluidState());
+                    ChunkAccess c = at(chunk, hood, p, minX, minZ);
+                    return pred.test(c == null
+                        ? Blocks.AIR.defaultBlockState().getFluidState()
+                        : c.getFluidState(p));
                 }
                 case "getFluidTicks":
                 case "getBlockTicks":
@@ -174,6 +196,10 @@ public class OreGen {
                     if (args.length >= 2 && args[0] instanceof Integer) {
                         int cx = (Integer) args[0], cz = (Integer) args[1];
                         if (cx == cp.x && cz == cp.z) return chunk;
+                        if (hood != null) {
+                            ChunkAccess nb = hood.get(key(cx, cz));
+                            if (nb != null) return nb;
+                        }
                         return emptyChunk(cx, cz, chunk, biomeReg);
                     }
                     return chunk;
@@ -257,6 +283,18 @@ public class OreGen {
         return pc;
     }
 
+    static long key(int cx, int cz) {
+        return ((long) cx << 32) ^ (cz & 0xffffffffL);
+    }
+
+    /** The chunk owning `p`: this one, a neighbour, or null for "not available". */
+    static ChunkAccess at(ChunkAccess self, Map<Long, ChunkAccess> hood,
+                          BlockPos p, int minX, int minZ) {
+        if (inChunk(p, minX, minZ)) return self;
+        if (hood == null) return null;
+        return hood.get(key(p.getX() >> 4, p.getZ() >> 4));
+    }
+
     static boolean inChunk(BlockPos p, int minX, int minZ) {
         return p.getX() >= minX && p.getX() < minX + 16
             && p.getZ() >= minZ && p.getZ() < minZ + 16;
@@ -293,7 +331,44 @@ public class OreGen {
      *  its descent. Decorating first and placing afterwards inverts that and
      *  moves chests. Callers that care must place, then call this.
      */
+    /** Generate the 3x3 around (cx,cz), decorate ALL of them, return the centre.
+     *
+     *  Vanilla decorates every chunk against a WorldGenRegion spanning its
+     *  neighbours, so a blob whose origin is next door writes across the border
+     *  into this chunk. Decorating one chunk in isolation cannot produce those
+     *  blocks at all, which is the standing explanation for the face
+     *  disagreements against the server. This runs all nine, with reads and
+     *  writes routed to the owning chunk, and returns the centre.
+     *
+     *  Nine times the work, so it is opt-in rather than the default.
+     */
+    static ChunkAccess decorateWithNeighbours(long seed, int cx, int cz,
+                                              ChunkAccess centre) {
+        Map<Long, ChunkAccess> hood = new java.util.HashMap<>();
+        for (int dx = -1; dx <= 1; dx++)
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) { hood.put(key(cx, cz), centre); continue; }
+                hood.put(key(cx + dx, cz + dz),
+                         OutpostWorldgen.genFullChunk(seed, cx + dx, cz + dz));
+            }
+        // Neighbours first, centre last. A neighbour decorating after the
+        // centre would write its cross-border blobs into a chunk we have
+        // already read, which is the same ordering error as decorating before
+        // placing -- just one level out.
+        for (int dx = -1; dx <= 1; dx++)
+            for (int dz = -1; dz <= 1; dz++)
+                if (dx != 0 || dz != 0)
+                    decorateIn(seed, hood.get(key(cx + dx, cz + dz)), hood);
+        decorateIn(seed, centre, hood);
+        return centre;
+    }
+
     static ChunkAccess decorate(long seed, ChunkAccess chunk) {
+        return decorateIn(seed, chunk, null);
+    }
+
+    static ChunkAccess decorateIn(long seed, ChunkAccess chunk,
+                                  Map<Long, ChunkAccess> hood) {
         // Cleared per call, for two reasons and the second is the bad one.
         // It grows by a ProtoChunk per neighbour per chest, which ran a census
         // out of heap at 2918 chests. And it was keyed on chunk coordinates
@@ -325,7 +400,7 @@ public class OreGen {
         // The level is built first because StructureManager keeps its own
         // reference and dereferences it; passing null there is what the
         // "this.level is null" failure was.
-        WorldGenLevel level = levelFor(seed, chunk, gen, rs, bm, biomeReg);
+        WorldGenLevel level = levelFor(seed, chunk, gen, rs, bm, biomeReg, hood);
         StructureManager sm = new StructureManager(level, opts, null) {
             public List<StructureStart> startsForStructure(
                     ChunkPos p, java.util.function.Predicate<Structure> pred) {
@@ -628,6 +703,8 @@ public class OreGen {
         }
         if (argv.length > 0 && argv[0].equals("oreserver")) {
             // "seed x z" -> chest Y and the six face blocks, WITH ores.
+            // "oreserver hood" decorates the full 3x3 instead of one chunk.
+            final boolean HOOD = argv.length > 1 && argv[1].equals("hood");
             Bootstrap0.println("READY");
             java.io.BufferedReader in = new java.io.BufferedReader(
                 new java.io.InputStreamReader(System.in));
@@ -709,7 +786,8 @@ public class OreGen {
                     // up; `cased` is what the structure wrote. They differ
                     // wherever a later feature landed on the chest, which is a
                     // real thing the game does and not an error.
-                    decorate(s, c);
+                    if (HOOD) decorateWithNeighbours(s, x >> 4, z >> 4, c);
+                    else decorate(s, c);
                     StringBuilder fin = new StringBuilder();
                     for (int[] d : f)
                         fin.append(',').append(name(c.getBlockState(
