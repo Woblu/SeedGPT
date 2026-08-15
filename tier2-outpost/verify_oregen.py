@@ -7,13 +7,20 @@ it fakes light, and it drops every write that lands outside the chunk. So it is
 checked against the server on the two quantities a hunt actually consumes:
 
     chestY   where the treasure lands
-    fill     the block it lands on, which is what gets written into the faces
+    casing   all six face blocks, compared one face at a time
 
-The server cannot be asked for `fill` directly -- the chest replaced that block --
-so the comparison uses the modal face block, which IS the fill wherever the fill
-had air or water to overwrite. Chests whose faces were all pre-existing solid
-have no fill to read and are reported separately rather than counted as
-agreement.
+This used to compare a single `fill` against the MODAL server face, because the
+server cannot be asked for the fill directly -- the chest replaced that block.
+That yardstick was blunt in both directions: it collapsed six blocks into one,
+it could not see a chest walled in two different blocks at all, and a chest
+whose faces were all pre-existing solid had no readable mode. OreGen now
+replicates the piece's own casing loop and emits all six final faces, so the
+comparison is face against face and the proxy is gone.
+
+Faces the server cannot name -- a block outside its candidate list -- are
+counted as UNKNOWN and reported separately. They are not agreements and they
+are not disagreements, and rolling them into either number is how a
+verification starts flattering itself.
 
     python verify_oregen.py [seed ...]
 """
@@ -52,14 +59,18 @@ def ask(p, seed, x, z):
             if any(f.startswith("err=") for f in t):
                 return None, None
             kv = dict(f.split("=", 1) for f in t if "=" in f)
-            return int(kv.get("chestY", -1)), kv.get("fill")
+            if "cased" not in kv:
+                raise RuntimeError("OreGen did not emit cased= -- rebuild "
+                                   "tier2-outpost before verifying against it")
+            return int(kv.get("chestY", -1)), kv["cased"].split(",")
     return None, None
 
 
 def main():
     seeds = [int(a) for a in sys.argv[1:]] or [4, 5000, 5001]
     p = ore_worker()
-    y_ok = y_bad = f_ok = f_bad = nofill = err = 0
+    y_ok = y_bad = f_ok = f_bad = err = 0
+    unknown = chest_ok = chest_bad = 0
     bad = []
     try:
         for seed in seeds:
@@ -74,16 +85,13 @@ def main():
                     if len(ys) != 1:
                         continue                    # ambiguous column, skipped
                     sy = ys[0]
-                    full = face_probe(srv, x, sy, z, CANDIDATES)
-                    # The DOWN face is the floor the chest landed on. It is solid
-                    # by definition -- that is what stopped the descent -- so it
-                    # is never overwritten and is not evidence of the fill.
-                    # Counting it dragged the mode toward the floor block and
-                    # produced "disagreements" that were the yardstick's fault.
-                    sides = {o: b for o, b in full.items() if o != (0, -1, 0)}
-                    modal, n = Counter("?" if b is None else b
-                                       for b in sides.values()).most_common(1)[0]
-                    gy, gfill = ask(p, seed, x, z)
+                    # Screened against the ore list first: ore is exactly what
+                    # this path exists to find, and a face it cannot name is an
+                    # UNKNOWN that must not be scored either way.
+                    full = face_probe(srv, x, sy, z, SCREEN)
+                    if any(b is None for b in full.values()):
+                        full = face_probe(srv, x, sy, z, CANDIDATES)
+                    gy, gcased = ask(p, seed, x, z)
                     if gy is None:
                         err += 1
                         continue
@@ -92,13 +100,28 @@ def main():
                     else:
                         y_bad += 1
                         bad.append((seed, x, z, "chestY", gy, sy))
-                    if n < 3:
-                        nofill += 1                 # no readable casing
-                    elif gfill == modal:
-                        f_ok += 1
+                    # chestY disagreement means the two are describing different
+                    # blocks, so their faces are not comparable and scoring them
+                    # would manufacture six disagreements out of one.
+                    if gy != sy:
+                        continue
+                    faces_agree = True
+                    for i, off in enumerate(FACES):
+                        want, got = full.get(off), gcased[i]
+                        if want is None:
+                            unknown += 1
+                            faces_agree = False
+                            continue
+                        if want == got:
+                            f_ok += 1
+                        else:
+                            f_bad += 1
+                            faces_agree = False
+                            bad.append((seed, x, z, f"face{off}", got, want))
+                    if faces_agree:
+                        chest_ok += 1
                     else:
-                        f_bad += 1
-                        bad.append((seed, x, z, "fill", gfill, modal))
+                        chest_bad += 1
             JavaServer(seed=seed).cleanup()
     finally:
         try:
@@ -112,9 +135,13 @@ def main():
     tot_f = f_ok + f_bad
     print(f"\nchestY: {y_ok}/{tot_y} agree"
           f"{'' if not tot_y else f'  ({100*y_ok/tot_y:.0f}%)'}")
-    print(f"fill:   {f_ok}/{tot_f} agree"
+    tot_c = chest_ok + chest_bad
+    print(f"faces:  {f_ok}/{tot_f} agree"
           f"{'' if not tot_f else f'  ({100*f_ok/tot_f:.0f}%)'}"
-          f"   [{nofill} chests had no readable casing, {err} errors]")
+          f"   [{unknown} faces the server could not name, {err} errors]")
+    print(f"chests: {chest_ok}/{tot_c} agree on ALL SIX faces"
+          f"{'' if not tot_c else f'  ({100*chest_ok/tot_c:.0f}%)'}"
+          f"   -- this is the number a hunt actually depends on")
     for (s, x, z, what, got, want) in bad[:15]:
         print(f"  seed {s} ({x},{z}) {what}: headless {got}  server {want}")
     if f_bad or y_bad:
