@@ -134,7 +134,18 @@ def main():
     casing = (args.casing or "").strip()
     if casing and not casing.startswith("minecraft:"):
         casing = "minecraft:" + casing
-    mode = ("OreGen", "oreserver", "fill") if casing \
+    # `final`, not `fill`. The fill is the block the STRUCTURE writes; `final`
+    # is what is there once decoration has run over the top of it, and those are
+    # routinely different because buried treasure is placed in
+    # SURFACE_STRUCTURES and ore in UNDERGROUND_ORES. Seed 4 (1737,44,153) is
+    # written with stone x4 and dug up as andesite x4.
+    #
+    # It also changes what is FINDABLE. With placement running before ore, as
+    # the game does it, the fill can never be an ore block at all -- an 8057
+    # chest census had ore as the fill exactly zero times. Matching on `fill`
+    # would make every ore casing search return nothing, forever, and look like
+    # a rarity result rather than a bug.
+    mode = ("OreGen", "oreserver", "final") if casing \
         else ("OutpostWorldgen", "treasure", "above")
 
     def worker():
@@ -158,17 +169,29 @@ def main():
                         kv = dict(kvp.split("=", 1) for kvp in line.strip().split("\t") if "=" in kvp)
                         cls = kv.get(mode[2])
                         y = kv.get("chestY")
+                        faces = (cls or "").split(",")
                         break
                     if "\terr=" in line:
                         break               # this chest is unknown, not absent
                 with lock:
                     checked[0] += 1
-                    hit = (cls == casing) if casing else (cls == "air")
+                    # `final` is six comma-separated faces, so a casing
+                    # matches when it is ON one of them. Comparing the whole
+                    # string would only ever match a chest whose six faces are
+                    # identical, which is a much rarer and different question
+                    # than the one being asked.
+                    if casing:
+                        n = faces.count(casing) if faces else 0
+                        hit = n > 0
+                    else:
+                        hit = (cls == "air")
                     if hit:
                         found[0] += 1
                         rec = {"seed": seed, "x": x, "z": z}
                         if casing:
-                            rec.update({"y": int(y) if y else None, "casing": cls})
+                            rec.update({"y": int(y) if y else None,
+                                        "casing": casing, "faces": n,
+                                        "all_faces": faces})
                         print(json.dumps(rec), flush=True)
                         if found[0] >= args.limit:
                             stop.set()

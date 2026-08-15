@@ -2610,12 +2610,27 @@
           num.title = 'copy';
           num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
             num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
-          n.append(num, el('span', 'dim', pretty(casing))); box.append(n);
+          n.append(num, el('span', 'dim',
+            pretty(casing) + (h.faces ? ` \u00d7${h.faces} of 6 faces` : '')));
+          box.append(n);
           const t = el('table'), tr = el('tr');
           tr.append(idCell('structure', 'buried_treasure', 'Buried treasure'),
                     el('td', null, `x=${h.x}  y=${h.y ?? '?'}  z=${h.z}`),
                     el('td', 'd', `/tp ${h.x} ${h.y ?? 64} ${h.z}`));
           t.append(tr); box.append(t);
+          // The six faces as they are AFTER decoration -- what a player digs
+          // up, not what the structure wrote. Those differ routinely: the
+          // treasure is placed in SURFACE_STRUCTURES and ore in
+          // UNDERGROUND_ORES, so a later blob can land on a finished chest.
+          if (h.all_faces && h.all_faces.length === 6) {
+            const order = ['west', 'east', 'down', 'up', 'north', 'south'];
+            const fl = el('div', 'dim');
+            fl.style.cssText = 'font-size:12px;margin-top:4px';
+            fl.textContent = h.all_faces
+              .map((b, i) => `${order[i]} ${pretty(String(b).replace('minecraft:', ''))}`)
+              .join(' · ');
+            box.append(fl);
+          }
           // Every hit is a lead until a real server says otherwise, so the way
           // to settle it sits on the hit itself rather than in a footnote.
           const cb = el('button', null, 'confirm on real server');

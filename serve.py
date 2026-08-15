@@ -1196,9 +1196,22 @@ def api_casingtreasure(body) -> dict:
     property of the finished world, so it is not slow to evaluate there, it is
     absent. Tier 1 streams treasure candidates and OreGen decides.
 
-    Rates measured over 6646 chests: sand 78%, gravel 18%, dirt 2.7%, stone
-    0.9%, and copper_ore / magma_block at roughly 0.015% EACH -- about 6600
-    chests scanned per expected hit. Ask for a rare casing and expect to wait.
+    Rates re-measured over 8057 chests, scoring all six FINAL faces and running
+    placement before decoration as the game does:
+
+        sand 27390 faces   sandstone 10396   gravel 5904   stone 2769
+        dirt 1065          diorite 247       andesite 209  granite 208
+        copper_ore 39      coal_ore 30       iron_ore 5    lapis_ore 4
+
+    60 of 8057 chests carry ore on at least one face -- 0.74%, not the 0.015%
+    quoted here before. That old figure came from a census that scored ONE block
+    (the fill) against a decorator that placed no ore at all; both were bugs.
+
+    Note what the corrected numbers imply for this search: with placement before
+    decoration, the fill can never be ore, so matching on `fill` returns nothing
+    forever. Ore reaches a chest only as standing terrain the piece never
+    touched, or as decoration writing over the casing afterwards -- both of
+    which are only visible in the six final faces.
     """
     tier2 = ROOT / "tier2-outpost"
     if not (tier2 / "out" / "OreGen.class").exists() or not (tier2 / "cp.txt").exists():
