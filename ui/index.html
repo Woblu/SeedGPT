@@ -729,6 +729,29 @@
       </div>
     </section>
 
+    <section>
+      <h2>Actually floating? <span class="tag-exp">no server</span></h2>
+      <div class="hint" style="margin-top:0;margin-bottom:9px">
+        The search's floating condition comes from a <b>density function</b>, and
+        two earlier versions of it called <b>18–24% of outposts</b> floating —
+        on a hillside the ground genuinely is missing at those heights. This reads
+        the <b>real terrain column</b> out of Minecraft's own generator and wants
+        three things at once: a solid cap, a real void beneath it, and ground that
+        drops away on nearly every side. It answers <b>UNKNOWN</b> rather than
+        guessing when it cannot see.
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 70px 70px 70px;gap:9px">
+        <div><label for="flSeed">seed</label>
+          <input type="text" id="flSeed" placeholder="-4707106035532250258"></div>
+        <div><label for="flX">x</label><input type="number" id="flX" value="-448"></div>
+        <div><label for="flZ">z</label><input type="number" id="flZ" value="1136"></div>
+        <div><label for="flGap">gap</label><input type="number" id="flGap" value="24"></div>
+      </div>
+      <div class="btnrow">
+        <button class="primary" id="flBtn">Check floating</button>
+      </div>
+    </section>
+
   </div>
 </aside>
 
@@ -2371,6 +2394,49 @@
   };
 
   // ---- piece-exact structure overlap -------------------------------------
+  $('#flBtn').onclick = async () => {
+    const seed = $('#flSeed').value.trim();
+    if (!seed) { fail('need a seed'); return; }
+    const body = { seed, x: +$('#flX').value, z: +$('#flZ').value,
+                   gap: +$('#flGap').value || 24 };
+    busy('reading the real terrain column out of the game\'s own generator.');
+    try {
+      const d = await post('/api/confirmfloating', body);
+      out.innerHTML = '';
+      out.append(statsCard('Floating island check', [
+        ['verdict', d.unknown ? 'UNKNOWN' : d.floating ? 'FLOATING' : 'not floating',
+         d.floating ? 'good' : d.unknown ? 'warn' : ''],
+        ['island top', d.top == null ? '—' : 'y=' + d.top],
+        ['underside', d.cap == null ? '—' : 'y=' + d.cap],
+        ['void beneath', (d.void || 0) + ' blocks'],
+        ['sides dropping away', (d.lower || 0) + '/8'],
+      ]));
+      if (d.unknown) {
+        // An UNKNOWN must never render as a "no". A confirmer that guesses
+        // certifies islands that are not there, which is the one failure this
+        // panel exists to prevent.
+        out.append(el('div', 'note warn',
+          'UNKNOWN — the backend could not read that column. This is NOT a finding '
+          + 'that the spot is ordinary ground.'));
+      } else if (d.floating) {
+        out.append(el('div', 'note',
+          `Solid cap at y=${d.cap} with ${d.void} blocks of nothing under it, and `
+          + `${d.lower} of 8 surrounding columns top out below the underside.`));
+      } else {
+        out.append(el('div', 'note',
+          (d.void || 0) < 8
+            ? `Only ${d.void || 0} blocks of void under the cap — that is a dip, not an island.`
+            : `The void is real but only ${d.lower}/8 sides drop away, so this is a `
+              + `cave roof or an overhang rather than an island.`));
+      }
+      if (d.ring && d.ring.length) {
+        const pre = el('pre', 'mono');
+        pre.textContent = d.ring.join('\n');
+        out.append(pre);
+      }
+    } catch (e) { fail(e.message); }
+  };
+
   $('#soBtn').onclick = async () => {
     const seed = $('#soSeed').value.trim();
     if (!seed) { fail('need a seed'); return; }
@@ -2439,6 +2505,10 @@
         if (t.seed_list) set('#boSeeds', t.seed_list);
         set('#boDrop', t.min_drop || 20);
         $('#boBtn').click();
+        return;
+      case 'floating':
+        aiNote('This confirms one spot rather than searching — put the seed and the '
+             + 'position on the "Actually floating?" panel and press Check floating.', true);
         return;
       case 'struct_overlap':
         if (t.a) set('#soA', t.a);

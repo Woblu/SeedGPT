@@ -731,6 +731,11 @@ emit are still used (they populate the builder), but the tool decides the run.
       more and shorter). Use this for ANY Bedrock Edition request, since the
       ordinary search is a Java engine and its seeds do not transfer.
   "tool": {"name": "struct_overlap", "a": "<structure>", "b": "<structure>"}
+
+Floating island -- "is this outpost/island actually floating", "island in
+the sky", "structure hovering over a void". Needs a seed and a position;
+it CONFIRMS one spot rather than searching for them.
+  "tool": {"name": "floating"}
       "are these two structures REALLY overlapping / inside each other". The
       ordinary overlap condition compares nominal boxes; this intersects real
       piece bounding boxes. Exact for fortress and end_city; for anything else it
@@ -862,7 +867,8 @@ def api_gemini(body) -> dict:
     # actually routes did not. Validated rather than passed through: an unknown
     # name would send the UI to a panel that does not exist.
     TOOLS = {"casing", "village_building", "exposed_treasure",
-             "fortress_overlap", "hunt", "bedrock_outpost", "struct_overlap"}
+             "fortress_overlap", "hunt", "bedrock_outpost", "struct_overlap",
+             "floating"}
     t = obj.get("tool")
     if isinstance(t, dict) and t.get("name") in TOOLS:
         keep = {"name": t["name"]}
@@ -972,6 +978,56 @@ def api_confirmcasing(body) -> dict:
             "casing": m.group(1) if m else None,
             "agree": int(m.group(2)) if m else 0,
             "faces": faces, "raw": out.strip(), "error": err.strip() or None}
+
+
+def api_confirmfloating(body) -> dict:
+    """Is (x,z) a genuinely FLOATING island, from the game's own terrain?
+
+    No server. tier2-outpost runs Minecraft's NoiseBasedChunkGenerator, so the
+    column is an array in memory and `OreGen floatserver` reads it directly.
+    That matters because the three earlier attempts all went through a running
+    server's chat commands and two of them were WRONG in the dangerous
+    direction: a batched sweep silently lost results, and a binary search is
+    structurally invalid on a column that goes solid/air/solid, which is exactly
+    what an island is.
+
+    The condition needs confirming rather than trusting: cubiomes' density
+    function called 18-24% of outposts "floating" under two earlier definitions,
+    because on a hillside the ground really is absent at those heights. So this
+    checks a real cap, a real void beneath it, and ground that drops away on
+    nearly every side.
+    """
+    seed = str(body.get("seed", "")).strip()
+    if not re.match(r"^-?\d{1,20}$", seed):
+        raise Failure("floating check needs a seed")
+    try:
+        x, z = int(body.get("x")), int(body.get("z"))
+    except (TypeError, ValueError):
+        raise Failure("floating check needs x and z")
+    gap = max(4, min(64, int(body.get("gap", 24))))
+    tier2 = ROOT / "tier2-outpost"
+    if not (tier2 / "out" / "OreGen.class").exists() or not (tier2 / "cp.txt").exists():
+        raise Failure("tier2-outpost not built -- OreGen.class missing, see "
+                      "tier2-outpost/README")
+    script = ROOT / "tier3-java" / "verify_floating.py"
+    rc, out, err = run([sys.executable, str(script), seed, str(x), str(z),
+                        "--gap", str(gap)], TIMEOUTS["villagesmiths"])
+    top = re.search(r"island top\s+y=(-?\d+)", out)
+    cap = re.search(r"island underside y=(-?\d+)", out)
+    void = re.search(r"void beneath\s+(\d+) blocks", out)
+    lower = re.search(r"(\d+)/8 directions", out)
+    ring = [ln.strip() for ln in out.splitlines() if re.match(r"^\s+\([+-]\d", ln)]
+    # rc 2 is UNKNOWN and is NOT a "no". Reporting it as one is the exact bug
+    # this whole path was rebuilt to stop doing.
+    return {"floating": rc == 0,
+            "checked": rc in (0, 1),
+            "unknown": rc == 2,
+            "top": int(top.group(1)) if top else None,
+            "cap": int(cap.group(1)) if cap else None,
+            "void": int(void.group(1)) if void else 0,
+            "lower": int(lower.group(1)) if lower else 0,
+            "ring": ring,
+            "output": out.strip()[-4000:]}
 
 
 def api_fortressoverlap(body) -> dict:
@@ -1386,6 +1442,7 @@ ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/exposedtreasure": api_exposedtreasure,
           "/api/casingtreasure": api_casingtreasure,
           "/api/confirmcasing": api_confirmcasing,
+          "/api/confirmfloating": api_confirmfloating,
           "/api/fortressoverlap": api_fortressoverlap,
           "/api/bedrockoutpost": api_bedrockoutpost,
           "/api/structoverlap": api_structoverlap,
