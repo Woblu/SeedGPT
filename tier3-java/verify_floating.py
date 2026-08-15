@@ -1,168 +1,151 @@
 #!/usr/bin/env python3
 """Is the "floating island" the search found actually floating?
 
-The condition is computed from cubiomes' density function, and the definition
-had to be tightened twice: "air at the cap's height" called ~24% of outposts
-islands and "air a few blocks lower" still called 18%, because on a hillside the
-ground genuinely is absent at those heights. Only the real game settles whether
-the current definition means anything.
+The condition is computed from cubiomes' density function, and the definition had
+to be tightened twice: "air at the cap's height" called ~24% of outposts islands
+and "air a few blocks lower" still called 18%, because on a hillside the ground
+genuinely is absent at those heights. Only the real game settles whether the
+current definition means anything.
 
-    python verify_floating.py <seed> <x> <z> [--cap Y] [--gap 24]
+    python verify_floating.py <seed> <x> <z> [--gap 24]
 
-Reads the actual column at (x,z) and at eight points `gap` blocks out, and prints
-what is solid where. An island shows: solid cap, air beneath it, and every
-surrounding column topping out BELOW the cap.
+Reads the real column at (x,z) and at eight points `gap` blocks out. An island
+shows: a solid cap, air beneath it, and every surrounding column topping out
+BELOW the cap's underside.
+
+WHY THIS NO LONGER TALKS TO A SERVER
+------------------------------------
+Three attempts asked a running server through chat commands, and this file used
+to refuse to answer at all because two of them were wrong in ways that would have
+certified islands that are not there:
+
+  1. Full sweep. Reading every height across nine columns in ONE batch lost
+     results -- surrounding surfaces came back y=1 and y=14 where the terrain is
+     60-80. The sweep was right; the batching was not.
+  2. Binary search. Cheaper, and STRUCTURALLY invalid here. Bisection needs a
+     column that is air above and solid below. A floating island is exactly the
+     shape that breaks it -- solid, air, solid -- so the search settles on an
+     arbitrary boundary. Measured: island top y=45, surrounding ground y=9-35,
+     against real terrain at 62-81.
+
+None of it was necessary. tier2-outpost runs Minecraft's own
+NoiseBasedChunkGenerator, so the column is an array in memory: no commands, no
+batch limit, no bisection, and no 45-second server boot. `OreGen floatserver`
+reads it directly, which is both exact and faster than either attempt.
+
+The refusal is gone because the thing it was protecting against is gone. It is
+still a refusal, not a guess, whenever the backend cannot answer -- an unreadable
+column prints UNKNOWN and exits 2.
 """
 import os
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-from java_oracle import JavaServer      # noqa: E402
+ROOT = os.path.dirname(HERE)
+FAST = os.path.join(ROOT, "tier2-outpost")
+sys.path.insert(0, FAST)
+from bench_fast import java_bin, classpath      # noqa: E402
 
-# Classify by what is NOT terrain, not by a list of what is. An 18-block SOLID
-# list called y=103 empty when it held pale_oak_leaves, which made a tree canopy
-# read as absent and a real disagreement look like a different one. The set of
-# things that are NOT ground is small and enumerable; the set of things that ARE
-# is not, so the whitelist was always going to lie eventually.
-NOT_TERRAIN = [
-    "minecraft:air", "minecraft:cave_air", "minecraft:void_air",
-    "minecraft:water", "minecraft:lava", "minecraft:vine", "minecraft:snow",
-    "minecraft:short_grass", "minecraft:tall_grass", "minecraft:fern",
-    "minecraft:large_fern", "minecraft:dead_bush", "minecraft:seagrass",
-    "minecraft:kelp", "minecraft:kelp_plant", "minecraft:glow_lichen",
-    "minecraft:hanging_roots", "minecraft:moss_carpet",
-]
-LEAFY = ("_leaves", "_log", "_wood", "_sapling", "_stem", "_hyphae",
-         "_planks", "_fence", "_slab", "_stairs")
-AIRY = ("minecraft:air", "minecraft:cave_air", "minecraft:void_air")
+DIRS = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+
+# An island has to clear both bars. The void is what makes it an island rather
+# than a hill; the ring is what makes it an island rather than a cave roof or an
+# overhang, which is the distinction that made the first two definitions call a
+# fifth of all outposts floating.
+MIN_VOID = 8
+MIN_LOWER = 6
 
 
-def is_terrain(block):
-    """Ground, as opposed to air, liquid, plants or anything built."""
-    if block is None:
-        return None                      # UNKNOWN -- never silently "no"
-    if block in NOT_TERRAIN:
-        return False
-    return not any(block.endswith(sfx) for sfx in LEAFY)
+class FloatPath:
+    """Persistent floatserver worker: (seed, x, z, gap) -> the column's shape."""
 
+    def __init__(self):
+        self.p = subprocess.Popen(
+            [java_bin(), "-Xmx2g", "-cp", classpath(), "OreGen", "floatserver"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, cwd=FAST, bufsize=1)
+        for line in self.p.stdout:
+            if line.strip().endswith("READY"):
+                return
+        raise RuntimeError("floatserver never reported READY")
 
-DIRS = [(1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1)]
+    def ask(self, seed, x, z, gap):
+        self.p.stdin.write(f"{seed} {x} {z} {gap}\n")
+        self.p.stdin.flush()
+        for line in self.p.stdout:
+            if line.startswith("F\t"):
+                t = line.rstrip("\n").split("\t")
+                return dict(f.split("=", 1) for f in t if "=" in f)
+        return None
 
-
-def top_solid(srv, x, z, y0, y1):
-    """Highest y in [y0,y1] holding one of the solid blocks, else None."""
-    best = None
-    for b in SOLID:
-        for y in srv.blocks(x, z, y0, y1, b):
-            if best is None or y > best:
-                best = y
-    return best
-
-
-# UNDER REPAIR -- this script does not currently give a trustworthy answer.
-#
-# Two faults are known and neither is fixed:
-#   1. top_solid() still references a SOLID list that was deleted when the
-#      classification moved to is_terrain(). It raises NameError.
-#   2. Before that, the batched column scan was returning implausible readings --
-#      surrounding surfaces at y=1 and y=14 where the real terrain is 60-80 --
-#      which means results were being lost, not measured. Sweeping ~260 heights
-#      across nine columns in one batch is the likely cause.
-#
-# It refuses rather than answering, because everything downstream treats this as
-# ground truth: the floating-island condition is only ever going to be as
-# trustworthy as its confirmer, and a confirmer that quietly reports a wrong
-# surface height would certify islands that are not there. The repair is a
-# binary search for the surface per column instead of a full sweep.
-BROKEN = (
-    "verify_floating will not report a verdict. Two attempts, both wrong:\n"
-    "\n"
-    "  1. Full sweep. Reading every height across nine columns in one batch\n"
-    "     lost results -- surrounding surfaces came back y=1 and y=14 where the\n"
-    "     terrain is 60-80.\n"
-    "  2. Binary search. Cheaper, and STRUCTURALLY invalid here. Bisection needs\n"
-    "     a column that is air above and solid below; a floating island is\n"
-    "     exactly the shape that breaks it (solid, air, solid), so the search\n"
-    "     settles on an arbitrary boundary. Measured: island top read as y=45\n"
-    "     and surrounding ground as y=9-35, where the real terrain is 62-81.\n"
-    "\n"
-    "The workable shape is a bounded sweep batched ONE COLUMN AT A TIME -- the\n"
-    "sweep was right, the batching was not. Not attempted yet.\n"
-    "\n"
-    "This is UNKNOWN, and deliberately not a statement about whether anything\n"
-    "floats: a confirmer that guesses would certify islands that are not there,\n"
-    "which is the one failure this pipeline exists to prevent."
-)
+    def close(self):
+        try:
+            self.p.stdin.write("quit\n")
+            self.p.stdin.flush()
+        except Exception:
+            pass
+        self.p.terminate()
 
 
 def main():
     if len(sys.argv) < 4:
         sys.exit(__doc__)
-    print(BROKEN)
-    return 2
     seed, x, z = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
     gap = 24
     for i, a in enumerate(sys.argv):
         if a == "--gap" and i + 1 < len(sys.argv):
             gap = int(sys.argv[i + 1])
 
-    with JavaServer(seed=seed, fresh=True, quiet=True) as srv:
-        srv.forceload(x, z, radius_chunks=3)
-        for dx, dz in DIRS:
-            srv.forceload(x + dx * gap, z + dz * gap, radius_chunks=1)
-        if not srv.loaded(x, z):
-            print("chunk would not load -- UNKNOWN, not a verdict")
-            return 2
-        cap = top_solid(srv, x, z, -60, 200)
-        if cap is None:
-            print("no solid block in the column at all")
-            return 2
-        # Walk down through the slab, then measure the void under it.
-        solid = set()
-        for b in SOLID:
-            solid.update(srv.blocks(x, z, -60, 200, b))
-        base = cap
-        while base - 1 in solid:
-            base -= 1
-        void = 0
-        y = base - 1
-        while y > -60 and y not in solid:
-            void += 1
-            y -= 1
-
-        print(f"seed {seed} at ({x},{z})")
-        print(f"  island top      y={cap}")
-        print(f"  island underside y={base}")
-        print(f"  void beneath     {void} blocks (down to y={base-void})")
-        print(f"\n  surrounding ground at {gap} blocks out:")
-        lower = 0
-        for dx, dz in DIRS:
-            rx, rz = x + dx * gap, z + dz * gap
-            rs = top_solid(srv, rx, rz, -60, 200) if srv.loaded(rx, rz) else None
-            mark = ""
-            if rs is None:
-                mark = "  (unknown -- chunk not loaded)"
-            elif rs < base:
-                lower += 1
-                mark = "  below the underside"
-            print(f"    ({dx:+d},{dz:+d})  top y={rs}{mark}")
-
+    w = FloatPath()
     try:
-        JavaServer(seed=seed).cleanup()
-    except Exception:
-        pass
+        kv = w.ask(seed, x, z, gap)
+    finally:
+        w.close()
+
+    # Three distinct ways to have no answer, kept distinct. Collapsing them into
+    # "not floating" is the failure this whole file is a monument to.
+    if kv is None:
+        print("floatserver returned nothing -- UNKNOWN, not a verdict")
+        return 2
+    if "err" in kv:
+        print(f"floatserver failed: {kv['err']} -- UNKNOWN, not a verdict")
+        return 2
+    if "empty" in kv:
+        print(f"seed {seed} at ({x},{z}): no solid block anywhere in the column."
+              f"\n  => NOT floating, and nothing is there at all.")
+        return 1
+
+    top, cap = int(kv["top"]), int(kv["cap"])
+    void, lower = int(kv["void"]), int(kv["lower"])
+    ring = [int(v) for v in kv["ring"].split(",")]
+
+    print(f"seed {seed} at ({x},{z})")
+    print(f"  island top       y={top}")
+    print(f"  island underside y={cap}")
+    print(f"  void beneath     {void} blocks (down to y={cap - void})")
+    print(f"\n  surrounding ground at {gap} blocks out:")
+    for (dx, dz), rt in zip(DIRS, ring):
+        if rt == -999:
+            mark = "  (no solid block in that column)"
+        elif rt < cap:
+            mark = "  below the underside"
+        else:
+            mark = ""
+        print(f"    ({dx:+d},{dz:+d})  top y={rt}{mark}")
 
     print(f"\n  {lower}/8 directions have ground below the island's underside")
-    if void >= 8 and lower >= 6:
+    if void >= MIN_VOID and lower >= MIN_LOWER:
         print("  => FLOATING: solid cap, a real void beneath, and the ground "
               "around it lies lower on almost every side.")
         return 0
-    if void < 8:
-        print("  => NOT floating: there is no meaningful void under the cap.")
+    if void < MIN_VOID:
+        print(f"  => NOT floating: the void under the cap is {void} blocks, "
+              f"under the {MIN_VOID} this requires.")
     else:
-        print("  => NOT floating: the void is real but the terrain continues "
-              "beside it, so this is a cave or an overhang rather than an island.")
+        print(f"  => NOT floating: the void is real but only {lower}/8 sides "
+              f"drop away, so this is a cave roof or an overhang rather than "
+              f"an island.")
     return 1
 
 
