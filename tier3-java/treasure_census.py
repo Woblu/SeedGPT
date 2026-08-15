@@ -24,6 +24,24 @@ from a hundred.
 Reports the depth distribution and what the chest lands on, and lists the deepest
 finds so they can be confirmed on the server. Fill agrees with the server 88% of
 the time, so anything surprising here is a LEAD, not a result.
+
+WHAT THE EARLIER 6646-CHEST RUN ACTUALLY MEASURED, and why it could not have
+found an ore casing except by luck: it scored `fill`, one block. Three different
+blocks reach a face, and the piece's own bytecode says which:
+
+    face already SOLID          -> left alone, keeps the standing terrain
+    face air/water, unsupported -> the FLOOR block (below the chest)
+    face air/water, supported   -> the FILL
+
+The floor is a dead end and provably so: the placement scan only stops where the
+block below is sandstone/stone/andesite/granite/diorite, so the floor is always
+one of those five and can never be ore. Chasing it would have cost hours to find
+a guaranteed zero.
+
+The untouched-solid face is the one that was never scored at all. A chest whose
+neighbour is iron ore keeps that iron ore -- the piece does not overwrite it --
+and every run so far logged that chest by its sand fill. This census now scores
+all six FINAL faces.
 """
 import os
 import sys
@@ -58,28 +76,40 @@ def main():
     print(f"census: seeds {start}..{start+nseeds-1}, radius {radius}", flush=True)
     t0 = time.time()
     w = OrePath()
-    fills, depths = Counter(), Counter()
+    fills, floors, faces, depths = Counter(), Counter(), Counter(), Counter()
     n, deepest, odd = 0, [], []
     try:
         for seed in range(start, start + nseeds):
             for (x, z) in locate(seed, "1.21", radius):
-                y, fill = w.probe(seed, x, z)
+                y, d = w.full(seed, x, z)
                 if y is None or y <= -64:
                     fills["<no placement>"] += 1
                     continue
                 n += 1
+                fill = d["fill"]
                 fills[fill] += 1
+                floors[d["floor"]] += 1
+                for b in d["cased"]:
+                    faces[b] += 1
                 depths[y // 10 * 10] += 1
                 if y <= deep_at:
                     deepest.append((y, seed, x, z, fill))
+                # Scored over the six FINAL faces, not the fill. A chest sitting
+                # against ore keeps that ore as its wall, and reading only the
+                # fill called every one of those sand.
+                #
                 # The first run tallied one copper_ore casing in 6646 chests and
                 # then could not say WHERE, having kept only counts. A rate of
                 # 0.015% means each hit is the entire result of hours of
                 # scanning; losing its coordinates wastes the whole run.
-                if fill not in COMMON_FILL:
-                    odd.append((y, seed, x, z, fill))
-                    print(f"  ODD  y={y} seed {seed} ({x},{z}) on "
-                          f"{fill.split(':')[-1]}", flush=True)
+                unusual = sorted({b for b in d["cased"] if b not in COMMON_FILL})
+                if unusual:
+                    odd.append((y, seed, x, z, ",".join(unusual), d))
+                    counts = Counter(d["cased"])
+                    shown = " ".join(f"{b.split(':')[-1]}x{counts[b]}"
+                                     for b in unusual)
+                    print(f"  ODD  y={y} seed {seed} ({x},{z})  {shown}"
+                          f"   [fill {fill.split(':')[-1]}]", flush=True)
             if (seed - start + 1) % 25 == 0:
                 el = time.time() - t0
                 print(f"  {n} chests, {el/60:.1f} min, {len(deepest)} below y{deep_at}",
@@ -93,15 +123,28 @@ def main():
     for band in sorted(depths):
         print(f"  y {band:4d}..{band+9:<4d}  {depths[band]:6d}  "
               f"{'#' * min(60, depths[band] * 60 // max(depths.values()))}")
-    print("\nwhat the chest lands on (headless view, 88% agreement with server):")
+    print("\nwhat the chest lands on -- FILL (headless, 88% agreement with server):")
     for b, c in fills.most_common(25):
+        print(f"  {c:6d}  {b}")
+    # Printed to be checked, not to be read past. The placement rule permits
+    # exactly five blocks here; anything else in this list means the scan or the
+    # decoded rule is wrong, and that matters more than the census.
+    print("\nFLOOR (must be only sandstone/stone/andesite/granite/diorite):")
+    for b, c in floors.most_common(25):
+        flag = "" if b.split(":")[-1] in (
+            "sandstone", "stone", "andesite", "granite", "diorite") else "   <-- RULE VIOLATED"
+        print(f"  {c:6d}  {b}{flag}")
+    print(f"\nACTUAL CASING -- all six faces of {n} chests ({6*n} faces):")
+    for b, c in faces.most_common(25):
         print(f"  {c:6d}  {b}")
 
     if odd:
         print(f"\nUNUSUAL CASINGS ({len(odd)} in {n} chests = "
               f"{100*len(odd)/max(n,1):.3f}%) -- confirm on the server:")
-        for (y, seed, x, z, fill) in sorted(odd):
-            print(f"  y={y:4d}  seed {seed:>9}  ({x},{z})  on {fill}")
+        for (y, seed, x, z, unusual, d) in sorted(odd):
+            print(f"  y={y:4d}  seed {seed:>9}  ({x},{z})  {unusual}")
+            print(f"        cased {d['cased']}")
+            print(f"        fill {d['fill']}  floor {d['floor']}")
             print(f"        python treasure_casing.py {seed}   # then /tp {x} {y} {z}")
     else:
         print(f"\nno unusual casing in {n} chests. At the measured ~0.015% "

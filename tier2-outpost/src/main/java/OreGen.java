@@ -413,7 +413,7 @@ public class OreGen {
                     // census: every chest landing in water is cased in sand no
                     // matter what it is sitting on.
                     BlockState fillState =
-                        (atPos.isAir() || !atPos.getFluidState().isEmpty())
+                        (atPos.isAir() || isLiquid(atPos))
                             ? Blocks.SAND.defaultBlockState() : atPos;
                     sb.append("\tfill=").append(name(fillState));
                     // TWO blocks can end up as casing, decoded from the loop's
@@ -421,15 +421,53 @@ public class OreGen {
                     // that face is also air/water and the direction is not UP,
                     // the game writes the block BELOW THE CHEST instead of the
                     // fill. So an overhanging face is cased in the floor block
-                    // while a supported one gets the fill. That is why seed 4
-                    // (1737,153) reads andesite x4 plus gravel x2 -- gravel was
-                    // the fill and andesite the floor, which looked like a
-                    // contradiction until the loop was read.
+                    // while a supported one gets the fill.
+                    //
+                    // This comment used to read seed 4 (1737,44,153) -- andesite
+                    // x4 plus gravel x2 -- as "gravel was the fill and andesite
+                    // the floor". That is backwards, and the bytecode refutes it
+                    // without needing a server: the server saw andesite on the
+                    // UP face, and the UP direction is excluded from the floor
+                    // branch, so an up face that was air or water can ONLY be
+                    // the fill. Andesite is the fill. The two gravel faces were
+                    // already solid and were never written at all -- which is
+                    // the reading tier3-java/README.md had right the first time.
+                    //
+                    // But `floor` is NOT a free variable, and this is the whole
+                    // reason to stop hunting it: the placement scan only STOPS
+                    // where the block below is sandstone/stone/andesite/granite/
+                    // diorite, so the floor is always one of those five. It can
+                    // never be ore. Emitted anyway, because it is a real half of
+                    // the casing and the readout should show what is there.
                     sb.append("\tfloor=").append(name(under));
+                    // Raw = the decorated terrain before the piece writes.
+                    // Cased = what the chest is ACTUALLY walled in, replicating
+                    // the six-direction loop exactly. They differ on every face
+                    // the piece leaves alone -- and a face that was already
+                    // SOLID is left alone, keeping whatever decoration put
+                    // there. That is the third source of an ore casing, and the
+                    // only one no census ever scored: fill and floor were
+                    // counted, the standing terrain never was.
                     int[][] f = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
-                    for (int[] d : f)
-                        sb.append('\t').append(name(
-                            c.getBlockState(new BlockPos(x + d[0], y + d[1], z + d[2]))));
+                    StringBuilder raw = new StringBuilder(), cased = new StringBuilder();
+                    for (int[] d : f) {
+                        BlockPos fp = new BlockPos(x + d[0], y + d[1], z + d[2]);
+                        BlockState fs = c.getBlockState(fp);
+                        BlockState beneath = c.getBlockState(fp.below());
+                        BlockState out;
+                        if (!(fs.isAir() || isLiquid(fs))) {
+                            out = fs;                       // solid: untouched
+                        } else if ((beneath.isAir() || isLiquid(beneath))
+                                   && d[1] != 1) {          // overhang, not UP
+                            out = under;                    // the floor block
+                        } else {
+                            out = fillState;
+                        }
+                        raw.append(',').append(name(fs));
+                        cased.append(',').append(name(out));
+                    }
+                    sb.append("\traw=").append(raw.substring(1));
+                    sb.append("\tcased=").append(cased.substring(1));
                 } catch (Throwable ex) {
                     if (System.getenv("OREGEN_TRACE") != null) ex.printStackTrace();
                     sb.setLength(0);
@@ -443,6 +481,19 @@ public class OreGen {
             return;
         }
         System.out.println("usage: OreGen oreserver");
+    }
+
+    // BuriedTreasurePiece.isLiquid, transcribed from its bytecode: an identity
+    // test against WATER and LAVA's DEFAULT states, and nothing else. This path
+    // used !getFluidState().isEmpty() instead, which is a different question and
+    // a wider one -- kelp, seagrass and every waterlogged block carry a fluid
+    // state while failing the game's test. Those landed here as "air or water"
+    // and were replaced by the hardcoded SAND, when the game would have taken
+    // the block itself as the fill. Some of the 22% fill disagreement with the
+    // server is this, not decoration.
+    static boolean isLiquid(BlockState st) {
+        return st == Blocks.WATER.defaultBlockState()
+            || st == Blocks.LAVA.defaultBlockState();
     }
 
     static String name(BlockState st) {

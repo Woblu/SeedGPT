@@ -75,7 +75,13 @@ class OrePath:
                 return
         raise RuntimeError("OreGen never reported READY")
 
-    def probe(self, seed, x, z):
+    def full(self, seed, x, z):
+        """(chestY, {fill, floor, raw[6], cased[6]}), or (None, None).
+
+        `cased` is the six faces the chest is ACTUALLY walled in, with the
+        piece's own loop applied. Everything before this returned `fill` alone,
+        which is one of three blocks that can end up on a face -- see probe().
+        """
         # A dead worker used to take the whole run with it via a broken pipe,
         # losing every chest scanned so far. It is restarted instead, and the
         # one chest that died is reported as unknown rather than as a result.
@@ -96,8 +102,29 @@ class OrePath:
                 if any(f.startswith("err=") for f in t):
                     return None, None
                 kv = dict(f.split("=", 1) for f in t if "=" in f)
-                return int(kv.get("chestY", -1)), kv.get("fill")
+                # An OreGen too old to emit raw=/cased= must not silently read
+                # as "six faces of nothing" -- that is the unknown-as-absent bug
+                # again, and it would make an ore hunt report a clean zero.
+                if "cased" not in kv or "raw" not in kv:
+                    raise RuntimeError(
+                        "OreGen did not emit raw=/cased= -- rebuild tier2-outpost; "
+                        "scoring fill alone misses ore standing in the terrain")
+                return int(kv.get("chestY", -1)), {
+                    "fill": kv.get("fill"), "floor": kv.get("floor"),
+                    "raw": kv["raw"].split(","), "cased": kv["cased"].split(","),
+                }
         return None, None
+
+    def probe(self, seed, x, z):
+        """Back-compat: (chestY, fill). Prefer full().
+
+        Kept because fill is still the single most informative block, but it is
+        NOT the casing. Three different blocks reach a face: the fill, the floor
+        (always one of the five landing blocks, so never ore), and -- on any face
+        that was already solid -- the standing terrain, untouched.
+        """
+        y, d = self.full(seed, x, z)
+        return y, (d["fill"] if d else None)
 
     def close(self):
         try:
@@ -162,16 +189,22 @@ def main():
         for seed in range(start, start + nseeds):
             for (x, z) in locate(seed, version, radius):
                 scanned += 1
-                y, fill = fast.probe(seed, x, z)
+                y, d = fast.full(seed, x, z)
                 if y is None:
                     continue
-                fills[fill] += 1
-                # Two ways onto the shortlist. An ore fill is the direct hit --
-                # this path can see ore now, which is the whole point of adding
-                # decoration. Depth stays as a second route because the fill
-                # agrees with the server only 78% of the time, so trusting it
-                # alone would drop real candidates it merely misread as sand.
-                if (fill and fill.endswith("_ore")) or (0 < y <= max_y):
+                fills[d["fill"]] += 1
+                # Three ways onto the shortlist. Ore on any of the six FINAL
+                # faces is the direct hit, and it is a strictly wider test than
+                # the ore-fill one it replaces: a face that was already solid
+                # keeps its terrain, so a chest walled in iron ore can have a
+                # perfectly ordinary sand fill. Scoring the fill alone dropped
+                # exactly those, and that is the shape of every empty ore hunt
+                # so far. Depth stays as the last route because the headless
+                # fill agrees with the server only 78% of the time, so trusting
+                # any block reading alone would drop real candidates it merely
+                # misread as sand.
+                ore_face = any(b.endswith("_ore") for b in d["cased"])
+                if ore_face or (d["fill"] or "").endswith("_ore") or 0 < y <= max_y:
                     deep.append((seed, x, z, y))
             if (seed - start + 1) % 20 == 0:
                 el = time.time() - t0
