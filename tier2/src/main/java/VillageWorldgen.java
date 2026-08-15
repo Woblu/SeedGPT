@@ -91,6 +91,92 @@ public class VillageWorldgen {
             }
             return;
         }
+        if (args.length > 0 && args[0].equals("carvediff")) {
+            // "carvediff <seed> <x> <z>" -- does CARVING change where a buried
+            // treasure lands and what it is cased in?
+            //
+            // This exists to test one hypothesis on the tier-2 1.21.1 path,
+            // which disagrees with a real server on ~7% of faces. Its
+            // genFullChunk runs createBiomes + fillFromNoise + buildSurface and
+            // never applyCarvers, while a real server chunk is carved between
+            // SURFACE and FEATURES. 1.21.1's applyCarvers takes a WorldGenRegion
+            // -- a concrete class the dynamic-proxy trick cannot supply -- so
+            // the hypothesis is untestable there. 1.16.5's takes a BiomeManager,
+            // so it IS testable here.
+            //
+            // Different version, so this is evidence about the MECHANISM, not a
+            // measurement of the 1.21.1 error. If carving moves nothing in 1.16
+            // the hypothesis is weak; if it moves chests and faces, it is the
+            // best remaining explanation and worth the cost of reaching it.
+            long sd = Long.parseLong(args[1]);
+            int x = Integer.parseInt(args[2]), z = Integer.parseInt(args[3]);
+            OverworldBiomeSource bs = new OverworldBiomeSource(
+                sd, false, false, BuiltinRegistries.BIOME);
+            NoiseBasedChunkGenerator cg = new NoiseBasedChunkGenerator(bs, sd, () -> overworld);
+            ChunkPos cp = new ChunkPos(x >> 4, z >> 4);
+            net.minecraft.world.level.chunk.ProtoChunk[] both =
+                new net.minecraft.world.level.chunk.ProtoChunk[2];
+            for (int pass = 0; pass < 2; pass++) {
+                net.minecraft.world.level.chunk.ProtoChunk ch =
+                    new net.minecraft.world.level.chunk.ProtoChunk(
+                        cp, net.minecraft.world.level.chunk.UpgradeData.EMPTY);
+                net.minecraft.core.BlockPos.MutableBlockPos mp =
+                    new net.minecraft.core.BlockPos.MutableBlockPos();
+                for (int bx = 0; bx < 16; bx++)
+                for (int bz = 0; bz < 16; bz++) {
+                    int wx = cp.getMinBlockX() + bx, wz = cp.getMinBlockZ() + bz;
+                    net.minecraft.world.level.BlockGetter col = cg.getBaseColumn(wx, wz);
+                    for (int y = 0; y < 256; y++) {
+                        net.minecraft.world.level.block.state.BlockState st =
+                            col.getBlockState(mp.set(wx, y, wz));
+                        if (!st.isAir()) ch.setBlockState(mp.set(wx, y, wz), st, false);
+                    }
+                }
+                if (pass == 1) {
+                    net.minecraft.world.level.biome.BiomeManager bm =
+                        new net.minecraft.world.level.biome.BiomeManager(bs, sd,
+                            net.minecraft.world.level.biome.FuzzyOffsetBiomeZoomer.INSTANCE);
+                    cg.applyCarvers(sd, bm, ch,
+                        net.minecraft.world.level.levelgen.GenerationStep.Carving.AIR);
+                    cg.applyCarvers(sd, bm, ch,
+                        net.minecraft.world.level.levelgen.GenerationStep.Carving.LIQUID);
+                }
+                both[pass] = ch;
+            }
+            String[] label = {"uncarved", "carved"};
+            for (int pass = 0; pass < 2; pass++) {
+                net.minecraft.world.level.chunk.ProtoChunk ch = both[pass];
+                int y = 255;
+                while (y > 0) {
+                    net.minecraft.world.level.block.state.BlockState st =
+                        ch.getBlockState(new net.minecraft.core.BlockPos(x, y, z));
+                    if (!st.isAir() && st.getFluidState().isEmpty()) break;
+                    y--;
+                }
+                // BuriedTreasurePiece's own descent, 1.16.5 rule.
+                int cy = y + 1;
+                while (cy > 0) {
+                    net.minecraft.world.level.block.Block b = ch.getBlockState(
+                        new net.minecraft.core.BlockPos(x, cy - 1, z)).getBlock();
+                    if (b == net.minecraft.world.level.block.Blocks.SANDSTONE
+                     || b == net.minecraft.world.level.block.Blocks.STONE
+                     || b == net.minecraft.world.level.block.Blocks.ANDESITE
+                     || b == net.minecraft.world.level.block.Blocks.GRANITE
+                     || b == net.minecraft.world.level.block.Blocks.DIORITE) break;
+                    cy--;
+                }
+                StringBuilder faces = new StringBuilder();
+                int[][] f = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
+                for (int[] d : f)
+                    faces.append(',').append(Registry.BLOCK.getKey(ch.getBlockState(
+                        new net.minecraft.core.BlockPos(x + d[0], cy + d[1], z + d[2])).getBlock()));
+                System.out.println(label[pass] + "\tchestY=" + cy
+                    + "\tat=" + Registry.BLOCK.getKey(ch.getBlockState(
+                          new net.minecraft.core.BlockPos(x, cy, z)).getBlock())
+                    + "\tfaces=" + faces.substring(1));
+            }
+            return;
+        }
         if (args.length > 0 && args[0].equals("carveserver")) {
             // Persistent worker: "seed x z" -> how far down the column is carved
             // open, and what is at the bottom. One JVM for a whole hunt.
