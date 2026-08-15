@@ -59,6 +59,100 @@ public class VillageWorldgen {
         villageCfg = overworld.structureSettings().getConfig(StructureFeature.VILLAGE);
         confReg = BuiltinRegistries.CONFIGURED_STRUCTURE_FEATURE;
 
+        if (args.length > 0 && args[0].equals("column")) {
+            // "column <seed> <x> <z> [y0 y1]" -- the NOISE terrain column, 1.16.5.
+            //
+            // getBaseColumn needs no WorldGenRegion, no ServerLevel and no
+            // StructureFeatureManager, which is what blocked every previous
+            // attempt at block-level 1.16 terrain. It returns base stone/water/
+            // air only: no surface rules and NO BEDROCK, both of which come
+            // later. That is a feature here, not a gap -- it shows the shape of
+            // the column the buried treasure scan actually falls down.
+            long seed = Long.parseLong(args[1]);
+            int x = Integer.parseInt(args[2]), z = Integer.parseInt(args[3]);
+            int y0 = args.length > 4 ? Integer.parseInt(args[4]) : 0;
+            int y1 = args.length > 5 ? Integer.parseInt(args[5]) : 70;
+            OverworldBiomeSource bs = new OverworldBiomeSource(
+                seed, false, false, BuiltinRegistries.BIOME);
+            NoiseBasedChunkGenerator cg = new NoiseBasedChunkGenerator(
+                bs, seed, () -> overworld);
+            net.minecraft.world.level.BlockGetter col = cg.getBaseColumn(x, z);
+            System.out.println("seed " + seed + " column (" + x + "," + z + ")"
+                + "   OCEAN_FLOOR_WG=" + cg.getBaseHeight(x, z,
+                      net.minecraft.world.level.levelgen.Heightmap.Types.OCEAN_FLOOR_WG)
+                + "   WORLD_SURFACE_WG=" + cg.getBaseHeight(x, z,
+                      net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE_WG));
+            System.out.println("NOTE: noise terrain only -- bedrock (y0-4) and "
+                + "surface rules are applied later and are NOT shown here.");
+            for (int y = y1; y >= y0; y--) {
+                net.minecraft.world.level.block.state.BlockState st =
+                    col.getBlockState(new net.minecraft.core.BlockPos(x, y, z));
+                System.out.println(y + "	" + Registry.BLOCK.getKey(st.getBlock()));
+            }
+            return;
+        }
+        if (args.length > 0 && args[0].equals("carved")) {
+            // "carved <seed> <x> <z> [y0 y1]" -- terrain WITH caves and ravines.
+            //
+            // getBaseColumn stops before the carvers, and for a buried treasure
+            // that is the whole story: the placement scan falls down an OPEN
+            // column, and only carving makes one. So the noise terrain is built
+            // into a ProtoChunk by hand and applyCarvers is run over it, which
+            // needs a BiomeManager and a ChunkAccess but -- unlike fillFromNoise
+            // -- no LevelAccessor and no StructureFeatureManager. That is what
+            // makes this reachable headlessly at all.
+            //
+            // Still absent: surface rules, and BEDROCK (y0-4), which is applied
+            // afterwards and OVERWRITES whatever the carvers left. So an open
+            // column reaching y<=4 here means the treasure scan can descend into
+            // the bedrock band; what it lands on there is decided by bedrock.
+            long seed = Long.parseLong(args[1]);
+            int x = Integer.parseInt(args[2]), z = Integer.parseInt(args[3]);
+            int y0 = args.length > 4 ? Integer.parseInt(args[4]) : 0;
+            int y1 = args.length > 5 ? Integer.parseInt(args[5]) : 70;
+            OverworldBiomeSource bs = new OverworldBiomeSource(
+                seed, false, false, BuiltinRegistries.BIOME);
+            NoiseBasedChunkGenerator cg = new NoiseBasedChunkGenerator(
+                bs, seed, () -> overworld);
+            ChunkPos cp = new ChunkPos(x >> 4, z >> 4);
+            net.minecraft.world.level.chunk.ProtoChunk chunk =
+                new net.minecraft.world.level.chunk.ProtoChunk(
+                    cp, net.minecraft.world.level.chunk.UpgradeData.EMPTY);
+            net.minecraft.core.BlockPos.MutableBlockPos mp =
+                new net.minecraft.core.BlockPos.MutableBlockPos();
+            for (int bx = 0; bx < 16; bx++) {
+                for (int bz = 0; bz < 16; bz++) {
+                    int wx = cp.getMinBlockX() + bx, wz = cp.getMinBlockZ() + bz;
+                    net.minecraft.world.level.BlockGetter c = cg.getBaseColumn(wx, wz);
+                    for (int y = 0; y < 256; y++) {
+                        net.minecraft.world.level.block.state.BlockState st =
+                            c.getBlockState(mp.set(wx, y, wz));
+                        if (!st.isAir()) chunk.setBlockState(mp.set(wx, y, wz), st, false);
+                    }
+                }
+            }
+            net.minecraft.world.level.biome.BiomeManager bm =
+                new net.minecraft.world.level.biome.BiomeManager(bs, seed,
+                    net.minecraft.world.level.biome.FuzzyOffsetBiomeZoomer.INSTANCE);
+            cg.applyCarvers(seed, bm, chunk, net.minecraft.world.level.levelgen.GenerationStep.Carving.AIR);
+            cg.applyCarvers(seed, bm, chunk, net.minecraft.world.level.levelgen.GenerationStep.Carving.LIQUID);
+            System.out.println("seed " + seed + " CARVED column (" + x + "," + z + ")"
+                + "   OCEAN_FLOOR_WG(noise)=" + cg.getBaseHeight(x, z,
+                      net.minecraft.world.level.levelgen.Heightmap.Types.OCEAN_FLOOR_WG));
+            System.out.println("bedrock (y0-4) and surface rules are applied "
+                + "AFTER this and are NOT shown.");
+            int openLow = -1;
+            for (int y = y1; y >= y0; y--) {
+                net.minecraft.world.level.block.state.BlockState st =
+                    chunk.getBlockState(new net.minecraft.core.BlockPos(x, y, z));
+                boolean air = st.isAir();
+                if (air) openLow = y;
+                System.out.println(y + "	" + Registry.BLOCK.getKey(st.getBlock())
+                    + (air ? "	<== CARVED OPEN" : ""));
+            }
+            System.out.println("lowest carved-open y in range: " + openLow);
+            return;
+        }
         if (args.length > 0 && args[0].equals("server")) {
             // Persistent worker: read "seed radius threshold" lines from stdin,
             // emit matching villages, then a "seed DONE" line. Amortises setup.
