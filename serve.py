@@ -1149,6 +1149,23 @@ def api_structoverlap(body) -> dict:
                         a, str(ax), str(az), b, str(bx), str(bz)],
                        TIMEOUTS["describe"])
     txt = out.strip()
+    engine = "cubiomes"
+    # cubiomes only ships piece generators for fortress and end_city, so it
+    # answers UNKNOWN for mansion -- which is the case that motivated this whole
+    # tool, since a mansion sprawls far past its origin and origin-to-origin
+    # distance says nothing useful about it. Rather than reimplement mansion
+    # layout, fall through to the REAL 1.21.1 generator, which is right by
+    # construction and works for every structure instead of one more special
+    # case. Slower (a JVM per structure), so it is a fallback and not the path.
+    if ("UNKNOWN" in txt or "ERROR" in txt) and version.startswith("1.21"):
+        alt = ROOT / "tier3-java" / "piece_overlap.py"
+        if (ROOT / "tier2-outpost" / "out" / "OutpostWorldgen.class").exists():
+            rc2, out2, err2 = run([sys.executable, str(alt), seed,
+                                   a, str(ax), str(az), b, str(bx), str(bz)],
+                                  TIMEOUTS["villagesmiths"])
+            if out2.strip():
+                txt = out2.strip()
+                engine = "real 1.21.1 generator"
     m = re.search(r"OVERLAP: (\d+) piece pairs intersect, (\d+) blocks", txt)
     gap = re.search(r"nearest\s+pieces are (\d+) blocks apart", txt)
     pcs = re.findall(r"^\s+\S+: (-?\d+) pieces$", txt, re.M)
@@ -1161,6 +1178,7 @@ def api_structoverlap(body) -> dict:
         "gap": int(gap.group(1)) if gap else None,
         "pieces": [int(x) for x in pcs],
         "raw": txt,
+        "engine": engine,
         # An engine that cannot assemble a structure must not be read as one
         # that checked and found nothing.
         "note": ("Piece-exact. cubiomes can assemble fortresses and end cities; "

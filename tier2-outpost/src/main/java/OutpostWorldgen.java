@@ -195,6 +195,71 @@ public class OutpostWorldgen {
             }
             return;
         }
+        if (args.length > 0 && args[0].equals("pieces")) {
+            // "pieces <seed> <structure> <x> <z>" -> every piece's real bounding
+            // box, from the GAME's own structure generator.
+            //
+            // Why this and not another C piece generator: cubiomes only ships
+            // generators for fortress and end_city, so build/structoverlap.exe
+            // answers UNKNOWN for everything else -- mansion included, which is
+            // the case that prompted the whole overlap tool (a mansion sprawls
+            // far past its origin, so origin-to-origin distance is meaningless
+            // for it). Reimplementing mansion layout in C would be a large,
+            // exactly-wrong-in-small-ways job. The real generator is already
+            // here and is right by construction, and this works for EVERY
+            // structure rather than one more special case.
+            long seed = Long.parseLong(args[1]);
+            String id = args[2];
+            int tx = Integer.parseInt(args[3]), tz = Integer.parseInt(args[4]);
+            Holder<Structure> st;
+            try {
+                st = worldgen.lookupOrThrow(Registries.STRUCTURE).getOrThrow(
+                    ResourceKey.create(Registries.STRUCTURE,
+                        ResourceLocation.parse(id.contains(":") ? id
+                                               : "minecraft:" + id)));
+            } catch (Throwable ex) {
+                System.out.println("ERROR\tno such structure " + id);
+                return;
+            }
+            MultiNoiseBiomeSource bsrc = MultiNoiseBiomeSource.createFromPreset(owParams);
+            NoiseBasedChunkGenerator cg = new NoiseBasedChunkGenerator(bsrc, noiseSettings);
+            RandomState rs = RandomState.create(noiseSettings.value(),
+                worldgen.lookupOrThrow(Registries.NOISE), seed);
+            int tcx = tx >> 4, tcz = tz >> 4;
+            StructureStart found = null;
+            // Searched outward rather than at the exact chunk: the caller passes
+            // a block position from the finder, and a structure's start chunk is
+            // not always the chunk that position lands in.
+            for (int r = 0; r <= 3 && found == null; r++)
+            for (int dcx = -r; dcx <= r && found == null; dcx++)
+            for (int dcz = -r; dcz <= r && found == null; dcz++) {
+                if (r > 0 && Math.abs(dcx) != r && Math.abs(dcz) != r) continue;
+                try {
+                    StructureStart start = st.value().generate(worldgen, cg, bsrc, rs,
+                        templates, seed, new ChunkPos(tcx + dcx, tcz + dcz), 0,
+                        OVERWORLD_HEIGHT, b -> true);
+                    if (start != null && start.isValid()) found = start;
+                } catch (Throwable t) { /* not here; keep looking */ }
+            }
+            if (found == null) {
+                // NOT "no pieces". The caller must be able to tell "this engine
+                // found nothing here" from "this structure has no extent", or it
+                // will report a non-overlap it never actually checked.
+                System.out.println("NOHIT\t" + seed + "\t" + id + "\t" + tx + "\t" + tz);
+                return;
+            }
+            System.out.println("START\t" + seed + "\t" + id
+                + "\t" + found.getChunkPos().x + "\t" + found.getChunkPos().z
+                + "\tpieces=" + found.getPieces().size());
+            for (net.minecraft.world.level.levelgen.structure.StructurePiece piece
+                     : found.getPieces()) {
+                BoundingBox b = piece.getBoundingBox();
+                System.out.println("P\t" + b.minX() + "\t" + b.minY() + "\t" + b.minZ()
+                    + "\t" + b.maxX() + "\t" + b.maxY() + "\t" + b.maxZ()
+                    + "\t" + pieceName(piece));
+            }
+            return;
+        }
         if (args.length > 0 && args[0].equals("height")) {
             // height <seed> <x> <z> -> real WORLD_SURFACE_WG / OCEAN_FLOOR_WG Y.
             long s = Long.parseLong(args[1]); int x = Integer.parseInt(args[2]), z = Integer.parseInt(args[3]);
@@ -318,7 +383,18 @@ public class OutpostWorldgen {
 
     // The jigsaw template name of a piece, e.g. "pillager_outpost/watchtower".
     static String pieceName(net.minecraft.world.level.levelgen.structure.StructurePiece piece) {
-        if (!(piece instanceof net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece)) return piece.getType().toString();
+        // Non-jigsaw pieces (mansion, monument, stronghold...) have no template
+        // name. getType().toString() on those is a lambda's identity hash --
+        // "StructurePieceType$$Lambda/0x...@131b016c" -- which is not a name, it
+        // is noise that changes every run. The registry key is the real one.
+        if (!(piece instanceof net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece)) {
+            try {
+                ResourceLocation k = net.minecraft.core.registries.BuiltInRegistries
+                    .STRUCTURE_PIECE.getKey(piece.getType());
+                if (k != null) return k.getPath();
+            } catch (Throwable ignored) { }
+            return piece.getClass().getSimpleName();
+        }
         try {
             Object el = ((net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece) piece).getElement();
             if (el instanceof net.minecraft.world.level.levelgen.structure.pools.SinglePoolElement) {
