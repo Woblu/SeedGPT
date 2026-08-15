@@ -216,15 +216,28 @@ Scored over 8057 chests (270 seeds, radius 3000). The same run was made twice,
 either side of a fix to headless decoration, and the difference is the whole
 point:
 
-| | broken decorator | fixed |
-|---|---|---|
-| ore faces | **0** / 48342 | **111** / 48342 |
-| ore-cased chests | **0** | **63** (0.78%) |
-| casing block types | 10 | 16 |
+| | broken decorator | tags fixed | + order fixed |
+|---|---|---|---|
+| ore faces | **0** / 48342 | 111 / 48342 | **75** / 48342 |
+| ore-cased chests | **0** | 63 | **60** (0.74%) |
+| ore as the `fill` | 0 | 31 chests | **0 — impossible** |
 
-`coal_ore` 58 faces, `copper_ore` 43, `iron_ore` 6, `lapis_ore` 4.
+Final figures: `copper_ore` 39 faces, `coal_ore` 30, `iron_ore` 5, `lapis_ore` 1.
 
-Two separate defects stacked, and they split the result almost evenly:
+The middle column is superseded and kept only to show the trap. It counted ore
+as the *fill* on 31 chests, which cannot happen: the chest is placed in
+`SURFACE_STRUCTURES`, before `UNDERGROUND_ORES`, so no ore exists yet when the
+landing block is read. Those were an artefact of scanning an already-decorated
+chunk. With the order corrected the FILL column contains **no ore at all**, in
+8057 chests — sand 6423, gravel 1427, dirt 205, and three one-offs.
+
+That sharpens the earlier claim rather than softening it. **A census that scores
+only `fill` finds exactly zero ore casings, always** — not "about half of them".
+Every ore casing that exists comes from standing terrain the piece never touched,
+or from decoration writing over the casing afterwards. Scoring the six final
+faces is not an improvement on fill-scoring; it is the only thing that works.
+
+Two separate defects stacked:
 
 1. **Only `fill` was scored.** Three blocks reach a face — the fill, the floor,
    and, on any face that was already solid, the standing terrain the piece never
@@ -233,6 +246,15 @@ Two separate defects stacked, and they split the result almost evenly:
 2. **Block tags were never bound** in the headless bootstrap, so every ore's
    `TagMatchTest` returned false and decoration placed no ore at all. Face
    scoring cannot see anything without a decorator. See `OreGen`'s header.
+3. **Decoration ran before placement**, inverting the game's own order, so any
+   chest whose floor had been replaced by an ore blob fell through it and landed
+   too low. Fixing (2) is what made this visible: with no ore placed, the
+   decorated chunk equals the plain one and the order cannot matter.
+
+One loose end: the FLOOR column shows a single `granite` in 8057 chests, and
+granite is a decoration blob that should not exist at placement time. 1 in 8057
+is not noise worth ignoring — it is either a real terrain case or a leak in the
+chunk reuse, and it has not been chased.
 
 Either fix alone would have found about half of this. Every empty ore result
 predating both is UNKNOWN, not evidence.
