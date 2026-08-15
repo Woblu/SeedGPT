@@ -314,7 +314,33 @@ decorated" caveat turns out not to matter for a chest at chunk-local (9,9). The
 geometry argument in `OreGen`'s header -- 8 blocks of margin against a blob
 reach of about 4 -- holds up empirically.
 
-**Leading candidate now: carvers.** `OutpostWorldgen.genFullChunk` runs
+**LOCALISED: it is terrain, not casing.** Comparing OreGen's `raw` faces (the
+terrain before the piece writes anything) against the server, for all seven
+disagreeing chests:
+
+| chest | server | headless `raw` |
+|---|---|---|
+| (-1991,-87) | stone | gravel |
+| (-1159,-279) | sand | dirt |
+| (-935,-727) | stone | sandstone |
+| (-391,937) | gravel | sand |
+| (-343,2857) | sand / sandstone | dirt / stone |
+| (2009,-759) | sand | dirt |
+| (2601,-71) | dirt | sand |
+
+**Every disagreement sits on a face that was already SOLID**, so the piece never
+wrote it -- and not one is on a fill-written face. The casing logic is not
+implicated. These are differences in generated terrain, and specifically in the
+sediment layer and its boundary with stone: dirt/sand, gravel/stone, sand/gravel,
+sandstone/stone. That is `genFullChunk`'s surface step, which means it affects
+**everything** built on tier-2 rather than only casings.
+
+Three hypotheses tested and dead: cross-border decoration (3x3 run is
+byte-identical), carvers (carving moves nothing for ordinary chests), and nearby
+structures (only 1 of 7 disagreeing chests has an ocean ruin or shipwreck within
+32 blocks, against 0 of 45 agreeing; medians 167 vs 153).
+
+**Old note kept for the record: carvers.** `OutpostWorldgen.genFullChunk` runs
 `createBiomes` + `fillFromNoise` + `buildSurface` and *never* `applyCarvers`,
 but a real server chunk is carved between SURFACE and FEATURES. Untested,
 because 1.21.1's `applyCarvers` requires a `WorldGenRegion` -- a concrete class,
