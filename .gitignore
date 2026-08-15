@@ -55,3 +55,5 @@ tier3-java/run-*/
 tier3-java/run-*/
 tier3-java/*.jsonl
 tier3-java/*.log
+server-1.16.5.jar
+boot165/

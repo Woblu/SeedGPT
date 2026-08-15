@@ -33,8 +33,14 @@ import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-JAR = os.path.join(HERE, "server.jar")
-JAVA = os.environ.get("JAVA_HOME", r"C:\Program Files\Java\jdk-21") + r"\bin\java.exe"
+
+# Both overridable, because the oracle is no longer only ever 1.21.1. Older
+# versions need both a different jar AND an older JDK -- 1.16.5 predates Java 17
+# and will not boot on 21 -- so pinning either one here would quietly make every
+# pre-1.18 question unanswerable.
+JAR = os.environ.get("MC_SERVER_JAR") or os.path.join(HERE, "server.jar")
+JAVA = os.environ.get("MC_JAVA") or (
+    os.environ.get("JAVA_HOME", r"C:\Program Files\Java\jdk-21") + r"\bin\java.exe")
 
 _LIVE = []
 
@@ -70,6 +76,9 @@ class JavaServer:
         self.q = queue.Queue()
         self._n = 0
         self._forced = set()
+        # Which y holds the bedrock floor, learned on first use: -64 from 1.18,
+        # 0 before it. None until something asks.
+        self._floor = None
         self.port = self._free_port()
 
     # -- lifecycle ---------------------------------------------------------
@@ -246,9 +255,24 @@ class JavaServer:
         self._forced.add(key)
 
     def loaded(self, x, z):
-        """Is this column actually generated? y=-64 is bedrock in every one."""
-        out = self.run(f"execute if block {x} -64 {z} minecraft:bedrock run say LOADED")
-        return any("LOADED" in l for l in out)
+        """Is this column actually generated? Bedrock sits on the world floor.
+
+        The floor is NOT always y=-64. That is 1.18+; before it the world bottom
+        is y=0. Probing only -64 made every pre-1.18 chunk report "not loaded",
+        so a 1.16 server answered UNKNOWN to every question -- which reads as a
+        broken world rather than as a wrong constant, and is exactly the
+        version-assumption trap this project keeps hitting.
+
+        Both are probed, and the one that answers is remembered.
+        """
+        floors = [self._floor] if self._floor is not None else [-64, 0]
+        for fy in floors:
+            out = self.run(
+                f"execute if block {x} {fy} {z} minecraft:bedrock run say LOADED")
+            if any("LOADED" in l for l in out):
+                self._floor = fy
+                return True
+        return False
 
     def blocks(self, x, z, y0, y1, block):
         """Which y in [y0, y1] hold `block`? None if the chunk is not loaded.
