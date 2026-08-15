@@ -254,6 +254,35 @@ It also kills a hunt worth hours: since the scan only *stops* where the block
 below is one of those five, the floor can never be ore. Scoring it is a
 guaranteed zero, provable from the bytecode without running anything.
 
+#### How far the headless path can be trusted
+
+Measured by `tier2-outpost/verify_oregen.py` against a real server, 33 chests of
+seed 20094, after both the tag fix and the generation-order fix:
+
+| | agreement |
+|---|---|
+| `chestY` | 33/33 (**100%**) |
+| individual faces | 185/198 (93%) |
+| **all six faces of a chest** | 26/33 (**79%**) |
+
+The last row is the number a hunt depends on, and it is why this path
+**shortlists rather than decides**. Every lead still goes to the server.
+
+Older figures quoted around this project -- "chestY 96%, fill 78%" -- are not
+comparable and should not be cited. They compared one `fill` block against the
+*modal* server face, and they were measured against the decorator that placed no
+ore.
+
+Two things worth knowing about the 13 remaining face disagreements: they are the
+**same chests and faces** before and after the ordering fix, so they are a
+separate defect; and **none of them involves an ore block**. They are all
+sediment confusions -- dirt/sand, gravel/stone, sand/gravel, sandstone/stone --
+and they cluster 2-3 faces to a chest, which is the signature of the *fill*
+block differing rather than of individual faces going wrong. The most likely
+cause is the documented single-chunk limitation: OreGen decorates only the
+chest's own chunk, while vanilla decorates a 3x3 neighbourhood whose blobs write
+across chunk borders. Not yet confirmed.
+
 **Iron stays genuinely scarce** — 6 faces in 8057 chests. That one is not a bug.
 Treasure lands at y 40–70 and 1.18+ iron peaks at y 16, so the depth argument in
 `hunt_iron_casing.py` was right all along. The empty iron hunts had two causes
