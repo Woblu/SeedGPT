@@ -28,6 +28,30 @@ import java.util.TreeMap;
 
 // Ore decoration, headless.
 //
+// READ THIS BEFORE TRUSTING ANY ORE RESULT FROM THIS CLASS.
+//
+// It does not currently work, and it fails in the direction that looks like an
+// answer. `OreGen orescan <seed> <x> <z>` tallies the chunk with and without
+// applyBiomeDecoration and prints the diff. Measured over four chunks -- one
+// ocean, three land -- the entire contribution of decoration is:
+//
+//     glow_lichen, lava springs, water springs, magma_block.  ~10 blocks.
+//     ZERO ore. Zero andesite, granite, diorite. Zero vegetation.
+//
+// The whole UNDERGROUND_ORES step places nothing. The deepslate_iron_ore,
+// raw_iron_block and tuff that show up in a scan are ALREADY THERE before
+// decoration runs -- they come from the noise ore-vein generator during terrain
+// generation, and they are the only ore this path has ever been able to see.
+//
+// So a hunt built on this reports "no ore" everywhere and is not wrong about
+// the world, it is silent about it: an 8057-chest census scored 48342 casing
+// faces and found ore on none, which measures this bug and not Minecraft. That
+// is the unknown-reported-as-absent failure the project keeps rediscovering,
+// and it is the reason to distrust every empty ore result taken through here.
+//
+// Whatever the cause, the discriminating fact is that the features which DO
+// place (springs, glow lichen, magma) survive while every ore feature does not.
+//
 // The tier-2 path generates terrain and surface rules but stops before
 // applyBiomeDecoration, which is where ore is placed -- so it can say where a
 // buried treasure chest lands but not what it lands ON. That gap is the reason
@@ -379,6 +403,40 @@ public class OreGen {
             }
             return;
         }
+        if (argv.length > 0 && argv[0].equals("orescan")) {
+            // "orescan <seed> <x> <z>": tally EVERY block in the decorated
+            // chunk. This exists because a census of 8057 chests found ore on
+            // 0 of 48342 casing faces, and near-zero andesite/granite/diorite
+            // anywhere -- and "no ore in the world" and "no ore being placed by
+            // this path" produce the identical readout. A zero from a decorator
+            // that never ran is not a fact about Minecraft. This says which it
+            // is by counting the chunk itself rather than the six blocks the
+            // chest happens to touch.
+            long s = Long.parseLong(argv[1]);
+            int x = Integer.parseInt(argv[2]), z = Integer.parseInt(argv[3]);
+            // Tallied BOTH ways. A decorated chunk on its own cannot tell the
+            // difference between "the decorator placed nothing" and "the
+            // decorator never ran": both hand back terrain. The undecorated
+            // chunk is the control, and the diff is the only honest measure of
+            // what applyBiomeDecoration actually contributed.
+            ChunkAccess plain = OutpostWorldgen.genFullChunk(s, x >> 4, z >> 4);
+            TreeMap<String, Integer> before = tallyChunk(plain, x >> 4, z >> 4);
+            ChunkAccess c = genDecoratedChunk(s, x >> 4, z >> 4);
+            TreeMap<String, Integer> after = tallyChunk(c, x >> 4, z >> 4);
+            java.util.TreeSet<String> all = new java.util.TreeSet<>(before.keySet());
+            all.addAll(after.keySet());
+            System.out.println("block\tbefore\tafter\tdelta");
+            int changed = 0;
+            for (String k : all) {
+                int b = before.getOrDefault(k, 0), a = after.getOrDefault(k, 0);
+                if (a != b) changed++;
+                System.out.println(k + "\t" + b + "\t" + a + "\t" + (a - b));
+            }
+            System.out.println("blocks whose count changed: " + changed);
+            if (!UNIMPLEMENTED.isEmpty())
+                System.out.println("UNIMPLEMENTED: " + UNIMPLEMENTED);
+            return;
+        }
         if (argv.length > 0 && argv[0].equals("oreserver")) {
             // "seed x z" -> chest Y and the six face blocks, WITH ores.
             Bootstrap0.println("READY");
@@ -494,6 +552,16 @@ public class OreGen {
     static boolean isLiquid(BlockState st) {
         return st == Blocks.WATER.defaultBlockState()
             || st == Blocks.LAVA.defaultBlockState();
+    }
+
+    static TreeMap<String, Integer> tallyChunk(ChunkAccess c, int cx, int cz) {
+        TreeMap<String, Integer> t = new TreeMap<>();
+        for (int bx = 0; bx < 16; bx++)
+          for (int bz = 0; bz < 16; bz++)
+            for (int by = -64; by < 200; by++)
+                t.merge(name(c.getBlockState(
+                    new BlockPos(cx * 16 + bx, by, cz * 16 + bz))), 1, Integer::sum);
+        return t;
     }
 
     static String name(BlockState st) {
