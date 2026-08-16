@@ -1132,8 +1132,18 @@ done
 # which is where the join's "decide before you compute" bug hid, so it is worth
 # the two minutes it costs to keep watching it.
 section "meet-in-the-middle solver"
-for s in swamp_hut village ruined_portal ancient_city pillager_outpost monument mansion end_city; do
-  ./build/mitm.exe 1.21 "$s" --verify > "/tmp/sc_test/mitm_$s.out" 2>&1
+# The eight verifies are independent runs over disjoint structures, and this
+# section was 635s of a 811s suite -- 78% of the whole thing -- purely because
+# they went one after another. They are spawned together now.
+#
+# The RESULTS are still judged in this shell, one at a time. ok/bad increment
+# `pass` and `fail`, which are plain shell variables: score them inside an xargs
+# child and the counts vanish with the subshell, and the suite reports fewer
+# tests than it ran while still exiting 0.
+MITM_STRUCTS="swamp_hut village ruined_portal ancient_city pillager_outpost monument mansion end_city"
+printf '%s\n' $MITM_STRUCTS | xargs -P "$(nproc 2>/dev/null || echo 4)" -I{} \
+  sh -c './build/mitm.exe 1.21 {} --verify > /tmp/sc_test/mitm_{}.out 2>&1'
+for s in $MITM_STRUCTS; do
   if grep -q "^OK" "/tmp/sc_test/mitm_$s.out"; then
     np=$(grep -oE '^[0-9]+ passed' "/tmp/sc_test/mitm_$s.out" | grep -oE '^[0-9]+')
     ok "$s: sound and complete ($np checks, nested set == join set)"
