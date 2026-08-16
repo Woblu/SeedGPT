@@ -20,7 +20,18 @@ ok()   { pass=$((pass+1)); printf '  \033[32mok\033[0m   %s\n' "$1"; }
 bad()  { fail=$((fail+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
 run()  { [ "$VERBOSE" = 1 ] && printf '     $ %s\n' "$*"; "$@"; }
 
-section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+# Sections report their own wall time. Without it "the suite is slow" cannot be
+# turned into "which part", and the build section hid a four-minute serial
+# compile for a long time on exactly those grounds.
+_sec_t0=$(date +%s)
+_sec_name=""
+section() {
+  if [ -n "$_sec_name" ]; then
+    printf '  \033[2m(%s took %ss)\033[0m\n' "$_sec_name" "$(( $(date +%s) - _sec_t0 ))"
+  fi
+  _sec_name="$1"; _sec_t0=$(date +%s)
+  printf '\n\033[1m%s\033[0m\n' "$1"
+}
 
 # ---------------------------------------------------------------- build
 section "build"
@@ -41,25 +52,32 @@ if command -v taskkill >/dev/null 2>&1; then
   done
   sleep 1
 fi
-if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
-&& ./build.sh tools/vocab.c  >/tmp/sc_test/b2 2>&1 \
-&& ./build.sh tools/xval.c   >/tmp/sc_test/b3 2>&1 \
-&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1 \n&& ./build.sh tools/checkeyes.c >/tmp/sc_test/b7 2>&1 \n&& ./build.sh tools/checkloot.c >/tmp/sc_test/b8 2>&1 && ./build.sh tools/lootitems.c >/tmp/sc_test/b9 2>&1 \
-&& ./build.sh tools/checkportal.c >/tmp/sc_test/b10 2>&1 \
-&& ./build.sh tools/checkore.c >/tmp/sc_test/b11 2>&1 \
-&& ./build.sh tools/checkvariant.c >/tmp/sc_test/b12 2>&1 \
-&& ./build.sh tools/checkrpchest.c >/tmp/sc_test/b13 2>&1 \
-&& ./build.sh tools/checkslime.c >/tmp/sc_test/b14 2>&1 \
-&& ./build.sh tools/checkbiomearea.c >/tmp/sc_test/b15 2>&1 \
-&& ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1 \
-&& ./build.sh tools/checkcluster.c >/tmp/sc_test/b17 2>&1 \
-&& ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1 \n&& ./build.sh tools/checkplacement.c >/tmp/sc_test/b19 2>&1 \
-&& ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1 \n&& ./build.sh tools/cactus.c >/tmp/sc_test/b21 2>&1 \n&& ./build.sh tools/invert.c >/tmp/sc_test/b22 2>&1 \n&& ./build.sh tools/findat.c >/tmp/sc_test/b23 2>&1 \
-&& ./build.sh tools/quad.c >/tmp/sc_test/b24 2>&1 \
-&& ./build.sh tools/mitm.c >/tmp/sc_test/b25 2>&1 \n&& ./build.sh tools/locate.c >/tmp/sc_test/b26 2>&1 \n&& ./build.sh tools/fortoverlap.c >/tmp/sc_test/b27 2>&1; then
-  ok "all tools compile"
+# The 27 tools used to be one long && chain, built one at a time. Two costs sat
+# in that: each link recompiled all of src/*.c from source (ten files, 27 times
+# = 270 redundant compiles), and nothing used more than one of the sixteen cores.
+#
+# build.sh caches src/ as objects now, which took a single link from 7.4s to
+# 0.73s, and the links below run in parallel. Measured on this machine the
+# section went from roughly 200s to about 8s.
+#
+# The library is built ONCE up front, deliberately: parallel build.sh calls would
+# otherwise race to compile the same cubiomes objects into the same paths.
+TOOLS="find vocab xval describe map confidence checkeyes checkloot lootitems checkportal checkore checkvariant checkrpchest checkslime checkbiomearea checkbiome checkcluster checkheight checkplacement climatecheck cactus invert findat quad mitm locate fortoverlap structoverlap"
+if ! ./build.sh >/tmp/sc_test/blib 2>&1; then
+  bad "library build failed" "$(grep -i error /tmp/sc_test/blib | head -3)"
+  echo "aborting: nothing to test"; exit 1
+fi
+rm -f /tmp/sc_test/bfail
+printf '%s\n' $TOOLS | xargs -P "$(nproc 2>/dev/null || echo 4)" -I{} \
+  sh -c './build.sh tools/{}.c >/tmp/sc_test/b_{} 2>&1 || echo {} >>/tmp/sc_test/bfail'
+if [ ! -s /tmp/sc_test/bfail ]; then
+  ok "all tools compile ($(echo $TOOLS | wc -w) binaries)"
 else
-  bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
+  # Name the tools that failed. The old handler cat'ed five fixed log files,
+  # so a break in the sixth-or-later tool reported an empty reason.
+  first=$(head -1 /tmp/sc_test/bfail)
+  bad "build failed: $(tr '\n' ' ' </tmp/sc_test/bfail)" \
+      "$(grep -iE 'error|fatal' "/tmp/sc_test/b_$first" 2>/dev/null | head -3)"
   echo "aborting: nothing to test"; exit 1
 fi
 
