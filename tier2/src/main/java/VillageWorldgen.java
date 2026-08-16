@@ -134,7 +134,8 @@ public class VillageWorldgen {
                 }
                 if (pass == 1) {
                     net.minecraft.world.level.biome.BiomeManager bm =
-                        new net.minecraft.world.level.biome.BiomeManager(bs, sd,
+                        new net.minecraft.world.level.biome.BiomeManager(bs,
+                            net.minecraft.world.level.biome.BiomeManager.obfuscateSeed(sd),
                             net.minecraft.world.level.biome.FuzzyOffsetBiomeZoomer.INSTANCE);
                     cg.applyCarvers(sd, bm, ch,
                         net.minecraft.world.level.levelgen.GenerationStep.Carving.AIR);
@@ -232,7 +233,8 @@ public class VillageWorldgen {
                         }
                     }
                     net.minecraft.world.level.biome.BiomeManager bm =
-                        new net.minecraft.world.level.biome.BiomeManager(bs, sd,
+                        new net.minecraft.world.level.biome.BiomeManager(bs,
+                            net.minecraft.world.level.biome.BiomeManager.obfuscateSeed(sd),
                             net.minecraft.world.level.biome.FuzzyOffsetBiomeZoomer.INSTANCE);
                     cg.applyCarvers(sd, bm, chunk,
                         net.minecraft.world.level.levelgen.GenerationStep.Carving.AIR);
@@ -310,7 +312,8 @@ public class VillageWorldgen {
                 }
             }
             net.minecraft.world.level.biome.BiomeManager bm =
-                new net.minecraft.world.level.biome.BiomeManager(bs, seed,
+                new net.minecraft.world.level.biome.BiomeManager(bs,
+                            net.minecraft.world.level.biome.BiomeManager.obfuscateSeed(seed),
                     net.minecraft.world.level.biome.FuzzyOffsetBiomeZoomer.INSTANCE);
             cg.applyCarvers(seed, bm, chunk, net.minecraft.world.level.levelgen.GenerationStep.Carving.AIR);
             cg.applyCarvers(seed, bm, chunk, net.minecraft.world.level.levelgen.GenerationStep.Carving.LIQUID);
