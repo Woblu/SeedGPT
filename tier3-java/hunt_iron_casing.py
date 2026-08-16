@@ -40,7 +40,7 @@ FAST = os.path.join(ROOT, "tier2-outpost")
 sys.path.insert(0, HERE)
 sys.path.insert(0, FAST)
 from java_oracle import JavaServer                              # noqa: E402
-from treasure_probe import locate, CANDIDATES                   # noqa: E402
+from treasure_probe import locate, CANDIDATES, CHEST_Y0, CHEST_Y1                   # noqa: E402
 from hunt_treasure_ore import face_probe, SCREEN, ORESET        # noqa: E402
 from treasure_casing import FACES                               # noqa: E402
 from bench_fast import java_bin, classpath                      # noqa: E402
@@ -241,7 +241,7 @@ def main():
                 for (x, z, py) in spots:
                     if not srv.loaded(x, z):
                         continue
-                    ys = srv.blocks(x, z, 10, 110, "minecraft:chest")
+                    ys = srv.blocks(x, z, CHEST_Y0, CHEST_Y1, "minecraft:chest")
                     for y in sorted(ys):
                         probed += 1
                         full = face_probe(srv, x, y, z, SCREEN)

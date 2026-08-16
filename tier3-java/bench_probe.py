@@ -25,7 +25,7 @@ from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from java_oracle import JavaServer                 # noqa: E402
-from treasure_probe import locate                  # noqa: E402
+from treasure_probe import locate, CHEST_Y0, CHEST_Y1                  # noqa: E402
 from hunt_treasure_ore import face_probe, SCREEN   # noqa: E402
 
 
@@ -53,7 +53,7 @@ def main():
             if not ok:
                 continue
             a = time.time()
-            ys = srv.blocks(x, z, 10, 110, "minecraft:chest")
+            ys = srv.blocks(x, z, CHEST_Y0, CHEST_Y1, "minecraft:chest")
             t["scan"] += time.time() - a
             for y in sorted(ys):
                 a = time.time()

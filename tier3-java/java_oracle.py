@@ -57,6 +57,12 @@ atexit.register(_kill_all)
 
 LINE = re.compile(r"^\[[\d:]+\] \[(?P<who>[^\]]+)\]: (?P<msg>.*)$")
 
+# Server responses that echo the failing command back at you. Anything matching
+# these is a parse failure, never a result -- see run().
+_CMD_ERROR = re.compile(
+    r"<--\[HERE\]|Unknown block type|Unknown item|Incorrect argument|"
+    r"Unknown or incomplete command|Expected whitespace")
+
 
 class JavaServer:
     def __init__(self, seed, world="world", ram="2G", quiet=True, fresh=False):
@@ -76,6 +82,10 @@ class JavaServer:
         self.q = queue.Queue()
         self._n = 0
         self._forced = set()
+        # Command-parse failures, kept rather than discarded: a probe finding
+        # nothing because its block ids are wrong for this version must be
+        # distinguishable from one finding nothing because nothing is there.
+        self.errors = []
         # Which y holds the bedrock floor, learned on first use: -64 from 1.18,
         # 0 before it. None until something asks.
         self._floor = None
@@ -240,7 +250,28 @@ class JavaServer:
             if tag in line:
                 return out
             m = LINE.match(line)
-            out.append(m.group("msg") if m else line)
+            msg = m.group("msg") if m else line
+            # A command the server cannot parse is echoed back IN FULL in the
+            # error, marker and all:
+            #
+            #   Unknown block type 'minecraft:rooted_dirt'
+            #   ...execute if block 41 4 73 minecraft:rooted_dirt run say F0_7<--[HERE]
+            #
+            # Every probe here works by grepping the output for its own marker,
+            # so an unparseable command REPORTS ITSELF AS A MATCH. One block in
+            # the candidate list that does not exist in the server's version
+            # therefore matches every position probed -- silently, confidently
+            # and wrongly. Measured against 1.16.5: all six faces of a chest came
+            # back `rooted_dirt`, a block added in 1.17, because it was the first
+            # too-new candidate in an otherwise 1.21-era list.
+            #
+            # These lines carry no results, only the command that failed, so
+            # dropping them here fixes every caller at once rather than asking
+            # each marker regex to defend itself.
+            if _CMD_ERROR.search(msg):
+                self.errors.append(msg)
+                continue
+            out.append(msg)
 
     # -- probing -----------------------------------------------------------
 

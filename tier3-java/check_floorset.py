@@ -30,7 +30,7 @@ from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from java_oracle import JavaServer                  # noqa: E402
-from treasure_probe import locate, CANDIDATES       # noqa: E402
+from treasure_probe import locate, CANDIDATES, CHEST_Y0, CHEST_Y1       # noqa: E402
 
 FLOOR = {"minecraft:sandstone", "minecraft:stone", "minecraft:andesite",
          "minecraft:granite", "minecraft:diorite"}
@@ -48,7 +48,7 @@ def main():
             for (x, z) in spots:
                 if not srv.loaded(x, z):
                     continue
-                ys = sorted(srv.blocks(x, z, 10, 110, "minecraft:chest"))
+                ys = sorted(srv.blocks(x, z, CHEST_Y0, CHEST_Y1, "minecraft:chest"))
                 if len(ys) != 1:
                     continue            # ambiguous column; another chest may share it
                 y = ys[0]

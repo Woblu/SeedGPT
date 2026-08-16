@@ -25,7 +25,7 @@ from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from java_oracle import JavaServer                                    # noqa: E402
-from treasure_probe import locate, shell_probe, classify, INTERESTING  # noqa: E402
+from treasure_probe import locate, shell_probe, classify, INTERESTING, CHEST_Y0, CHEST_Y1  # noqa: E402
 
 
 def main():
@@ -53,7 +53,7 @@ def main():
                     srv.forceload(x, z, radius_chunks=2)
                     if not srv.loaded(x, z):
                         continue                       # unknown, not absent
-                    chest_ys = srv.blocks(x, z, -64, 120, "minecraft:chest")
+                    chest_ys = srv.blocks(x, z, CHEST_Y0, CHEST_Y1, "minecraft:chest")
                     if not chest_ys:
                         continue
                     for y in sorted(chest_ys):

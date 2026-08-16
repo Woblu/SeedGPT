@@ -26,7 +26,7 @@ from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from java_oracle import JavaServer                          # noqa: E402
-from treasure_probe import CANDIDATES                       # noqa: E402
+from treasure_probe import CANDIDATES, CHEST_Y0, CHEST_Y1                       # noqa: E402
 from hunt_treasure_ore import face_probe                    # noqa: E402
 from treasure_casing import FACES                           # noqa: E402
 
@@ -50,7 +50,7 @@ def main():
             print("chunk would not load -- UNKNOWN, which is not the same as "
                   "'no treasure here'")
             return 2
-        ys = sorted(srv.blocks(x, z, 10, 110, "minecraft:chest"))
+        ys = sorted(srv.blocks(x, z, CHEST_Y0, CHEST_Y1, "minecraft:chest"))
         if not ys:
             print(f"no chest in the column at ({x},{z}) -- the fast path "
                   f"predicted a treasure the real world does not have there")

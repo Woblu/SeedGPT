@@ -99,6 +99,20 @@ def locate(seed, version, radius):
     return out
 
 
+# The y range to sweep when looking for the chest. NOT 10..110, which six
+# scripts used to hardcode: buried treasure in a pre-1.18 world can sit in the
+# bedrock band at y=1..4 (confirmed on a real 1.16.5 server, seed
+# 4184348446460745435 at 41/4/73), and a 10..110 sweep reports "no chest" for
+# exactly the case worth looking at. That is the unknown-as-absent failure this
+# project keeps rediscovering, in a magic number.
+#
+# The bottom is below both world floors (-64 from 1.18, 0 before it); probing a
+# y that does not exist simply fails to match, which is harmless. The cost is
+# one console command per y, against ~6.5s of chunk generation per chest -- the
+# widening is free in practice.
+CHEST_Y0, CHEST_Y1 = -64, 140
+
+
 def shell_probe(srv, x, y, z, candidates=None):
     """Identify all 26 neighbours of (x,y,z) in ONE server round trip.
 
@@ -163,7 +177,7 @@ def main():
             if not srv.loaded(x, z):
                 print(f"  ({x},{z}) chunk would not load -- UNKNOWN, not reported as absent")
                 continue
-            ys = srv.blocks(x, z, -64, 120, "minecraft:chest")
+            ys = srv.blocks(x, z, CHEST_Y0, CHEST_Y1, "minecraft:chest")
             if not ys:
                 # The treasure is placed by the structure, so no chest here means
                 # the column was overwritten later or the placement did not take.

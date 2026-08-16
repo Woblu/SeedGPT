@@ -42,7 +42,7 @@ from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from java_oracle import JavaServer                              # noqa: E402
-from treasure_probe import locate, shell_probe, ORES, CANDIDATES  # noqa: E402
+from treasure_probe import locate, shell_probe, ORES, CANDIDATES, CHEST_Y0, CHEST_Y1  # noqa: E402
 from treasure_casing import FACES                               # noqa: E402
 
 # What a casing is made of, measured over 87 chests: sand 64, gravel 13,
@@ -121,7 +121,7 @@ def main():
                 for (x, z) in spots:
                     if not srv.loaded(x, z):
                         continue                    # unknown, never "absent"
-                    ys = srv.blocks(x, z, 10, 110, "minecraft:chest")
+                    ys = srv.blocks(x, z, CHEST_Y0, CHEST_Y1, "minecraft:chest")
                     for y in sorted(ys):
                         chests += 1
                         # One probe against the ores plus the blocks a casing is

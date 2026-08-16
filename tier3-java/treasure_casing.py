@@ -32,7 +32,7 @@ from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from java_oracle import JavaServer                      # noqa: E402
-from treasure_probe import locate, shell_probe, CANDIDATES  # noqa: E402
+from treasure_probe import locate, shell_probe, CANDIDATES, CHEST_Y0, CHEST_Y1  # noqa: E402
 
 FACES = [(-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)]
 
@@ -82,7 +82,7 @@ def main():
             if not srv.loaded(x, z):
                 print(f"  ({x},{z}) chunk would not load -- UNKNOWN")
                 continue
-            ys = srv.blocks(x, z, 10, 110, "minecraft:chest")
+            ys = srv.blocks(x, z, CHEST_Y0, CHEST_Y1, "minecraft:chest")
             if not ys:
                 continue
             for y in sorted(ys):
