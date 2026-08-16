@@ -1133,8 +1133,15 @@ done
 # the two minutes it costs to keep watching it.
 section "meet-in-the-middle solver"
 # The eight verifies are independent runs over disjoint structures, and this
-# section was 635s of a 811s suite -- 78% of the whole thing -- purely because
-# they went one after another. They are spawned together now.
+# section was 635s of an 811s suite -- 78% of the whole thing -- purely because
+# they went one after another. `--verify` is single-threaded (testPredicate and
+# testWindow are plain for loops), so seven cores sat idle throughout.
+#
+# Spawned together they take 303s, against 620s run one at a time. That is 2x,
+# NOT the 4x the slowest-structure time of 154s would suggest: these are
+# memory-bound over millions of cubiomes biome lookups, so eight at once contend
+# for bandwidth rather than scaling with core count. Measured, not assumed --
+# the first estimate here said 154s and was wrong by a factor of two.
 #
 # The RESULTS are still judged in this shell, one at a time. ok/bad increment
 # `pass` and `fail`, which are plain shell variables: score them inside an xargs
@@ -1154,11 +1161,30 @@ done
 
 # Cross-check against the tool it replaces. quad.c solves one structure and
 # tests the other three; whatever it finds, the MITM must be able to reach.
-./build/quad.exe 1.21 swamp_hut 16 6 2>/dev/null | grep QUADBASE | awk '{print $2}' \
-  > /tmp/sc_test/quadbases.txt
+# Three independent streams, started together. quad.exe feeds --accepts so those
+# two stay in order inside one subshell; the spread-13 and --covers runs share
+# nothing with them or with each other.
+#
+# Worth ~14s: 25s serially (7 + 7 + 11), 11s together. Small. It is kept because
+# it is free and correct, not because it mattered -- an earlier version of this
+# comment claimed ~150s, which was inferred by subtracting the verify batch from
+# the section total instead of timing the three streams. They were never 150s.
+#
+# Producers only. Every judgement still happens below, in THIS shell, for the
+# same reason as the verify loop: ok/bad increment plain shell variables and
+# would be lost with a subshell, leaving a green run that counted fewer tests
+# than it performed.
+( ./build/quad.exe 1.21 swamp_hut 16 6 2>/dev/null | grep QUADBASE | awk '{print $2}' \
+    > /tmp/sc_test/quadbases.txt
+  ./build/mitm.exe 1.21 swamp_hut --accepts 16 < /tmp/sc_test/quadbases.txt \
+    > /tmp/sc_test/accepts.out 2>&1 ) &
+./build/mitm.exe 1.21 swamp_hut quad 13 > /tmp/sc_test/mitm13.out 2>&1 &
+./build/mitm.exe 1.21 swamp_hut --covers 240 2000000 > /tmp/sc_test/covers.out 2>&1 &
+wait
+
 qn=$(wc -l < /tmp/sc_test/quadbases.txt)
-qrej=$(./build/mitm.exe 1.21 swamp_hut --accepts 16 < /tmp/sc_test/quadbases.txt 2>&1 \
-       | grep -oE '[0-9]+ the MITM would never reach' | grep -oE '^[0-9]+')
+qrej=$(grep -oE '[0-9]+ the MITM would never reach' /tmp/sc_test/accepts.out \
+       | grep -oE '^[0-9]+')
 if [ "$qn" -gt 0 ] && [ "${qrej:-1}" -eq 0 ]; then
   ok "every quad.c base at spread 16 is reachable ($qn bases, 0 rejected)"
 else
@@ -1168,7 +1194,6 @@ fi
 # An empty answer is the dangerous one, so it is checked by a route that never
 # consults the sieve about the fourth structure. Swamp huts genuinely have no
 # four-within-13-chunks cluster in the whole 2^48 space.
-./build/mitm.exe 1.21 swamp_hut quad 13 > /tmp/sc_test/mitm13.out 2>&1
 if grep -q "independent agreement" /tmp/sc_test/mitm13.out; then
   ok "empty result at spread 13 corroborated without the sieve"
 else
@@ -1180,7 +1205,6 @@ fi
 # those -- but that the list MISSES nothing. Brute-force real clusters and demand
 # the solver would have proposed every one. This is the check that licenses
 # swapping the seed source at all.
-./build/mitm.exe 1.21 swamp_hut --covers 240 2000000 > /tmp/sc_test/covers.out 2>&1
 cov_n=$(sed -n 's/^\([0-9]*\) clusters found.*/\1/p' /tmp/sc_test/covers.out)
 cov_m=$(sed -n 's/.*; \([0-9]*\) the solver would never propose/\1/p' /tmp/sc_test/covers.out)
 if [ "${cov_n:-0}" -gt 0 ] && [ "${cov_m:-1}" -eq 0 ]; then
