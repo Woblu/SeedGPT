@@ -112,6 +112,18 @@ int main(int argc, char **argv)
         for (int k = 0; k < ctx->generated_item_count; k++) {
             const char *nm = get_item_name(ctx, ctx->generated_items[k].item);
             printf(" %dx%s", ctx->generated_items[k].count, nm);
+            // Enchantments inline, in the same {name level} form checkloot uses.
+            // A ruined portal's golden sword is the classic enchanted-loot case
+            // -- it is half of what CoolStuffFinder looks for -- and this tool
+            // printed it as a bare "golden_sword", which is a different and much
+            // weaker claim than "Looting III golden sword".
+            const ItemStack *is = &ctx->generated_items[k];
+            for (int e = 0; e < is->enchantment_count && e < 16; e++) {
+                int rawid = is->enchantments[e].enchantment;
+                const char *en = get_enchantment_name(rawid);
+                if (en) printf("{%s %d}", en, is->enchantments[e].level);
+                else    printf("{enchant#%d %d}", rawid, is->enchantments[e].level);
+            }
             if (want && strstr(nm, want)) wc += ctx->generated_items[k].count;
         }
         printf("\n");

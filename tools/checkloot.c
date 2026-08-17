@@ -13,7 +13,8 @@
 int main(int argc, char **argv)
 {
     if (argc < 5) {
-        fprintf(stderr, "usage: checkloot <seed> <structure> <blockX> <blockZ> [version] [item]\n");
+        fprintf(stderr, "usage: checkloot <seed> <structure> <blockX> <blockZ> [version] [item]\n"
+                        "       checkloot <seed> <structure> <x> <z> <version> --ench <name> [minLevel]\n");
         return 2;
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
@@ -22,6 +23,12 @@ int main(int argc, char **argv)
     int mc = (argc > 5) ? str2mc(argv[5]) : MC_1_21;
     const char *want = (argc > 6) ? argv[6] : NULL;
     if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    const char *wantEnch = NULL; int wantEnchLvl = 1;
+    for (int a = 1; a < argc; a++) {
+        if (strcmp(argv[a], "--ench") || a + 1 >= argc) continue;
+        wantEnch = argv[a + 1];
+        if (a + 2 < argc) { int v = atoi(argv[a + 2]); if (v > 0) wantEnchLvl = v; }
+    }
 
     int type = -1;
     struct { const char *n; int t; } tbl[] = {
@@ -58,6 +65,12 @@ int main(int argc, char **argv)
 
     // Aggregate every item across all chests.
     struct { char name[64]; int count; } agg[128]; int na = 0;
+    // And every ENCHANTMENT, as (item, enchantment, level) triples. cubiomes has
+    // carried these on ItemStack all along -- enchantment_count and
+    // enchantments[] -- and nothing here ever read them, so this engine could
+    // say "a golden sword" but never "a Looting III golden sword". That gap is
+    // why two of CoolStuffFinder's four targets were out of reach.
+    struct { char item[64]; char ench[48]; int level; int count; } ea[256]; int ne = 0;
     for (int i = 0; i < n; i++)
     for (int c = 0; c < pieces[i].chestCount; c++) {
         LootTableContext *ctx = NULL;
@@ -70,7 +83,48 @@ int main(int argc, char **argv)
             int j; for (j = 0; j < na; j++) if (!strcmp(agg[j].name, nm)) break;
             if (j == na && na < 128) { snprintf(agg[na].name, 64, "%s", nm); agg[na].count = 0; na++; }
             if (j < 128) agg[j].count += ctx->generated_items[k].count;
+
+            const ItemStack *is = &ctx->generated_items[k];
+            for (int e = 0; e < is->enchantment_count && e < 16; e++) {
+                int rawid = is->enchantments[e].enchantment;
+                const char *en = get_enchantment_name(rawid);
+                int lv = is->enchantments[e].level;
+                char unk[32];
+                if (!en) {
+                    // NOT skipped. An unnamed enchantment is an UNKNOWN, and
+                    // dropping it reads as "not enchanted" -- which is how the
+                    // enchant_randomly path looked completely dead for 52
+                    // golden items before anyone printed the id.
+                    snprintf(unk, sizeof unk, "enchant#%d", rawid);
+                    en = unk;
+                }
+                int q;
+                for (q = 0; q < ne; q++)
+                    if (!strcmp(ea[q].item, nm) && !strcmp(ea[q].ench, en)
+                        && ea[q].level == lv) break;
+                if (q == ne && ne < 256) {
+                    snprintf(ea[ne].item, 64, "%s", nm);
+                    snprintf(ea[ne].ench, 48, "%s", en);
+                    ea[ne].level = lv; ea[ne].count = 0; ne++;
+                }
+                if (q < 256) ea[q].count += is->count;
+            }
         }
+    }
+
+    // --ench <name> [minLevel] -> how many items carry it at that level or above.
+    // A separate mode rather than a filter on the item line, because "how many
+    // Looting III swords" and "how many swords" are different questions and
+    // answering the second while being asked the first is the whole problem.
+    if (wantEnch) {
+        int total = 0;
+        for (int q = 0; q < ne; q++)
+            if (!strcmp(ea[q].ench, wantEnch) && ea[q].level >= wantEnchLvl)
+                total += ea[q].count;
+        printf("%lld %s (%d,%d): %s>=%d=%d\n", (long long)seed, sname, bx, bz,
+               wantEnch, wantEnchLvl, total);
+        free(pieces);
+        return total > 0 ? 0 : 1;
     }
 
     printf("%lld %s (%d,%d):", (long long)seed, sname, bx, bz);
@@ -84,6 +138,12 @@ int main(int argc, char **argv)
     } else {
         for (int j = 0; j < na; j++) printf(" %dx%s", agg[j].count, agg[j].name);
         printf("\n");
+        if (ne) {
+            printf("  enchanted:");
+            for (int q = 0; q < ne; q++)
+                printf(" %dx%s{%s %d}", ea[q].count, ea[q].item, ea[q].ench, ea[q].level);
+            printf("\n");
+        }
     }
     return 0;
 }
