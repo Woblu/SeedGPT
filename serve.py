@@ -585,6 +585,11 @@ The two differ by up to sqrt(2): a village 240 east and 32 north is 240 away by
 chebyshev and 242 by euclidean, so "within 241" finds it under one and not the
 other. Picking the wrong one silently returns fewer seeds, never an error.
 
+If a request pairs a LOOSE structure condition with a RARE biome or spawn
+condition, say so in notes: the search tries a limited number of a structure
+seed's sister world seeds, and a rare biome may need more of them. That is a
+FIND_UPPERS setting, not something to encode in the query.
+
 Condition types (use EXACTLY these keys):
 - Structure:      {"id","structure":<name>,"within","of"}
     variants (only where valid): "surface":true (ruined_portal, skip buried),

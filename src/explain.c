@@ -26,7 +26,10 @@
 #include <windows.h>
 
 #define MASK48 ((1ULL << 48) - 1)
-#define UPPER_SAMPLES 64        // must match tools/find.c
+// Must match tools/find.c's DEFAULT. The real searcher can be raised with
+// FIND_UPPERS, in which case the estimate below is conservative -- it predicts
+// fewer hits than a raised run will find, never more.
+#define UPPER_SAMPLES 64
 #define MAX_KEEP 512            // survivors retained from phase A
 #define PROBE_BUDGET 40000      // total phase-B upper probes (upper bound)
 #define PHASE_B_SECONDS  4.0    // wall-clock cap: a fine biome scan is ~6ms, so

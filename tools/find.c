@@ -21,7 +21,22 @@
 #include <windows.h>
 
 #define MAX_HITS      12
-#define UPPER_SAMPLES 64
+// How many of a structure seed's 65536 sister world seeds to try before giving
+// up on it. Structure placement and loot are fixed by the lower 48 bits; biomes
+// and world spawn need the full 64, so a biome-heavy query is really asking
+// "does ANY sister of this structure seed work" and this is how hard we look.
+//
+// 64 of 65536 is a deliberate trade -- more structure seeds against more sisters
+// each -- and it is the right one when the biome part of a query is common. It
+// is the WRONG one when the structure part is common and the biome part is rare:
+// then most structure seeds are viable, the answer lives in a sister we never
+// tried, and the search reports nothing found. That is indistinguishable from
+// "no such seed exists", which is this project's most-repeated failure.
+//
+// FIND_UPPERS raises it. A seed-finding course tunes exactly this number by hand
+// between 256 and 4000 depending on how rare its biome conditions are.
+#define UPPER_SAMPLES_DEFAULT 64
+static int g_uppers = UPPER_SAMPLES_DEFAULT;
 #define MAX_RANK      50
 
 typedef struct { uint64_t ws; Match m; } Hit;
@@ -194,7 +209,7 @@ static DWORD WINAPI worker(LPVOID arg)
         // "128", "146", ... clustered at thread starts. Any upper value is
         // equally valid, so pick them pseudo-randomly per seed.
         uint64_t ustate = s48 * 0x9E3779B97F4A7C15ULL + 0xD1B54A32D192ED03ULL;
-        for (uint64_t t = 0; t < UPPER_SAMPLES; t++) {
+        for (int t = 0; t < g_uppers; t++) {
             ustate ^= ustate >> 30; ustate *= 0xBF58476D1CE4E5B9ULL;
             ustate ^= ustate >> 27; ustate *= 0x94D049BB133111EBULL;
             ustate ^= ustate >> 31;
@@ -460,6 +475,17 @@ int main(int argc, char **argv)
     // to keep looking advances the offset by the range it just covered, and each
     // batch is fresh seeds. The index goes through mix64 either way, so a later
     // batch is no more a corner of the space than the first one.
+    const char *up = getenv("FIND_UPPERS");
+    if (up) {
+        long v = strtol(up, NULL, 10);
+        // Capped at 65536 because that is all the sisters there are; below 1
+        // would silently disable pass 2 and pass every structure seed.
+        if (v < 1) v = 1;
+        if (v > 65536) v = 65536;
+        g_uppers = (int)v;
+        printf("uppers     : trying %d of 65536 sister seeds per structure seed "
+               "(default %d)\n", g_uppers, UPPER_SAMPLES_DEFAULT);
+    }
     const char *off = getenv("FIND_OFFSET");
     g_offset = off ? strtoull(off, NULL, 10) : 0;
     if (g_offset)
