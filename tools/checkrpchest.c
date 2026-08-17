@@ -78,6 +78,35 @@ static uint64_t rpLootSeed(int mc, uint64_t s48, const StructureVariant *sv,
     return rnd.nextLong(rnd.state);
 }
 
+// Where the portal actually IS, and whether you will see it standing there.
+//
+// This tool reported x and z and nothing else, and that is the whole reason
+// ruined portals read as hallucinated: at (32,112) in seed 20094 the portal is
+// real and sits at y=37 on the seabed under 26 blocks of ocean. Fly to the
+// coordinates, look around, see water, conclude the finder invented it.
+//
+// The height is cubiomes' surface estimate, which matched the measured portal
+// blocks at both spots checked (36 vs 37, 64 vs 64). It is an ESTIMATE and is
+// printed as one.
+static void portal_visibility(Generator *g, int mc, int x, int z,
+                              int underground, char *out, size_t n)
+{
+    (void)mc;
+    // mapApproxHeight is what checkheight.exe uses and what cubiomes offers for
+    // a surface estimate; there is no exact block-height call here. Pre-1.18
+    // also needs a SurfaceNoise, which 1.18+ does not.
+    float fy = 0;
+    SurfaceNoise sn; SurfaceNoise *snp = NULL;
+    if (mc < MC_1_18) { initSurfaceNoise(&sn, DIM_OVERWORLD, g->seed); snp = &sn; }
+    mapApproxHeight(&fy, NULL, g, snp, x >> 2, z >> 2, 1, 1);
+    int y = (int)fy;
+    const char *how;
+    if (underground)   how = "BURIED -- underground variant, dig down";
+    else if (y < 60)   how = "SUBMERGED -- on the sea floor, look underwater";
+    else               how = "surface";
+    snprintf(out, n, "y~%d %s", y, how);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
@@ -107,6 +136,9 @@ int main(int argc, char **argv)
         if (!init_loot_table_name(&ctx, "ruined_portal", mc) || !ctx) return 1;
         set_loot_seed(ctx, lootSeed); generate_loot(ctx);
         int wc = 0;
+        char vis[96];
+        portal_visibility(&g, mc, best.x, best.z, sv.underground, vis, sizeof vis);
+        printf("  %s\n", vis);
         printf("%lld ruined_portal x=%d z=%d chest x=%d z=%d loot:",
                (long long)seed, best.x, best.z, cx, cz);
         for (int k = 0; k < ctx->generated_item_count; k++) {
@@ -158,6 +190,9 @@ int main(int argc, char **argv)
     rpChestXZ(&sv, best.x & ~15, best.z & ~15, &cx, &cz);
     uint64_t lootSeed = rpLootSeed(mc, s48, &sv, cx, cz);
 
+    char vis0[96];
+    portal_visibility(&g, mc, best.x, best.z, sv.underground, vis0, sizeof vis0);
+    printf("  %s\n", vis0);
     printf("%lld ruined_portal x=%d z=%d biome=%s start=%d giant=%d rot=%d mir=%d underground=%d\n",
            (long long)seed, best.x, best.z, biome2str(mc, biomeID),
            sv.start, sv.giant, sv.rotation, sv.mirror, sv.underground);

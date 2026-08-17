@@ -61,6 +61,11 @@ NOTABLE = {
 }
 
 ITEM_RE = re.compile(r"(\d+)x(minecraft:[a-z_]+)")
+# "y~36 SUBMERGED -- on the sea floor". A ruined portal reported as bare x/z is
+# the single biggest source of "the finder made this up": the portal is really
+# there, 26 blocks under the ocean or buried, and you stand on the coordinates
+# seeing nothing.
+VIS_RE = re.compile(r"y~(-?\d+) (\w+)")
 # "1xminecraft:golden_sword{looting 3}" -- checkloot prints these on an
 # "enchanted:" line, checkrpchest inline after the item.
 ENCH_RE = re.compile(r"(\d+)x(minecraft:[a-z_]+)\{([a-z_]+) (\d+)\}")
@@ -104,6 +109,10 @@ def loot_at(seed, version, structure, x, z):
     if not txt or "unsupported" in txt:
         return None, None
     items, ench = {}, []
+    m = VIS_RE.search(txt)
+    if m:
+        items["__y__"] = int(m.group(1))
+        items["__vis__"] = m.group(2)
     for n, name in ITEM_RE.findall(txt):
         items[name] = items.get(name, 0) + int(n)
     for n, name, e, lv in ENCH_RE.findall(txt):
@@ -185,9 +194,17 @@ def main():
         for (st, x, z, hit, items) in finds[:25]:
             what = ", ".join(f"{n}x {it.split(':')[-1]}" for it, n in hit)
             print(f"  {st:14} x={x:<7} z={z:<7}  {what}")
-            print(f"      /tp {x} ~ {z}")
+            y = items.get("__y__")
+            vis = items.get("__vis__")
+            if y is not None:
+                tag = "" if vis == "surface" else f"  [{vis}]"
+                print(f"      /tp {x} {y} {z}{tag}")
+            else:
+                print(f"      /tp {x} ~ {z}")
             rest = " ".join(f"{c}x{i.split(':')[-1]}" for i, c in
-                            sorted(items.items(), key=lambda kv: -kv[1])[:8])
+                            sorted(((k, v) for k, v in items.items()
+                                    if not k.startswith("__")),
+                                   key=lambda kv: -kv[1])[:8])
             print(f"      chest: {rest}")
     else:
         print(f"\nnothing cleared the bar in {scanned} chests. That is a "
