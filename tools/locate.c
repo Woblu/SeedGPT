@@ -108,6 +108,30 @@ int main(int argc, char **argv)
         printf("%d %d\n", p.x, p.z);
         n++;
     }
-    fprintf(stderr, "%" PRIu64 " %s within %d of (%d,%d)\n", n, argv[3], radius, cx, cz);
+    // WHICH DIMENSION THESE COORDINATES ARE IN.
+    //
+    // ruined_portal and ruined_portal_nether print identical numbers from 1.18
+    // -- both are {salt 34222645, spread 40, sep 25} and differ only in
+    // dimension -- so an unlabelled list of nether coordinates is
+    // indistinguishable from an overworld one. Standing at those overworld
+    // coordinates and finding nothing is exactly what "the finder hallucinates
+    // ruined portals" looks like.
+    //
+    // Nether coordinates are also 1/8 scale: a nether structure at (x,z) sits
+    // near overworld (8x, 8z), so the number is not just in the wrong place, it
+    // is in the wrong units for anyone who assumes overworld.
+    const char *dimname = sc.dim == DIM_NETHER ? "NETHER"
+                        : sc.dim == DIM_END    ? "END" : "overworld";
+    fprintf(stderr, "%" PRIu64 " %s within %d of (%d,%d) -- %s coordinates\n",
+            n, argv[3], radius, cx, cz, dimname);
+    if (sc.dim != DIM_OVERWORLD) {
+        // On STDOUT as well: a caller that reads only stdout must not be able to
+        // mistake these for overworld positions.
+        printf("# %s COORDINATES", dimname);
+        if (sc.dim == DIM_NETHER)
+            printf(" -- divide by 8 for the overworld point above them");
+        printf("\n");
+        fprintf(stderr, "  these are %s coordinates, not overworld ones\n", dimname);
+    }
     return n ? 0 : 1;
 }
