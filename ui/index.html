@@ -752,6 +752,32 @@
       </div>
     </section>
 
+    <section>
+      <h2>Cave spiders by a village <span class="tag-exp">real pieces</span></h2>
+      <div class="hint" style="margin-top:0;margin-bottom:9px">
+        Cave spider spawners come from mineshaft <b>spider corridors</b>, which
+        are structure pieces — so the real generator can enumerate them and the
+        game's own <code>spiderCorridor</code> flag says which ones get a
+        spawner. Corridors the game would <b>skip</b> (a piece touching liquid is
+        dropped outright) are not counted. Distance is in <b>chunks</b>.
+        <br><br>
+        These are spawners that <b>exist</b>. Whether you can reach one is a
+        terrain question this does not answer — ordinary mineshafts sit near
+        y −30.
+      </div>
+      <div style="display:grid;grid-template-columns:70px 70px 1fr;gap:9px">
+        <div><label for="svMin">spawners</label>
+          <input type="number" id="svMin" value="2"></div>
+        <div><label for="svRadius">chunks</label>
+          <input type="number" id="svRadius" value="3"></div>
+        <div><label for="svSeeds">seeds to scan</label>
+          <input type="number" id="svSeeds" value="20"></div>
+      </div>
+      <div class="btnrow">
+        <button class="primary" id="svBtn">Find spider villages</button>
+      </div>
+    </section>
+
   </div>
 </aside>
 
@@ -1896,6 +1922,16 @@
       if (f.timed_out)
         out.append(el('div','note',
           `Time budget reached — this is the best of the ${(f.scanned ?? 0).toLocaleString()} seeds actually scanned, not the full range. Give it longer for better results.`));
+      // World spawn is an estimate. find.exe prints this caveat, but its output
+      // is parsed as JSON so the line never reached anyone -- and a
+      // spawn-relative result is the one a player checks IMMEDIATELY, by loading
+      // the world and looking. Rendered from the query instead of the stream.
+      if ((query.conditions || []).some(c => c && c.of === 'spawn'))
+        out.append(el('div', 'note warn',
+          'Distances from WORLD SPAWN are approximate. The spawn point depends on '
+          + 'grass placement, which is decoration and is not simulated here, so the '
+          + 'real in-game spawn can sit some way off. Structure positions are exact; '
+          + 'their distance from spawn is not.'));
 
       if (f.pass1_pct != null) {
         const c = el('div','card');
@@ -2400,6 +2436,58 @@
   };
 
   // ---- piece-exact structure overlap -------------------------------------
+  $('#svBtn').onclick = async () => {
+    const body = { min: +$('#svMin').value || 2,
+                   radius: +$('#svRadius').value || 3,
+                   seeds: +$('#svSeeds').value || 20,
+                   version: $('#version').value };
+    busy('enumerating real mineshaft pieces around each village — this runs the game\'s own generator.');
+    try {
+      const d = await post('/api/spidervillage', body);
+      out.innerHTML = '';
+      out.append(statsCard('Cave spiders by a village', [
+        ['villages checked', String(d.checked ?? 0)],
+        ['matched', String(d.hits.length), d.hits.length ? 'good' : 'warn'],
+        ['wanted', `${body.min}+ within ${body.radius} chunks`],
+      ]));
+      if (!d.hits.length) {
+        // "None in what was scanned" is not "none exist", and the difference is
+        // the whole reason this panel reports how many it checked.
+        out.append(el('div', 'note warn',
+          `No village had ${body.min}+ spider corridors within ${body.radius} chunks `
+          + `among the ${d.checked ?? 0} checked. Scan more seeds, widen the radius, `
+          + `or ask for fewer — this is a statement about what was scanned.`));
+      } else {
+        const c = el('div', 'card');
+        c.append(el('h3', null, 'Spider villages — click a seed to copy'));
+        d.hits.forEach(h => {
+          const box = el('div', 'seed');
+          const n = el('div', 'n');
+          const num = el('span', 'num', String(h.seed));
+          num.title = 'copy';
+          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
+            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          n.append(num, el('span', 'dim', `${h.spawners} spawner corridor(s)`));
+          box.append(n);
+          const t = el('table'), tr = el('tr');
+          tr.append(idCell('structure', 'village', 'Village'),
+                    el('td', null, `x=${h.x}  z=${h.z}`),
+                    el('td', 'd', `/tp ${h.x} 90 ${h.z}`));
+          t.append(tr); box.append(t);
+          (h.boxes || []).forEach(b => {
+            const fl = el('div', 'dim');
+            fl.style.cssText = 'font-size:12px;margin-top:3px';
+            fl.textContent = `${b.variant}  ${b.min.join(',')} .. ${b.max.join(',')}`;
+            box.append(fl);
+          });
+          c.append(box);
+        });
+        out.append(c);
+      }
+      if (d.note) out.append(el('div', 'note', d.note));
+    } catch (e) { fail(e.message); }
+  };
+
   $('#flBtn').onclick = async () => {
     const seed = $('#flSeed').value.trim();
     if (!seed) { fail('need a seed'); return; }
@@ -2511,6 +2599,11 @@
         if (t.seed_list) set('#boSeeds', t.seed_list);
         set('#boDrop', t.min_drop || 20);
         $('#boBtn').click();
+        return;
+      case 'spider_village':
+        if (t.min) set('#svMin', t.min);
+        if (t.radius) set('#svRadius', t.radius);
+        $('#svBtn').click();
         return;
       case 'floating':
         aiNote('This confirms one spot rather than searching — put the seed and the '

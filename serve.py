@@ -783,6 +783,16 @@ Floating island -- "is this outpost/island actually floating", "island in
 the sky", "structure hovering over a void". Needs a seed and a position;
 it CONFIRMS one spot rather than searching for them.
   "tool": {"name": "floating"}
+
+Cave spider spawners near a village -- "spider spawners by a village", "cave
+spider village", "spawners next to a village". Distance is in CHUNKS.
+  "tool": {"name": "spider_village", "min": N, "radius": <chunks>}
+
+Buried treasure encased in BEDROCK -- "treasure in bedrock", "chest surrounded by
+bedrock". PRE-1.18 ONLY: from 1.18 the band sits under deepslate, which does not
+stop the placement scan, so no chest is placed at all. Set the version to 1.16 or
+older and say so in notes.
+  "tool": {"name": "bedrock_casing", "seeds": N}
       "are these two structures REALLY overlapping / inside each other". The
       ordinary overlap condition compares nominal boxes; this intersects real
       piece bounding boxes. Exact for fortress and end_city; for anything else it
@@ -921,7 +931,7 @@ def api_gemini(body) -> dict:
     # name would send the UI to a panel that does not exist.
     TOOLS = {"casing", "village_building", "exposed_treasure",
              "fortress_overlap", "hunt", "bedrock_outpost", "struct_overlap",
-             "floating"}
+             "floating", "spider_village", "bedrock_casing"}
     t = obj.get("tool")
     if isinstance(t, dict) and t.get("name") in TOOLS:
         keep = {"name": t["name"]}
@@ -936,6 +946,11 @@ def api_gemini(body) -> dict:
         if isinstance(t.get("seeds"), str) and re.match(
                 r"^-?\d{1,20}(,-?\d{1,20})*$", t["seeds"]):
             keep["seed_list"] = t["seeds"]      # bedrock takes explicit seeds
+        # spider_village measures its radius in CHUNKS, not blocks, so it
+        # cannot share the block-radius clamp below.
+        if t["name"] == "spider_village" and isinstance(t.get("radius"), (int, float)):
+            keep["radius"] = max(1, min(16, int(t["radius"])))
+            t = dict(t); t.pop("radius", None)
         for k, lo, hi in (("radius", 1000, 60000), ("min", 1, 12),
                           ("want", 1, 50), ("seeds", 1000, 5_000_000),
                           ("min_drop", 4, 120)):
@@ -1081,6 +1096,102 @@ def api_confirmfloating(body) -> dict:
             "lower": int(lower.group(1)) if lower else 0,
             "ring": ring,
             "output": out.strip()[-4000:]}
+
+
+def api_bedrockcasing(body) -> dict:
+    """Buried treasure encased in BEDROCK. Pre-1.18 worlds only.
+
+    Two ordinary rules meeting: the placement scan stops only where the block
+    below is sandstone/stone/andesite/granite/diorite, so bedrock does NOT stop
+    it -- the chest falls THROUGH the band until it finds stone, and the block at
+    its own position is then bedrock, which becomes the fill and is written into
+    every air face. Confirmed on a real 1.16.5 server, 5 of 6 faces bedrock.
+
+    The rare part is the COLUMN, not the casing: a ravine has to reach from the
+    ocean floor into the bedrock band at exactly the treasure's (9,9). Measured
+    rarity: 0 in 202 treasures across 25 seeds. Expect to scan.
+
+    1.18+ CANNOT do this and the version is rejected rather than searched: the
+    band moved to y -64..-59 and everything above it is deepslate, which is not a
+    stopping block, so the scan never terminates and no chest is placed at all.
+    """
+    version = check_version(str(body.get("version", "1.16")))
+    if not re.match(r"^1\.(1[0-7]|[0-9])(\.|$)", version):
+        raise Failure(
+            f"bedrock-cased treasure is a pre-1.18 phenomenon and {version} is "
+            f"not pre-1.18. From 1.18 the bedrock band is at y -64..-59 under "
+            f"deepslate, which does not stop the placement scan, so no chest is "
+            f"placed at all. Ask for 1.16 or older.")
+    tier2 = ROOT / "tier2"
+    if not (tier2 / "out" / "VillageWorldgen.class").exists() or not (tier2 / "cp.txt").exists():
+        raise Failure("tier2 (1.16 backend) not built -- VillageWorldgen.class missing")
+    seeds = max(1, min(2000, int(body.get("seeds", 40))))
+    start = int(body.get("start", 1))
+    radius = max(200, min(20000, int(body.get("radius", 2000))))
+    args = [sys.executable, str(ROOT / "tier3-java" / "hunt_bedrock_casing.py"),
+            "--seeds", str(seeds), "--start", str(start),
+            "--radius", str(radius), "--version", version]
+    rc, out, err = run(args, TIMEOUTS["villagesmiths"])
+    hits = []
+    for line in out.splitlines():
+        m = re.match(r"\s+BEDROCK BAND\s+seed (-?\d+) \((-?\d+),(-?\d+)\).*?y=(-?\d+).*?at y=(-?\d+)", line)
+        if m:
+            hits.append({"seed": m.group(1), "x": int(m.group(2)),
+                         "z": int(m.group(3)), "open_to": int(m.group(4)),
+                         "chest_y": int(m.group(5)) + 1})
+    tot = re.search(r"(\d+) treasures in", out)
+    return {"hits": hits, "checked": int(tot.group(1)) if tot else 0,
+            "note": ("A hit means the COLUMN reaches the bedrock band. Whether "
+                     "that chest is cased in bedrock or in the hardcoded SAND "
+                     "depends on its own column's bedrock pattern -- about 1 in "
+                     "5 for y=4. Confirm on a server.")}
+
+
+def api_spidervillage(body) -> dict:
+    """Villages with cave spider spawners beside them.
+
+    The spawners come from mineshaft SPIDER CORRIDORS -- structure pieces, not
+    decoration -- so the real 1.21.1 generator enumerates them and
+    MineShaftCorridor.spiderCorridor says which corridors get a spawner.
+
+    Distance is CHEBYSHEV in CHUNKS from the village origin, because that is how
+    structure grids are actually measured.
+
+    Corridors the game would SKIP are not counted: a mineshaft piece whose
+    bounding box touches liquid is dropped outright by the generator. And only
+    one mineshaft variant can exist at a place -- the biome decides -- so both
+    are asked and the wrong one answers NOHIT.
+    """
+    tier2 = ROOT / "tier2-outpost"
+    if not (tier2 / "out" / "OutpostWorldgen.class").exists() or not (tier2 / "cp.txt").exists():
+        raise Failure("tier2-outpost not built -- OutpostWorldgen.class missing")
+    mn = max(1, min(12, int(body.get("min", 2))))
+    radius = max(1, min(16, int(body.get("radius", 3))))
+    seeds = max(1, min(500, int(body.get("seeds", 20))))
+    start = int(body.get("start", 1))
+    version = check_version(str(body.get("version", "1.21")))
+    args = [sys.executable, str(ROOT / "tier3-java" / "hunt_spider_village.py"),
+            "--min", str(mn), "--radius", str(radius), "--seeds", str(seeds),
+            "--start", str(start), "--version", version]
+    rc, out, err = run(args, TIMEOUTS["villagesmiths"])
+    hits, cur = [], None
+    for line in out.splitlines():
+        m = re.match(r"\s+SPIDER VILLAGE\s+seed (-?\d+)\s+village \((-?\d+),(-?\d+)\)\s+(\d+)", line)
+        if m:
+            cur = {"seed": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
+                   "spawners": int(m.group(4)), "boxes": []}
+            hits.append(cur)
+            continue
+        b = re.match(r"\s+(mineshaft\S*)\s+box (-?\d+),(-?\d+),(-?\d+) \.\. (-?\d+),(-?\d+),(-?\d+)", line)
+        if b and cur is not None:
+            cur["boxes"].append({"variant": b.group(1),
+                                 "min": [int(b.group(i)) for i in (2, 3, 4)],
+                                 "max": [int(b.group(i)) for i in (5, 6, 7)]})
+    tot = re.search(r"(\d+) villages checked", out)
+    return {"hits": hits, "checked": int(tot.group(1)) if tot else 0,
+            "note": ("Spawners that EXIST. Whether one is reachable or "
+                     "surface-exposed is a terrain question this does not "
+                     "answer -- ordinary mineshafts sit near y -30.")}
 
 
 def api_fortressoverlap(body) -> dict:
@@ -1530,6 +1641,8 @@ ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/casingtreasure": api_casingtreasure,
           "/api/confirmcasing": api_confirmcasing,
           "/api/confirmfloating": api_confirmfloating,
+          "/api/spidervillage": api_spidervillage,
+          "/api/bedrockcasing": api_bedrockcasing,
           "/api/fortressoverlap": api_fortressoverlap,
           "/api/bedrockoutpost": api_bedrockoutpost,
           "/api/structoverlap": api_structoverlap,
