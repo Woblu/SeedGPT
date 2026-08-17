@@ -211,6 +211,11 @@ public class OutpostWorldgen {
             long seed = Long.parseLong(args[1]);
             String id = args[2];
             int tx = Integer.parseInt(args[3]), tz = Integer.parseInt(args[4]);
+            // "liquid" as a 6th arg also reports, per piece, whether it would be
+            // SKIPPED at generation time. Off by default: it generates terrain
+            // for every chunk a piece touches, which for a 94-piece mineshaft is
+            // far more work than listing the boxes.
+            boolean wantLiquid = args.length > 5 && args[5].equals("liquid");
             Holder<Structure> st;
             try {
                 st = worldgen.lookupOrThrow(Registries.STRUCTURE).getOrThrow(
@@ -256,7 +261,8 @@ public class OutpostWorldgen {
                 BoundingBox b = piece.getBoundingBox();
                 System.out.println("P\t" + b.minX() + "\t" + b.minY() + "\t" + b.minZ()
                     + "\t" + b.maxX() + "\t" + b.maxY() + "\t" + b.maxZ()
-                    + "\t" + pieceName(piece) + pieceFlags(piece));
+                    + "\t" + pieceName(piece) + pieceFlags(piece)
+                    + (wantLiquid ? ("\tliquid=" + touchesLiquid(seed, b)) : ""));
             }
             return;
         }
@@ -383,6 +389,47 @@ public class OutpostWorldgen {
     }
 
     // The jigsaw template name of a piece, e.g. "pillager_outpost/watchtower".
+    /** Does this piece's box touch liquid -- i.e. would the game SKIP it?
+     *
+     *  Replicates MineShaftPiece.isInInvalidLocation: sweep the bounding box
+     *  shrunk by one on each side, and report invalid if any block there is a
+     *  liquid. Terrain comes from genFullChunk, so this is the real generated
+     *  world rather than a heightmap guess.
+     *
+     *  Returns "?" rather than a verdict when a chunk cannot be generated. A
+     *  piece we could not check is UNKNOWN, and calling it valid would put a
+     *  corridor in a hunt that the game never builds.
+     */
+    static String touchesLiquid(long seed, BoundingBox b) {
+        int x0 = b.minX() + 1, x1 = b.maxX() - 1;
+        int y0 = b.minY() + 1, y1 = b.maxY() - 1;
+        int z0 = b.minZ() + 1, z1 = b.maxZ() - 1;
+        if (x1 < x0 || y1 < y0 || z1 < z0) return "0";   // nothing to sweep
+        try {
+            for (int cx = x0 >> 4; cx <= (x1 >> 4); cx++)
+            for (int cz = z0 >> 4; cz <= (z1 >> 4); cz++) {
+                ChunkAccess ch = genFullChunk(seed, cx, cz);
+                int bx0 = Math.max(x0, cx * 16), bx1 = Math.min(x1, cx * 16 + 15);
+                int bz0 = Math.max(z0, cz * 16), bz1 = Math.min(z1, cz * 16 + 15);
+                for (int x = bx0; x <= bx1; x++)
+                for (int z = bz0; z <= bz1; z++)
+                for (int y = y0; y <= y1; y++)
+                    // state.liquid(), not getFluidState(). "liquid" is a
+                    // static property of the BLOCK -- water and lava declare it
+                    // -- whereas a fluid state is ALSO non-empty for every
+                    // waterlogged block, which the game's test does not count.
+                    // Both gave 55 of 94 on the seed measured, so nothing here
+                    // is waterlogged; this is the game's test rather than one
+                    // that happens to agree.
+                    if (ch.getBlockState(new BlockPos(x, y, z)).liquid())
+                        return "1";
+            }
+        } catch (Throwable ex) {
+            return "?";
+        }
+        return "0";
+    }
+
     // WHETHER A MINESHAFT PIECE GENERATES AT ALL, read from the bytecode rather
     // than inferred. MineShaftCorridor.postProcess opens with:
     //
