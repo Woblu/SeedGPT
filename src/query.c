@@ -1133,6 +1133,27 @@ int queryPlan(Query *q, char *err, size_t errlen)
         Cond *c = &q->cond[i];
         if (!strcmp(c->ofId, "origin")) { c->parent = PARENT_ORIGIN; continue; }
         if (!strcmp(c->ofId, "spawn"))  { c->parent = PARENT_SPAWN;  continue; }
+        // "of":"<x>,<z>" -- an explicit place to search around. Everything else
+        // measures from origin or spawn, both of which sit near 0,0, so without
+        // this the engine could only ever look at the middle of the world.
+        {
+            long long ax, az; char tail;
+            if (sscanf(c->ofId, "%lld,%lld%c", &ax, &az, &tail) == 2) {
+                // 30 million is the world border. Beyond it the generator still
+                // answers, but nothing there is reachable in a real game, so a
+                // hit would be a lie by omission rather than a find.
+                if (ax < -30000000LL || ax > 30000000LL ||
+                    az < -30000000LL || az > 30000000LL) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"of\" position %lld,%lld is outside "
+                        "the world border (+/-30000000)", c->id, ax, az);
+                    return 1;
+                }
+                c->parent = PARENT_AT;
+                c->atX = (int)ax; c->atZ = (int)az;
+                continue;
+            }
+        }
         c->parent = findId(q, c->ofId);
         if (c->parent < 0) {
             snprintf(err, errlen, "condition \"%s\": unknown parent \"%s\"", c->id, c->ofId);
@@ -1813,7 +1834,15 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
     for (int i = 0; i < q->ngeom; i++) {
         int k = q->geom[i];
         const Cond *c = &q->cond[k];
-        Pos centre = (c->parent >= 0) ? m->pos[c->parent] : (Pos){0,0};
+        // Pass 1 centres. Origin and spawn both collapse to (0,0) here -- spawn
+        // deliberately, since it sits near origin and SPAWN_MARGIN widens the
+        // reach so pass 1 over-admits and pass 2 refines. PARENT_AT must NOT
+        // collapse: its centre can be a million blocks away, and folding it to
+        // origin made an explicit position silently search the middle of the
+        // world instead.
+        Pos centre = (c->parent >= 0)          ? m->pos[c->parent]
+                   : (c->parent == PARENT_AT)  ? (Pos){c->atX, c->atZ}
+                   : (Pos){0,0};
         // Pass 1 cannot know the world spawn (it is 64-bit and biome-derived),
         // so a spawn-relative condition is filtered against origin widened by
         // SPAWN_MARGIN. Over-admits; pass 2 then checks it exactly.
@@ -1976,6 +2005,7 @@ static Pos condCentre(const Query *q, int k, const Match *m, Match *fixed,
         return *spawn;
     }
     if (c->parent == PARENT_ORIGIN) return (Pos){0, 0};
+    if (c->parent == PARENT_AT)     return (Pos){c->atX, c->atZ};
     const Cond *p = &q->cond[c->parent];
     if (p->type == CT_BIOME) return fixed->pos[c->parent];
     return (p->parent == PARENT_SPAWN) ? fixed->pos[c->parent] : m->pos[c->parent];

@@ -364,11 +364,20 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
         // labelling one as the other is how a correct search still produces
         // results that look wrong in game.
         int spawnRel = (cd->parent == PARENT_SPAWN && mm->haveSpawn);
-        int64_t dx = p.x - (spawnRel ? mm->spawn.x : 0);
-        int64_t dz = p.z - (spawnRel ? mm->spawn.z : 0);
+        int atRel    = (cd->parent == PARENT_AT);
+        int64_t refx = spawnRel ? mm->spawn.x : atRel ? cd->atX : 0;
+        int64_t refz = spawnRel ? mm->spawn.z : atRel ? cd->atZ : 0;
+        int64_t dx = p.x - refx, dz = p.z - refz;
+        // The label has to name the reference actually used. A search centred a
+        // million blocks out reported "1441772 from origin" -- true, and useless:
+        // it reads as a miss when the structure is 400 blocks from where it was
+        // asked for.
+        char refname[48];
+        if (spawnRel)   snprintf(refname, sizeof refname, "from spawn");
+        else if (atRel) snprintf(refname, sizeof refname, "from %d,%d", cd->atX, cd->atZ);
+        else            snprintf(refname, sizeof refname, "from origin");
         printf("   %-14s x=%6d z=%6d   %d %s", cd->id, p.x, p.z,
-               (int)sqrt((double)(dx*dx + dz*dz)),
-               spawnRel ? "from spawn" : "from origin");
+               (int)sqrt((double)(dx*dx + dz*dz)), refname);
         if (cd->structType == Geode && mm->geodeSize[c] > 0)
             printf(", size %d", mm->geodeSize[c]);
         if (mm->caveHeight[c] > 0) {

@@ -28,6 +28,11 @@
 // right on paper and are wrong in game.
 #define PARENT_ORIGIN (-1)
 #define PARENT_SPAWN  (-2)
+// An explicit world position: "of":"1200000,-800000". Origin and spawn are both
+// near 0,0, so without this every search was confined to the middle of the
+// world -- and a great many notable finds sit hundreds of thousands of blocks
+// out. Cost is identical to origin: it is the same disc, somewhere else.
+#define PARENT_AT     (-3)
 
 // Spawn is a 64-bit, biome-dependent quantity, so pass 1 cannot know it. For
 // spawn-relative conditions pass 1 filters against origin widened by this
@@ -106,7 +111,8 @@ typedef struct {
     // 90 east and 90 north, which a Chebyshev 100 finds.
     int      metric;        // MET_EUCLID (default) | MET_CHEBYSHEV
     char     ofId[ID_LEN];  // parent condition id, or "spawn"/"origin"
-    int      parent;        // resolved index, or PARENT_ORIGIN / PARENT_SPAWN
+    int      parent;        // resolved index, or PARENT_ORIGIN / PARENT_SPAWN / PARENT_AT
+    int      atX, atZ;      // PARENT_AT only: the world position to measure from
     int      dim;           // DIM_OVERWORLD / DIM_NETHER / DIM_END, inferred
     int      scanStep;      // CT_BIOME: sample spacing in blocks (see below)
     int      eyesMin;       // CT_EYES: minimum filled frames required

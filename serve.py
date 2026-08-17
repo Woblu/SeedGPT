@@ -574,6 +574,19 @@ are in BLOCKS (a chunk is 16). "of" is "origin", "spawn", or another condition's
 id (forming a tree). If no distance is given, choose a sensible one and say so in
 notes. Do NOT order conditions for speed -- a cost planner reorders them.
 
+"of" can also be an explicit position: "of":"1200000,-800000" searches around
+that point instead of the middle of the world. Use it when the request names
+coordinates, or refers to a known find that sits far out. Origin and spawn are
+both near 0,0, so without it every search is confined to the middle of the map --
+and many notable finds are hundreds of thousands of blocks away. Cost is the
+same as origin; it is the same disc, somewhere else. Limited to +/-30000000
+(the world border).
+
+Note this does NOT help you DISCOVER rare things faster: seeds are independent,
+so scanning many seeds near origin is just as likely to turn something up, and a
+hit near origin is more useful to a player. Explicit positions are for CHECKING
+or exploring a place someone already named.
+
 "of":"spawn" measures from WORLD SPAWN, which is an ESTIMATE -- it depends on
 grass placement, which is decoration and is not simulated. Structure positions
 are exact; their distance from spawn is not. When a request is spawn-relative,
