@@ -35,6 +35,9 @@
 // the true spawn exactly. Sized past the observed maximum.
 #define SPAWN_MARGIN 1100
 
+#define MET_EUCLID    0
+#define MET_CHEBYSHEV 1
+
 typedef enum {
     CT_STRUCTURE,   // structure of a type within `within` blocks of parent
     CT_BIOME,       // biome present within `within` blocks of parent
@@ -87,6 +90,13 @@ typedef struct {
     int      structType;    // CT_STRUCTURE
     int      biomeId;       // CT_BIOME
     int      within;        // radius, blocks
+    // How `within` measures distance. EUCLIDEAN is a disc and is the default,
+    // because "within 200 blocks" in plain English means a disc. CHEBYSHEV is a
+    // SQUARE -- max(|dx|,|dz|) -- and is what seed finders mean by "within N on
+    // any axis" or "within N chunks", because structure regions are a chunk
+    // grid. The two differ by up to sqrt(2): a Euclidean 100 misses a structure
+    // 90 east and 90 north, which a Chebyshev 100 finds.
+    int      metric;        // MET_EUCLID (default) | MET_CHEBYSHEV
     char     ofId[ID_LEN];  // parent condition id, or "spawn"/"origin"
     int      parent;        // resolved index, or PARENT_ORIGIN / PARENT_SPAWN
     int      dim;           // DIM_OVERWORLD / DIM_NETHER / DIM_END, inferred

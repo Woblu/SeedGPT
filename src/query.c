@@ -356,6 +356,29 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         x = cJSON_GetObjectItem(e, "within");
         c->within = (x && cJSON_IsNumber(x)) ? x->valueint : 1000;
 
+        // How `within` measures. Default stays EUCLIDEAN so no existing query
+        // changes meaning; "chebyshev" is opt-in and is what a seed finder means
+        // by "within N on any axis" or "within N chunks". An unrecognised value
+        // is an ERROR rather than a silent fallback to the default -- a typo
+        // that quietly searched a disc when a square was asked for would look
+        // exactly like a rare seed.
+        x = cJSON_GetObjectItem(e, "metric");
+        c->metric = MET_EUCLID;
+        if (x && cJSON_IsString(x)) {
+            const char *mv = x->valuestring;
+            if (!strcmp(mv, "chebyshev") || !strcmp(mv, "square") || !strcmp(mv, "axis"))
+                c->metric = MET_CHEBYSHEV;
+            else if (!strcmp(mv, "euclidean") || !strcmp(mv, "euclid") || !strcmp(mv, "disc"))
+                c->metric = MET_EUCLID;
+            else {
+                snprintf(err, errlen,
+                    "condition \"%s\": metric \"%s\" is not one of "
+                    "chebyshev (square, any-axis) or euclidean (disc)",
+                    c->id, mv);
+                goto done;
+            }
+        }
+
         cJSON *je = cJSON_GetObjectItem(e, "eyes");
         cJSON *jl = cJSON_GetObjectItem(e, "loot");
         cJSON *js = cJSON_GetObjectItem(e, "structure");
@@ -1391,6 +1414,18 @@ static inline int64_t d2(Pos a, Pos b) {
     return dx*dx + dz*dz;
 }
 
+// Distance under a condition's chosen metric, SQUARED -- so every caller keeps
+// comparing against the same `lim = reach*reach` and nothing else changes.
+// Chebyshev squared is just max(|dx|,|dz|)^2, which is monotone in the same way.
+static inline int64_t dmet(Pos a, Pos b, int metric) {
+    if (metric != MET_CHEBYSHEV) return d2(a, b);
+    int64_t dx = (int64_t)a.x - b.x, dz = (int64_t)a.z - b.z;
+    if (dx < 0) dx = -dx;
+    if (dz < 0) dz = -dz;
+    int64_t m = dx > dz ? dx : dz;
+    return m * m;
+}
+
 // Count structure instances of one condition's type whose position is within
 // `reach` of `centre`. If `g` is non-NULL each candidate is biome-viability
 // checked (pass 2); if NULL only geometry is counted (pass 1, an over-admit).
@@ -1415,7 +1450,7 @@ static int countInstances(const Query *q, int k, uint64_t s48, uint64_t worldSee
     for (int rz = r0z; rz <= r1z; rz++) {
         Pos p;
         if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
-        if (d2(p, centre) > lim) continue;
+        if (dmet(p, centre, c->metric) > lim) continue;
         if (!placementAllowed(q->mc, s48, c->structType, p)) continue;
         if (g && !isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
         if (g && !placementOk(q->mc, queryGenFlags(q), worldSeed, c->structType, p)) continue;
@@ -1470,7 +1505,7 @@ static int tightCluster(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
     for (int j = wr; j < H - wr; j++)          // core anchors only
     for (int i = wr; i < W - wr; i++) {
         int a = j * W + i;
-        if (!has[a] || d2(grid[a], centre) > reach2) continue;
+        if (!has[a] || dmet(grid[a], centre, c->metric) > reach2) continue;
         int cnt = 0;
         for (int dj = -wr; dj <= wr; dj++)
         for (int di = -wr; di <= wr; di++) {
@@ -1510,7 +1545,7 @@ static int overlapFind(const Query *q, int k, uint64_t s48, Pos centre, int reac
     for (int rz = r0z; rz <= r1z; rz++) {
         Pos a;
         if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &a)) continue;
-        if (d2(a, centre) > lim) continue;
+        if (dmet(a, centre, c->metric) > lim) continue;
         if (!placementAllowed(q->mc, s48, c->structType, a)) continue;
         if (g && !isViableStructurePos(c->structType, g, a.x, a.z, 0)) continue;
 
@@ -1712,7 +1747,7 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
         for (int rz = r0z; rz <= r1z; rz++) {
             Pos p;
             if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
-            int64_t d = d2(p, centre);
+            int64_t d = dmet(p, centre, c->metric);
             if (d > lim) continue;
             // Distinctness: two conditions of the same structure type must
             // match two DIFFERENT instances. Without this, "swamp_hut within
@@ -1773,7 +1808,7 @@ static int refind(const Query *q, int k, uint64_t s48, Pos centre,
     for (int rz = r0z; rz <= r1z; rz++) {
         Pos p;
         if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
-        int64_t d = d2(p, centre);
+        int64_t d = dmet(p, centre, c->metric);
         if (d > lim || d >= best) continue;
         if (!placementAllowed(q->mc, s48, c->structType, p)) continue;
         // Same distinctness rule pass 1 applies: two conditions of the same
@@ -2040,7 +2075,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             for (int rz = r0z; rz <= r1z && !hit; rz++) {
                 Pos p;
                 if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
-                if (d2(p, centre) > lim) continue;
+                if (dmet(p, centre, c->metric) > lim) continue;
                 if (!isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
                 StructureVariant sv;
                 int biome = getBiomeAt(g, 0, (p.x>>4)*4+2, 319>>2, (p.z>>4)*4+2);
@@ -2097,7 +2132,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             for (int rz = r0z; rz <= r1z; rz++) {
                 Pos p;
                 if (!getStructurePos(c->structType, q->mc, worldSeed, rx, rz, &p)) continue;
-                int64_t d = d2(p, centre);
+                int64_t d = dmet(p, centre, c->metric);
                 if (d > lim || d >= best) continue;
                 if (!isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
                 if (c->structType == Geode &&

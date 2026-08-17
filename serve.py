@@ -574,6 +574,17 @@ are in BLOCKS (a chunk is 16). "of" is "origin", "spawn", or another condition's
 id (forming a tree). If no distance is given, choose a sensible one and say so in
 notes. Do NOT order conditions for speed -- a cost planner reorders them.
 
+"metric" chooses how "within" measures, and it matters more than it looks:
+  omit it (default "euclidean") -- a DISC. Right for plain distance: "a village
+      within 200 blocks", "near spawn".
+  "metric":"chebyshev" -- a SQUARE, max(|dx|,|dz|). Use it whenever the request
+      says ON ANY AXIS, IN A SQUARE, or counts in CHUNKS ("within 3 chunks",
+      "in a 5x5 chunk area"). Seed finders mean this by default because
+      structure regions are a chunk grid.
+The two differ by up to sqrt(2): a village 240 east and 32 north is 240 away by
+chebyshev and 242 by euclidean, so "within 241" finds it under one and not the
+other. Picking the wrong one silently returns fewer seeds, never an error.
+
 Condition types (use EXACTLY these keys):
 - Structure:      {"id","structure":<name>,"within","of"}
     variants (only where valid): "surface":true (ruined_portal, skip buried),
