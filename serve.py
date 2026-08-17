@@ -600,6 +600,14 @@ Condition types (use EXACTLY these keys):
     cluster: add "count":N for >=N of that structure within the radius.
     tight cluster (quad-hut style): add "count":N AND "spread":T -- N instances
     within T blocks of EACH OTHER, anywhere within `within` of the reference.
+  Add "family":true to a biome condition to mean the FAMILY rather than the one
+  biome: {"biome":"badlands","family":true} covers wooded_badlands and
+  eroded_badlands too. Families: badlands/mesa, jungle, taiga, forest, savanna,
+  swamp, ocean, snowy, mountain, mushroom. Use it whenever the request names a
+  landscape rather than an exact biome ("a badlands", "in jungle", "mountains"),
+  because most family names are ALSO single biome names and without the flag you
+  search only the one.
+
 - Biome present:  {"id","biome":<name>,"within","of"}  (of may be another biome:
     "biome B within D of biome A" = the two biomes are adjacent.)
 - Biome area:     {"id","biome_area":<name>,"pct":P,"within","of"}  P = min %% of

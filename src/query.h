@@ -88,7 +88,15 @@ typedef struct {
     char     id[ID_LEN];
     CondType type;
     int      structType;    // CT_STRUCTURE
-    int      biomeId;       // CT_BIOME
+    int      biomeId;       // CT_BIOME -- the single biome, or the first member
+                            // of a category (kept for dimension inference)
+    // A CATEGORY match: "badlands" should mean badlands + wooded + eroded, the
+    // way a player means it, not one of the three. Empty unless a category name
+    // was given, in which case biomeId is only a representative and THIS is the
+    // thing to test.
+    unsigned char biomeSet[256];
+    int      biomeIsSet;    // biomeSet carries the answer, not biomeId
+    char     biomeLabel[32];// what the user typed, for honest reporting
     int      within;        // radius, blocks
     // How `within` measures distance. EUCLIDEAN is a disc and is the default,
     // because "within 200 blocks" in plain English means a disc. CHEBYSHEV is a

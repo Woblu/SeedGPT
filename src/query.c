@@ -212,6 +212,60 @@ static int str2biome_(int mc, const char *s)
     return -1;
 }
 
+// Biome FAMILIES, because a player asking for "badlands" means the badlands --
+// all three of them -- and making them write out badlands, wooded_badlands and
+// eroded_badlands as separate conditions is both tedious and a trap: three OR-ed
+// biomes is not something the condition language expresses, so people write one
+// and silently search a third of what they meant.
+//
+// Members are listed by NAME and resolved per version, so a family works on any
+// version and simply contains fewer biomes on older ones.
+static const struct { const char *name; const char *members[14]; } BIOME_CAT[] = {
+  {"badlands",   {"badlands","wooded_badlands","eroded_badlands",
+                  "badlands_plateau","modified_badlands_plateau",
+                  "wooded_badlands_plateau",NULL}},
+  {"mesa",       {"badlands","wooded_badlands","eroded_badlands",
+                  "badlands_plateau","modified_badlands_plateau",
+                  "wooded_badlands_plateau",NULL}},
+  {"jungle",     {"jungle","sparse_jungle","bamboo_jungle","jungle_edge",
+                  "modified_jungle",NULL}},
+  {"taiga",      {"taiga","snowy_taiga","old_growth_pine_taiga",
+                  "old_growth_spruce_taiga","taiga_hills","giant_tree_taiga",NULL}},
+  {"forest",     {"forest","birch_forest","dark_forest","flower_forest",
+                  "old_growth_birch_forest","birch_forest_hills",NULL}},
+  {"savanna",    {"savanna","savanna_plateau","windswept_savanna",
+                  "shattered_savanna",NULL}},
+  {"swamp",      {"swamp","mangrove_swamp",NULL}},
+  {"ocean",      {"ocean","deep_ocean","cold_ocean","deep_cold_ocean",
+                  "lukewarm_ocean","deep_lukewarm_ocean","warm_ocean",
+                  "deep_warm_ocean","frozen_ocean","deep_frozen_ocean",NULL}},
+  {"snowy",      {"snowy_plains","snowy_taiga","snowy_beach","snowy_slopes",
+                  "ice_spikes","frozen_peaks","frozen_river","snowy_tundra",NULL}},
+  {"mountain",   {"jagged_peaks","frozen_peaks","stony_peaks","snowy_slopes",
+                  "meadow","grove","windswept_hills","windswept_gravelly_hills",
+                  "windswept_forest",NULL}},
+  {"mushroom",   {"mushroom_fields","mushroom_field_shore",NULL}},
+};
+
+// Fills c->biomeSet from a family name. Returns the number of members that
+// exist in THIS version, or -1 if the name is not a family at all.
+static int biomeCategory_(int mc, const char *s, unsigned char *set, int *rep)
+{
+    for (size_t i = 0; i < sizeof BIOME_CAT / sizeof *BIOME_CAT; i++) {
+        if (strcmp(BIOME_CAT[i].name, s)) continue;
+        int n = 0;
+        for (int j = 0; BIOME_CAT[i].members[j]; j++) {
+            int id = str2biome_(mc, BIOME_CAT[i].members[j]);
+            if (id < 0) continue;      // absent in this version; not an error
+            set[id] = 1;
+            if (!n) *rep = id;
+            n++;
+        }
+        return n;                      // 0 means the family is empty HERE
+    }
+    return -1;
+}
+
 // The structure vocabulary. Exposed via queryStructureName/queryStructureAt so
 // the NL front end can read the authoritative list rather than hardcoding one.
 static const struct { const char *n; int t; } STRUCT_TBL[] = {
@@ -827,7 +881,26 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
             }
         } else if (jb && cJSON_IsString(jb)) {
             c->type = CT_BIOME;
-            c->biomeId = str2biome_(q->mc, jb->valuestring);
+            snprintf(c->biomeLabel, sizeof c->biomeLabel, "%s", jb->valuestring);
+            // "family":true means the name is a FAMILY -- badlands covers
+            // wooded and eroded too. It is opt-in rather than inferred because
+            // most family names are ALSO biome names ("badlands", "jungle",
+            // "taiga"), and inferring would make the same word mean the narrow
+            // thing or the wide thing depending on version, silently.
+            cJSON *jfam = cJSON_GetObjectItem(e, "family");
+            if (jfam && cJSON_IsTrue(jfam)) {
+                int rep = -1;
+                int nmem = biomeCategory_(q->mc, jb->valuestring, c->biomeSet, &rep);
+                if (nmem > 0) { c->biomeIsSet = 1; c->biomeId = rep; }
+                else {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"%s\" is not a biome family "
+                        "(try badlands, mesa, jungle, taiga, forest, savanna, "
+                        "swamp, ocean, snowy, mountain, mushroom)",
+                        c->id, jb->valuestring);
+                    goto done;
+                }
+            } else c->biomeId = str2biome_(q->mc, jb->valuestring);
             if (c->biomeId < 0) {
                 snprintf(err, errlen, "condition \"%s\": unknown biome \"%s\"", c->id, jb->valuestring);
                 goto done;
@@ -852,7 +925,26 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
             }
         } else if (jarea && cJSON_IsString(jarea)) {
             c->type = CT_BIOME_AREA;
-            c->biomeId = str2biome_(q->mc, jarea->valuestring);
+            snprintf(c->biomeLabel, sizeof c->biomeLabel, "%s", jarea->valuestring);
+            // "family":true means the name is a FAMILY -- badlands covers
+            // wooded and eroded too. It is opt-in rather than inferred because
+            // most family names are ALSO biome names ("badlands", "jungle",
+            // "taiga"), and inferring would make the same word mean the narrow
+            // thing or the wide thing depending on version, silently.
+            cJSON *jfam = cJSON_GetObjectItem(e, "family");
+            if (jfam && cJSON_IsTrue(jfam)) {
+                int rep = -1;
+                int nmem = biomeCategory_(q->mc, jarea->valuestring, c->biomeSet, &rep);
+                if (nmem > 0) { c->biomeIsSet = 1; c->biomeId = rep; }
+                else {
+                    snprintf(err, errlen,
+                        "condition \"%s\": \"%s\" is not a biome family "
+                        "(try badlands, mesa, jungle, taiga, forest, savanna, "
+                        "swamp, ocean, snowy, mountain, mushroom)",
+                        c->id, jarea->valuestring);
+                    goto done;
+                }
+            } else c->biomeId = str2biome_(q->mc, jarea->valuestring);
             if (c->biomeId < 0) {
                 snprintf(err, errlen, "condition \"%s\": unknown biome \"%s\"", c->id, jarea->valuestring);
                 goto done;
@@ -1995,7 +2087,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 int qx = (bx>>4)*4 + 2, qz = (bz>>4)*4 + 2;
                 if (!climateMayHold(q, worldSeed, k, qx, qz)) continue;
                 int id = getBiomeAt(g, 0, qx, 319 >> 2, qz);
-                if (id == c->biomeId) match++;
+                if (c->biomeIsSet ? c->biomeSet[id & 0xff] : id == c->biomeId) match++;
             }
             // Integer test without floating point: match/total >= pct/100.
             if (total <= 0 || (int64_t)match * 100 < (int64_t)c->areaPct * total)
@@ -2270,7 +2362,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                     // no the full six-noise lookup cannot say yes.
                     if (!climateMayHold(q, worldSeed, k, qx, qz)) continue;
                     int id = getBiomeAt(g, 0, qx, 319 >> 2, qz);
-                    if (id != c->biomeId) continue;
+                    if (!(c->biomeIsSet ? c->biomeSet[id & 0xff] : id == c->biomeId)) continue;
                     hit = 1;
                     if (d < bestd) { bestd = d; best = (Pos){bx, bz}; }
                     if (!c->isParent) break;   // presence-only: first hit is enough
