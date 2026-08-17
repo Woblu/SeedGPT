@@ -606,9 +606,12 @@ chebyshev and 242 by euclidean, so "within 241" finds it under one and not the
 other. Picking the wrong one silently returns fewer seeds, never an error.
 
 If a request pairs a LOOSE structure condition with a RARE biome or spawn
-condition, say so in notes: the search tries a limited number of a structure
-seed's sister world seeds, and a rare biome may need more of them. That is a
-FIND_UPPERS setting, not something to encode in the query.
+condition, emit a top-level "uppers": N alongside "conditions". The search tries only 64 of
+a structure seed's 65536 sister worlds by default, and a rare biome condition
+often lives in one it never tried -- which comes back as "no seeds found" rather
+than as an error. 1024 is a reasonable ask for a rare biome or spawn condition;
+it costs proportionally more time per structure seed. Do NOT set it for queries
+that are only about structures: those do not use sister seeds at all.
 
 Condition types (use EXACTLY these keys):
 - Structure:      {"id","structure":<name>,"within","of"}
@@ -904,6 +907,12 @@ def api_gemini(body) -> dict:
         except Exception:  # noqa: BLE001
             ver = v
     q = {"version": ver, "conditions": conds}
+    # Sister-seed depth, if the planner judged the query needs it. Whitelisted
+    # like everything else: a value that is not copied here vanishes silently,
+    # which is exactly how "tool" once went missing while its prose survived.
+    ou = obj.get("uppers")
+    if isinstance(ou, (int, float)) and ou > 0:
+        q["uppers"] = max(1, min(65536, int(ou)))
     # The query is rebuilt from a whitelist, so anything not copied here is
     # silently discarded. "tool" was not, which is exactly how a coal-ore casing
     # request came back as a plain buried-treasure search WITH a note claiming it
@@ -1338,7 +1347,8 @@ def _hunt_state(job):
         return dict(HUNTS.get(job) or {})
 
 
-def _hunt_loop(job, path, batch, want, threads, secs, casing="", radius=10000):
+def _hunt_loop(job, path, batch, want, threads, secs, casing="", radius=10000,
+               uppers=0):
     """Scan batch after batch, advancing FIND_OFFSET, until told to stop.
 
     Every batch covers seeds the previous ones did not: find.exe walks an index
@@ -1358,6 +1368,8 @@ def _hunt_loop(job, path, batch, want, threads, secs, casing="", radius=10000):
         env = dict(os.environ)
         env["FIND_OFFSET"] = str(off)
         env["FIND_SECONDS"] = str(secs)
+        if uppers:
+            env["FIND_UPPERS"] = str(uppers)
         try:
             if casing:
                 # Same loop, different worker. A rare casing is the case that
@@ -1604,6 +1616,15 @@ class Handler(BaseHTTPRequestHandler):
         seconds = max(0.0, min(seconds, MAX_SEARCH_SECONDS))
         if seconds:
             env["FIND_SECONDS"] = str(seconds)
+        # How many of a structure seed's 65536 sister world seeds to try before
+        # moving on. The default of 64 is right when the biome half of a query is
+        # common and badly wrong when it is rare -- the answer then lives in a
+        # sister never tried, and the search reports nothing found. It was
+        # reachable only as an environment variable, so the planner could say
+        # "you may need more sisters" and a web user could do nothing about it.
+        uppers = int(body.get("uppers", 0) or 0)
+        if uppers:
+            env["FIND_UPPERS"] = str(max(1, min(65536, uppers)))
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")

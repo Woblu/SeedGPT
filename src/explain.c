@@ -30,6 +30,14 @@
 // FIND_UPPERS, in which case the estimate below is conservative -- it predicts
 // fewer hits than a raised run will find, never more.
 #define UPPER_SAMPLES 64
+
+// This estimator SAMPLES the real predicate -- queryStage1 and queryStage2, the
+// same functions the search runs -- rather than modelling it. So it needs no
+// updating when a condition gains a new semantic: distance metric and biome
+// families were both added without touching this file and both show up
+// correctly (chebyshev 59.7% vs euclidean 42.0% hit rate on the same query;
+// badlands family 4.98% pass against 3.88% for the single biome). Resist the
+// urge to teach it about individual features -- it already knows.
 #define MAX_KEEP 512            // survivors retained from phase A
 #define PROBE_BUDGET 40000      // total phase-B upper probes (upper bound)
 #define PHASE_B_SECONDS  4.0    // wall-clock cap: a fine biome scan is ~6ms, so

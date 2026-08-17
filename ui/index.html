@@ -1798,9 +1798,15 @@
     const resp = await fetch('/api/stream', {
       signal: runCtl ? runCtl.signal : undefined,
       method: 'POST', headers: { 'Content-Type': 'application/json' },
+      // `uppers` rides on the query rather than a control: it is a property of
+      // what is being asked for (a rare biome condition needs more of a
+      // structure seed's sister worlds tried), not something a user should have
+      // to know to set. The planner emits it; without forwarding it here the
+      // planner could ask and nothing would happen.
       body: JSON.stringify({ query, job: runJob,
                              range: +$('#range').value || 3000000,
                              seconds: budgetSeconds(),
+                             uppers: query.uppers || 0,
                              threads: +$('#threads').value || 16 }) });
     if (!resp.ok) throw new Error((await resp.text()) || ('HTTP ' + resp.status));
     const reader = resp.body.getReader(), dec = new TextDecoder();

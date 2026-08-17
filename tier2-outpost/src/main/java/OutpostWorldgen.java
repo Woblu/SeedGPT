@@ -196,73 +196,39 @@ public class OutpostWorldgen {
             return;
         }
         if (args.length > 0 && args[0].equals("pieces")) {
-            // "pieces <seed> <structure> <x> <z>" -> every piece's real bounding
-            // box, from the GAME's own structure generator.
-            //
-            // Why this and not another C piece generator: cubiomes only ships
-            // generators for fortress and end_city, so build/structoverlap.exe
-            // answers UNKNOWN for everything else -- mansion included, which is
-            // the case that prompted the whole overlap tool (a mansion sprawls
-            // far past its origin, so origin-to-origin distance is meaningless
-            // for it). Reimplementing mansion layout in C would be a large,
-            // exactly-wrong-in-small-ways job. The real generator is already
-            // here and is right by construction, and this works for EVERY
-            // structure rather than one more special case.
-            long seed = Long.parseLong(args[1]);
-            String id = args[2];
-            int tx = Integer.parseInt(args[3]), tz = Integer.parseInt(args[4]);
-            // "liquid" as a 6th arg also reports, per piece, whether it would be
-            // SKIPPED at generation time. Off by default: it generates terrain
-            // for every chunk a piece touches, which for a 94-piece mineshaft is
-            // far more work than listing the boxes.
-            boolean wantLiquid = args.length > 5 && args[5].equals("liquid");
-            Holder<Structure> st;
-            try {
-                st = worldgen.lookupOrThrow(Registries.STRUCTURE).getOrThrow(
-                    ResourceKey.create(Registries.STRUCTURE,
-                        ResourceLocation.parse(id.contains(":") ? id
-                                               : "minecraft:" + id)));
-            } catch (Throwable ex) {
-                System.out.println("ERROR\tno such structure " + id);
-                return;
-            }
-            MultiNoiseBiomeSource bsrc = MultiNoiseBiomeSource.createFromPreset(owParams);
-            NoiseBasedChunkGenerator cg = new NoiseBasedChunkGenerator(bsrc, noiseSettings);
-            RandomState rs = RandomState.create(noiseSettings.value(),
-                worldgen.lookupOrThrow(Registries.NOISE), seed);
-            int tcx = tx >> 4, tcz = tz >> 4;
-            StructureStart found = null;
-            // Searched outward rather than at the exact chunk: the caller passes
-            // a block position from the finder, and a structure's start chunk is
-            // not always the chunk that position lands in.
-            for (int r = 0; r <= 3 && found == null; r++)
-            for (int dcx = -r; dcx <= r && found == null; dcx++)
-            for (int dcz = -r; dcz <= r && found == null; dcz++) {
-                if (r > 0 && Math.abs(dcx) != r && Math.abs(dcz) != r) continue;
+            // "pieces <seed> <structure> <x> <z> [liquid]" -- one shot.
+            // Prefer `pieceserver` for anything that asks more than once:
+            // this pays a whole JVM boot per call.
+            emitPieces(Long.parseLong(args[1]), args[2],
+                       Integer.parseInt(args[3]), Integer.parseInt(args[4]),
+                       args.length > 5 && args[5].equals("liquid"));
+            return;
+        }
+        if (args.length > 0 && args[0].equals("pieceserver")) {
+            // Persistent worker: "seed structure x z [liquid]" per line,
+            // terminated by END. The first spider-village hunt spent all
+            // its time in JVM bootstrap -- a boot per village per mineshaft
+            // variant -- and was abandoned. Same shape as oreserver,
+            // floatserver and carveserver.
+            Bootstrap.STDOUT.println("READY");
+            Bootstrap.STDOUT.flush();
+            java.io.BufferedReader in = new java.io.BufferedReader(
+                new java.io.InputStreamReader(System.in));
+            String line;
+            while ((line = in.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                if (line.equals("quit")) break;
+                String[] t = line.split("\\s+");
                 try {
-                    StructureStart start = st.value().generate(worldgen, cg, bsrc, rs,
-                        templates, seed, new ChunkPos(tcx + dcx, tcz + dcz), 0,
-                        OVERWORLD_HEIGHT, b -> true);
-                    if (start != null && start.isValid()) found = start;
-                } catch (Throwable t) { /* not here; keep looking */ }
-            }
-            if (found == null) {
-                // NOT "no pieces". The caller must be able to tell "this engine
-                // found nothing here" from "this structure has no extent", or it
-                // will report a non-overlap it never actually checked.
-                System.out.println("NOHIT\t" + seed + "\t" + id + "\t" + tx + "\t" + tz);
-                return;
-            }
-            System.out.println("START\t" + seed + "\t" + id
-                + "\t" + found.getChunkPos().x + "\t" + found.getChunkPos().z
-                + "\tpieces=" + found.getPieces().size());
-            for (net.minecraft.world.level.levelgen.structure.StructurePiece piece
-                     : found.getPieces()) {
-                BoundingBox b = piece.getBoundingBox();
-                System.out.println("P\t" + b.minX() + "\t" + b.minY() + "\t" + b.minZ()
-                    + "\t" + b.maxX() + "\t" + b.maxY() + "\t" + b.maxZ()
-                    + "\t" + pieceName(piece) + pieceFlags(piece)
-                    + (wantLiquid ? ("\tliquid=" + touchesLiquid(seed, b)) : ""));
+                    emitPieces(Long.parseLong(t[0]), t[1],
+                               Integer.parseInt(t[2]), Integer.parseInt(t[3]),
+                               t.length > 4 && t[4].equals("liquid"));
+                } catch (Throwable ex) {
+                    System.out.println("ERROR\t" + ex);
+                }
+                System.out.println("END");
+                System.out.flush();
             }
             return;
         }
@@ -389,6 +355,64 @@ public class OutpostWorldgen {
     }
 
     // The jigsaw template name of a piece, e.g. "pillager_outpost/watchtower".
+    /** Emit every piece of `id` near (tx,tz) as one "P" line each.
+     *
+     *  Shared by the one-shot `pieces` mode and the persistent
+     *  `pieceserver`, so the two cannot drift into reporting different
+     *  things -- the usual fate of a fast path bolted beside a slow one.
+     */
+    static void emitPieces(long seed, String id, int tx, int tz,
+                           boolean wantLiquid) throws Exception {
+        Holder<Structure> st;
+        try {
+            st = worldgen.lookupOrThrow(Registries.STRUCTURE).getOrThrow(
+                ResourceKey.create(Registries.STRUCTURE,
+                    ResourceLocation.parse(id.contains(":") ? id
+                                           : "minecraft:" + id)));
+        } catch (Throwable ex) {
+            System.out.println("ERROR\tno such structure " + id);
+            return;
+        }
+        MultiNoiseBiomeSource bsrc = MultiNoiseBiomeSource.createFromPreset(owParams);
+        NoiseBasedChunkGenerator cg = new NoiseBasedChunkGenerator(bsrc, noiseSettings);
+        RandomState rs = RandomState.create(noiseSettings.value(),
+            worldgen.lookupOrThrow(Registries.NOISE), seed);
+        int tcx = tx >> 4, tcz = tz >> 4;
+        StructureStart found = null;
+        // Searched outward rather than at the exact chunk: the caller passes
+        // a block position from the finder, and a structure's start chunk is
+        // not always the chunk that position lands in.
+        for (int r = 0; r <= 3 && found == null; r++)
+        for (int dcx = -r; dcx <= r && found == null; dcx++)
+        for (int dcz = -r; dcz <= r && found == null; dcz++) {
+            if (r > 0 && Math.abs(dcx) != r && Math.abs(dcz) != r) continue;
+            try {
+                StructureStart start = st.value().generate(worldgen, cg, bsrc, rs,
+                    templates, seed, new ChunkPos(tcx + dcx, tcz + dcz), 0,
+                    OVERWORLD_HEIGHT, b -> true);
+                if (start != null && start.isValid()) found = start;
+            } catch (Throwable t) { /* not here; keep looking */ }
+        }
+        if (found == null) {
+            // NOT "no pieces". The caller must be able to tell "this engine
+            // found nothing here" from "this structure has no extent", or it
+            // will report a non-overlap it never actually checked.
+            System.out.println("NOHIT\t" + seed + "\t" + id + "\t" + tx + "\t" + tz);
+            return;
+        }
+        System.out.println("START\t" + seed + "\t" + id
+            + "\t" + found.getChunkPos().x + "\t" + found.getChunkPos().z
+            + "\tpieces=" + found.getPieces().size());
+        for (net.minecraft.world.level.levelgen.structure.StructurePiece piece
+                 : found.getPieces()) {
+            BoundingBox b = piece.getBoundingBox();
+            System.out.println("P\t" + b.minX() + "\t" + b.minY() + "\t" + b.minZ()
+                + "\t" + b.maxX() + "\t" + b.maxY() + "\t" + b.maxZ()
+                + "\t" + pieceName(piece) + pieceFlags(piece)
+                + (wantLiquid ? ("\tliquid=" + touchesLiquid(seed, b)) : ""));
+        }
+    }
+
     /** Does this piece's box touch liquid -- i.e. would the game SKIP it?
      *
      *  Replicates MineShaftPiece.isInInvalidLocation: sweep the bounding box
@@ -400,6 +424,29 @@ public class OutpostWorldgen {
      *  piece we could not check is UNKNOWN, and calling it valid would put a
      *  corridor in a hunt that the game never builds.
      */
+    // Chunks generated while checking one structure's pieces. A mineshaft is ~94
+    // pieces over a few dozen chunks, and every piece was regenerating the
+    // chunks it overlaps from scratch -- the same chunk dozens of times, at
+    // ~0.1s each. That, not the JVM boot, is what made the spider-village hunt
+    // unusable even after it got a persistent worker.
+    //
+    // Keyed by chunk AND seed: keying on coordinates alone is how a previous
+    // cache in this project handed one seed's chunk to another.
+    static final java.util.Map<Long, ChunkAccess> LIQ_CACHE = new java.util.HashMap<>();
+    static long LIQ_SEED = Long.MIN_VALUE;
+
+    static ChunkAccess liqChunk(long seed, int cx, int cz) {
+        if (seed != LIQ_SEED) { LIQ_CACHE.clear(); LIQ_SEED = seed; }
+        // A structure spans tens of chunks, not thousands. If this ever grows
+        // past a sane bound something is wrong with the key, and an unbounded
+        // chunk cache is what ran an earlier census out of heap.
+        if (LIQ_CACHE.size() > 4096) LIQ_CACHE.clear();
+        long k = ((long) cx << 32) ^ (cz & 0xffffffffL);
+        ChunkAccess c = LIQ_CACHE.get(k);
+        if (c == null) { c = genFullChunk(seed, cx, cz); LIQ_CACHE.put(k, c); }
+        return c;
+    }
+
     static String touchesLiquid(long seed, BoundingBox b) {
         int x0 = b.minX() + 1, x1 = b.maxX() - 1;
         int y0 = b.minY() + 1, y1 = b.maxY() - 1;
@@ -408,7 +455,7 @@ public class OutpostWorldgen {
         try {
             for (int cx = x0 >> 4; cx <= (x1 >> 4); cx++)
             for (int cz = z0 >> 4; cz <= (z1 >> 4); cz++) {
-                ChunkAccess ch = genFullChunk(seed, cx, cz);
+                ChunkAccess ch = liqChunk(seed, cx, cz);
                 int bx0 = Math.max(x0, cx * 16), bx1 = Math.min(x1, cx * 16 + 15);
                 int bz0 = Math.max(z0, cz * 16), bz1 = Math.min(z1, cz * 16 + 15);
                 for (int x = bx0; x <= bx1; x++)
