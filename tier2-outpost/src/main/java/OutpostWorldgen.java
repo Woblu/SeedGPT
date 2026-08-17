@@ -256,7 +256,7 @@ public class OutpostWorldgen {
                 BoundingBox b = piece.getBoundingBox();
                 System.out.println("P\t" + b.minX() + "\t" + b.minY() + "\t" + b.minZ()
                     + "\t" + b.maxX() + "\t" + b.maxY() + "\t" + b.maxZ()
-                    + "\t" + pieceName(piece));
+                    + "\t" + pieceName(piece) + pieceFlags(piece));
             }
             return;
         }
@@ -383,6 +383,30 @@ public class OutpostWorldgen {
     }
 
     // The jigsaw template name of a piece, e.g. "pillager_outpost/watchtower".
+    /** Extra per-piece facts a bounding box cannot carry.
+     *
+     *  So far: whether a mineshaft corridor is a SPIDER corridor. That flag is
+     *  what decides whether the piece gets cobwebs and a cave spider spawner,
+     *  and it is the whole point of enumerating mineshaft pieces -- a corridor
+     *  box on its own says nothing about whether there is a spawner in it.
+     *  MineShaftCorridor.spiderCorridor is private final, so it is read the same
+     *  way this file already reads SinglePoolElement.template.
+     */
+    static String pieceFlags(net.minecraft.world.level.levelgen.structure.StructurePiece piece) {
+        String cls = piece.getClass().getName();
+        if (!cls.contains("MineShaftCorridor")) return "";
+        try {
+            java.lang.reflect.Field f = piece.getClass().getDeclaredField("spiderCorridor");
+            f.setAccessible(true);
+            return f.getBoolean(piece) ? "\tspider=1" : "\tspider=0";
+        } catch (Throwable ex) {
+            // Never guess. A corridor whose flag cannot be read is UNKNOWN, and
+            // reporting it as "not a spider corridor" would quietly drop exactly
+            // the pieces being searched for.
+            return "\tspider=?";
+        }
+    }
+
     static String pieceName(net.minecraft.world.level.levelgen.structure.StructurePiece piece) {
         // Non-jigsaw pieces (mansion, monument, stronghold...) have no template
         // name. getType().toString() on those is a lambda's identity hash --
