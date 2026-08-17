@@ -383,6 +383,28 @@ public class OutpostWorldgen {
     }
 
     // The jigsaw template name of a piece, e.g. "pillager_outpost/watchtower".
+    // WHETHER A MINESHAFT PIECE GENERATES AT ALL, read from the bytecode rather
+    // than inferred. MineShaftCorridor.postProcess opens with:
+    //
+    //     if (isInInvalidLocation(level, box)) return;
+    //
+    // and MineShaftPiece.isInInvalidLocation sweeps the bounding box shrunk by
+    // one on each side and returns INVALID if any block there is .liquid().
+    // Every branch in it tests liquid. There is NO air test and no terrain-height
+    // test.
+    //
+    // This matters because the obvious guess is wrong. A seed-finding course
+    // filters corridors by "terrain height == centre Y or centre Y + 1", on the
+    // stated grounds that corridors in the air do not generate. They do -- mesa
+    // mineshafts hang in open air all the time, which is exactly why that course
+    // wants badlands. What its height test actually selects is corridors at the
+    // SURFACE, i.e. exposed and reachable, which is a fine thing to want and a
+    // different thing from the generation rule.
+    //
+    // So a filter for "spider corridor that really exists" tests LIQUID, and a
+    // filter for "spider corridor you can walk into" tests height. Conflating
+    // them drops real corridors and keeps unreachable ones.
+
     /** Extra per-piece facts a bounding box cannot carry.
      *
      *  So far: whether a mineshaft corridor is a SPIDER corridor. That flag is
