@@ -793,6 +793,13 @@ bedrock". PRE-1.18 ONLY: from 1.18 the band sits under deepslate, which does not
 stop the placement scan, so no chest is placed at all. Set the version to 1.16 or
 older and say so in notes.
   "tool": {"name": "bedrock_casing", "seeds": N}
+
+What is worth visiting in a seed the user ALREADY HAS -- "what's good in seed X",
+"anything cool in my world", "best chests in this seed", "where are the diamonds
+in seed X". This is the opposite of a search: it needs a SEED and reports
+places. If they name a specific item, pass it.
+  "tool": {"name": "cool_stuff", "seed": "<seed>", "item": "<id>", "min": N}
+Enchantment levels do not exist here: never promise "Looting III", only the item.
       "are these two structures REALLY overlapping / inside each other". The
       ordinary overlap condition compares nominal boxes; this intersects real
       piece bounding boxes. Exact for fortress and end_city; for anything else it
@@ -931,7 +938,7 @@ def api_gemini(body) -> dict:
     # name would send the UI to a panel that does not exist.
     TOOLS = {"casing", "village_building", "exposed_treasure",
              "fortress_overlap", "hunt", "bedrock_outpost", "struct_overlap",
-             "floating", "spider_village", "bedrock_casing"}
+             "floating", "spider_village", "bedrock_casing", "cool_stuff"}
     t = obj.get("tool")
     if isinstance(t, dict) and t.get("name") in TOOLS:
         keep = {"name": t["name"]}
@@ -943,6 +950,11 @@ def api_gemini(body) -> dict:
         for side in ("a", "b"):
             if isinstance(t.get(side), str) and re.match(r"^[a-z_]{3,30}$", t[side]):
                 keep[side] = t[side]
+        if isinstance(t.get("seed"), str) and re.match(r"^-?\d{1,20}$", t["seed"]):
+            keep["seed"] = t["seed"]
+        if isinstance(t.get("item"), str) and re.match(
+                r"^(minecraft:)?[a-z0-9_]{2,40}$", t["item"]):
+            keep["item"] = t["item"].replace("minecraft:", "")
         if isinstance(t.get("seeds"), str) and re.match(
                 r"^-?\d{1,20}(,-?\d{1,20})*$", t["seeds"]):
             keep["seed_list"] = t["seeds"]      # bedrock takes explicit seeds
@@ -1145,6 +1157,54 @@ def api_bedrockcasing(body) -> dict:
                      "that chest is cased in bedrock or in the hardcoded SAND "
                      "depends on its own column's bedrock pattern -- about 1 in "
                      "5 for y=4. Confirm on a server.")}
+
+
+def api_coolstuff(body) -> dict:
+    """What is worth going to in a seed the user ALREADY has.
+
+    Every other search here answers "find me a seed". This answers "I have this
+    world, where is the good stuff" -- the direction Kludwisz's CoolStuffFinder
+    takes. It reads the chests of every lootable structure in range and reports
+    the ones clearing a per-structure notability bar, or a specific item if one
+    is named.
+
+    ENCHANTMENT LEVELS ARE NOT MODELLED. This engine knows item counts, not the
+    enchantment rolls on them, so "a Looting III sword" cannot be asked for --
+    only "a golden sword", which is a much weaker claim. Said plainly in the
+    response rather than approximated silently.
+    """
+    seed = str(body.get("seed", "")).strip()
+    if not re.match(r"^-?\d{1,20}$", seed):
+        raise Failure("cool stuff needs a seed")
+    version = check_version(str(body.get("version", "1.21")))
+    radius = max(200, min(20000, int(body.get("radius", 3000))))
+    args = [sys.executable, str(ROOT / "tier3-java" / "find_cool_stuff.py"),
+            seed, "--version", version, "--radius", str(radius)]
+    item = str(body.get("item", "")).strip()
+    if item:
+        if not re.match(r"^(minecraft:)?[a-z0-9_]{2,40}$", item):
+            raise Failure("item must be a block/item id, e.g. diamond")
+        args += ["--item", item, "--min", str(max(1, min(64, int(body.get("min", 1)))))]
+    rc, out, err = run(args, TIMEOUTS["describe"])
+    finds, cur, skipped = [], None, []
+    for line in out.splitlines():
+        m = re.match(r"\s+([a-z_]+)\s+x=(-?\d+)\s+z=(-?\d+)\s+(.+)$", line)
+        if m:
+            cur = {"structure": m.group(1), "x": int(m.group(2)),
+                   "z": int(m.group(3)), "why": m.group(4).strip(), "chest": ""}
+            finds.append(cur)
+            continue
+        c = re.match(r"\s+chest: (.+)$", line)
+        if c and cur is not None:
+            cur["chest"] = c.group(1)
+        k = re.match(r"NOT SCANNED[^:]*: (.+)$", line)
+        if k:
+            skipped = [x.strip() for x in k.group(1).split(",")]
+    n = re.search(r"(\d+) chests read", out)
+    return {"finds": finds, "chests": int(n.group(1)) if n else 0,
+            "skipped": skipped,
+            "note": ("Enchantment levels are not modelled: this can find "
+                     "\"a golden sword\" but never \"a Looting III golden sword\".")}
 
 
 def api_spidervillage(body) -> dict:
@@ -1642,6 +1702,7 @@ ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/confirmcasing": api_confirmcasing,
           "/api/confirmfloating": api_confirmfloating,
           "/api/spidervillage": api_spidervillage,
+          "/api/coolstuff": api_coolstuff,
           "/api/bedrockcasing": api_bedrockcasing,
           "/api/fortressoverlap": api_fortressoverlap,
           "/api/bedrockoutpost": api_bedrockoutpost,

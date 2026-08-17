@@ -50,6 +50,15 @@ int main(int argc, char **argv)
             {"hut",      "swamp_hut"},
             {"geode",    "amethyst_geode"},
             {"portal",   "ruined_portal"},
+            // cubiomes calls it bastion_remnant; every other tool here, the
+            // query engine and the vocabulary all say "bastion". Without this
+            // alias locate was the one component that answered "unknown
+            // structure" for a structure the rest of the project supports.
+            {"bastion",  "bastion_remnant"},
+            // Same story: the project says jungle_temple everywhere, cubiomes
+            // says jungle_pyramid, and locate was reporting "unknown" for a
+            // structure every other component handles.
+            {"jungle_temple", "jungle_pyramid"},
         };
         for (size_t a = 0; a < sizeof kAlias / sizeof *kAlias && st < 0; a++) {
             if (strcmp(kAlias[a].alias, argv[3])) continue;

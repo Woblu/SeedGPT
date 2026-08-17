@@ -778,6 +778,32 @@
       </div>
     </section>
 
+    <section>
+      <h2>What is cool in my seed? <span class="tag-exp">per-seed</span></h2>
+      <div class="hint" style="margin-top:0;margin-bottom:9px">
+        The opposite of a search: give it a world you already have and it reads
+        every lootable structure in range, reporting the chests worth the trip.
+        Leave the item blank for anything notable, or name one to hunt it
+        specifically.
+        <br><br>
+        <b>Enchantment levels are not modelled</b> — this can find “a golden
+        sword”, never “a Looting III golden sword”.
+      </div>
+      <div><label for="csSeed">seed</label>
+        <input type="text" id="csSeed" placeholder="20094"></div>
+      <div style="display:grid;grid-template-columns:1fr 80px 90px;gap:9px;margin-top:9px">
+        <div><label for="csItem">item (optional)</label>
+          <input type="text" id="csItem" placeholder="diamond"></div>
+        <div><label for="csMin">at least</label>
+          <input type="number" id="csMin" value="1"></div>
+        <div><label for="csRadius">radius</label>
+          <input type="number" id="csRadius" value="3000"></div>
+      </div>
+      <div class="btnrow">
+        <button class="primary" id="csBtn">Find cool stuff</button>
+      </div>
+    </section>
+
   </div>
 </aside>
 
@@ -2436,6 +2462,61 @@
   };
 
   // ---- piece-exact structure overlap -------------------------------------
+  $('#csBtn').onclick = async () => {
+    const seed = $('#csSeed').value.trim();
+    if (!seed) { fail('need a seed — this reads a world you already have'); return; }
+    const body = { seed, version: $('#version').value,
+                   radius: +$('#csRadius').value || 3000,
+                   item: $('#csItem').value.trim(),
+                   min: +$('#csMin').value || 1 };
+    busy('reading every lootable chest in range of that seed.');
+    try {
+      const d = await post('/api/coolstuff', body);
+      out.innerHTML = '';
+      out.append(statsCard('Cool stuff in this seed', [
+        ['chests read', String(d.chests ?? 0)],
+        ['worth the trip', String(d.finds.length), d.finds.length ? 'good' : 'warn'],
+        ['looking for', body.item ? `${body.min}+ ${pretty(body.item)}` : 'anything notable'],
+      ]));
+      if (!d.finds.length) {
+        out.append(el('div', 'note warn',
+          `Nothing cleared the bar among the ${d.chests ?? 0} chests within ${body.radius} `
+          + `blocks. That is about this radius, not about the seed — widen it, or name a `
+          + `different item.`));
+      } else {
+        const c = el('div', 'card');
+        c.append(el('h3', null, 'Worth the trip'));
+        d.finds.forEach(f => {
+          const box = el('div', 'seed');
+          const n = el('div', 'n');
+          n.append(el('span', 'num', pretty(f.structure)),
+                   el('span', 'dim', f.why));
+          box.append(n);
+          const t = el('table'), tr = el('tr');
+          tr.append(idCell('structure', f.structure, pretty(f.structure)),
+                    el('td', null, `x=${f.x}  z=${f.z}`),
+                    el('td', 'd', `/tp ${f.x} ~ ${f.z}`));
+          t.append(tr); box.append(t);
+          if (f.chest) {
+            const fl = el('div', 'dim');
+            fl.style.cssText = 'font-size:12px;margin-top:4px';
+            fl.textContent = f.chest;
+            box.append(fl);
+          }
+          c.append(box);
+        });
+        out.append(c);
+      }
+      // A structure that could not be located is a HOLE in the scan. Reporting
+      // it as "nothing there" is the failure this project keeps rediscovering.
+      if (d.skipped && d.skipped.length)
+        out.append(el('div', 'note warn',
+          'NOT SCANNED: ' + d.skipped.join(', ') + ' — these were not searched at all, '
+          + 'which is not the same as having nothing in them.'));
+      if (d.note) out.append(el('div', 'note', d.note));
+    } catch (e) { fail(e.message); }
+  };
+
   $('#svBtn').onclick = async () => {
     const body = { min: +$('#svMin').value || 2,
                    radius: +$('#svRadius').value || 3,
@@ -2599,6 +2680,14 @@
         if (t.seed_list) set('#boSeeds', t.seed_list);
         set('#boDrop', t.min_drop || 20);
         $('#boBtn').click();
+        return;
+      case 'cool_stuff':
+        if (t.seed) set('#csSeed', t.seed);
+        if (t.item) set('#csItem', t.item);
+        if (t.min) set('#csMin', t.min);
+        if (t.seed) { $('#csBtn').click(); return; }
+        aiNote('This reads a seed you already have — put it on the "What is cool in '
+             + 'my seed?" panel and press Find cool stuff.', true);
         return;
       case 'spider_village':
         if (t.min) set('#svMin', t.min);
