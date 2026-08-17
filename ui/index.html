@@ -1793,6 +1793,10 @@
   }
   function stopScroll() { $('#scroll').classList.add('hidden'); }
   let scanRange = 0;   // seeds requested this run, for the progress %
+  // The query behind the results currently on screen. renderResults needs it to
+  // decide whether to show the world-spawn caveat, and it is NOT a parameter
+  // there -- reaching for `query` inside renderResults threw on every search.
+  let shownQuery = null;
   function pushSeed(seed, hit, scanned) {
     const t = $('#scrollTrack');
     const d = el('div', 's' + (hit ? ' hit' : ''), (hit ? '✓ found  ' : 'seed  ') + seed);
@@ -1917,6 +1921,7 @@
     const token = (inheritedToken !== undefined) ? inheritedToken : beginRun();
     setBusyUI(true); startScroll(); out.innerHTML = '';
     scanRange = Math.max(1, Math.min(500000000, +$('#range').value || 3000000));
+    shownQuery = query;
     try {
       const d = await streamSearch(query, (s, n) => pushSeed(s, false, n));
       if (token !== runToken) return;     // superseded by a newer ask
@@ -1952,7 +1957,7 @@
       // is parsed as JSON so the line never reached anyone -- and a
       // spawn-relative result is the one a player checks IMMEDIATELY, by loading
       // the world and looking. Rendered from the query instead of the stream.
-      if ((query.conditions || []).some(c => c && c.of === 'spawn'))
+      if (((shownQuery && shownQuery.conditions) || []).some(c => c && c.of === 'spawn'))
         out.append(el('div', 'note warn',
           'Distances from WORLD SPAWN are approximate. The spawn point depends on '
           + 'grass placement, which is decoration and is not simulated here, so the '
