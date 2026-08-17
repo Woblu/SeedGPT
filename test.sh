@@ -1346,6 +1346,84 @@ else
   fi
 fi
 
+# ------------------------------------------- query semantics (metric/family/uppers)
+section "query semantics: distance metric, biome families, sister seeds"
+
+# These three all fail SILENTLY when broken -- they return fewer seeds, never an
+# error -- so each test pins the DIFFERENCE the feature makes rather than just
+# that a query runs. A revert to the old behaviour has to fail here.
+
+# Chebyshev vs Euclidean. Structure seed 0 puts a village at (240,32): chebyshev
+# distance 240, euclidean 242. within=241 therefore straddles them exactly, and
+# is the smallest fixture that can tell the two metrics apart at all.
+mk_metric() { printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":241,"of":"origin","metric":"%s"}]}\n' "$1"; }
+mk_metric euclidean  > /tmp/sc_test/met_e.json
+mk_metric chebyshev  > /tmp/sc_test/met_c.json
+me=$(FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/met_e.json 1 1 2>/dev/null | grep -c '^SEED')
+mc_=$(FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/met_c.json 1 1 2>/dev/null | grep -c '^SEED')
+if [ "$me" -eq 0 ] && [ "$mc_" -ge 1 ]; then
+  ok "chebyshev is a square, euclidean a disc (village at 240,32: within=241 -> $me vs $mc_)"
+else
+  bad "the distance metric is not being applied" \
+      "euclidean=$me (want 0) chebyshev=$mc_ (want >=1) -- a silent revert to euclidean looks exactly like this"
+fi
+
+# An unrecognised metric must be an ERROR. Falling back to the default would
+# search a disc when a square was asked for, and look like a rare seed.
+printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":300,"metric":"chebychev"}]}\n' > /tmp/sc_test/met_bad.json
+if ./build/find.exe /tmp/sc_test/met_bad.json 1 1 2>&1 | grep -q "is not one of"; then
+  ok "a misspelled metric is rejected, not silently defaulted"
+else
+  bad "a misspelled metric was accepted" "it would silently search the wrong shape"
+fi
+
+# Biome families. "badlands" is ALSO a single biome name, so the family must be
+# opt-in -- and the test has to show the family matching MORE, or an
+# implementation that ignores the flag would pass.
+mk_fam() { printf '{"version":"1.21","conditions":[{"id":"b","biome":"badlands"%s,"within":200,"of":"origin"}]}\n' "$1"; }
+mk_fam ''               > /tmp/sc_test/fam_one.json
+mk_fam ',"family":true' > /tmp/sc_test/fam_all.json
+f1=$(FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/fam_one.json 60 4 2>/dev/null | grep -c '^SEED')
+fa=$(FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/fam_all.json 60 4 2>/dev/null | grep -c '^SEED')
+if [ "$fa" -gt "$f1" ]; then
+  ok "biome family widens the match (badlands alone $f1, family $fa)"
+else
+  bad "\"family\":true did not widen the match" \
+      "single=$f1 family=$fa -- the flag is being ignored, which looks like implemented"
+fi
+printf '{"version":"1.21","conditions":[{"id":"b","biome":"tundra","family":true,"within":200}]}\n' > /tmp/sc_test/fam_bad.json
+if ./build/find.exe /tmp/sc_test/fam_bad.json 1 1 2>&1 | grep -q "is not a biome family"; then
+  ok "an unknown family is rejected rather than falling back to one biome"
+else
+  bad "an unknown family was accepted" "it would silently search a single biome"
+fi
+
+# FIND_UPPERS. Needs a LOOSE structure condition (so pass 1 keeps nearly
+# everything) plus a RARE biome one (so the answer hides in a sister seed).
+# A pure-biome query walks world seeds directly and never uses sisters at all --
+# measuring this with one showed "no effect" and wasted an hour.
+printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":800,"of":"origin"},{"id":"m","biome":"mushroom_fields","within":400,"of":"origin"}]}\n' > /tmp/sc_test/up.json
+u64=$(FIND_UPPERS=64   FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/up.json 60 8 2>/dev/null | grep -c '^SEED')
+u1k=$(FIND_UPPERS=1024 FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/up.json 60 8 2>/dev/null | grep -c '^SEED')
+if [ "$u1k" -gt "$u64" ]; then
+  ok "FIND_UPPERS reaches seeds the default misses ($u64 at 64, $u1k at 1024)"
+else
+  bad "FIND_UPPERS changed nothing" \
+      "64->$u64 1024->$u1k; seeds the default cannot reach are reported as absent"
+fi
+
+# The spawn caveat. cubiomes documents getSpawn as inaccurate; a spawn-relative
+# answer must carry that, and a non-spawn one must not be cluttered with it.
+printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":300,"of":"spawn"}]}\n' > /tmp/sc_test/sp_yes.json
+printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":300,"of":"origin"}]}\n' > /tmp/sc_test/sp_no.json
+sy=$(./build/find.exe /tmp/sc_test/sp_yes.json 4 1 2>/dev/null | grep -c 'WORLD SPAWN are approximate')
+sn=$(./build/find.exe /tmp/sc_test/sp_no.json  4 1 2>/dev/null | grep -c 'WORLD SPAWN are approximate')
+if [ "$sy" -ge 1 ] && [ "$sn" -eq 0 ]; then
+  ok "spawn-relative queries carry the approximation caveat, others do not"
+else
+  bad "the spawn caveat is wrong" "spawn query=$sy (want >=1) origin query=$sn (want 0)"
+fi
+
 # ---------------------------------------------------------------- summary
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
