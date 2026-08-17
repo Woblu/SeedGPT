@@ -19,9 +19,12 @@ THREE THINGS ARE CHECKED, and the third is the one most likely to be skipped:
   2. a mineshaft near it has corridors flagged spiderCorridor -- the flag the
      game itself uses to decide which corridors get cobwebs and a spawner
   3. those corridors ACTUALLY GENERATE. A mineshaft piece whose bounding box
-     touches liquid is skipped outright by the game, and on the seed this was
-     built against that is 55 of 94 pieces. Counting boxes without this is wrong
-     about more than half of them.
+     touches liquid is skipped outright by the game (verified in
+     MineShaftPiece.isInInvalidLocation). How often that bites is NOT known: the
+     one measurement taken so far said 55 of 94 pieces and was worthless,
+     because it was made on a mineshaft_mesa the game does not place at that
+     location. The real mineshaft there skips none of its 94. The check is kept
+     because the rule is real, not because its cost is known.
 
 NOT checked: whether the spawner is reachable or surface-exposed. mineshaft_mesa
 generates at y 60-66 and ordinary mineshaft at y -33..-27, so a badlands village
@@ -142,6 +145,11 @@ def main():
             # Both mineshaft variants: the mesa one sits at y 60-66 and is the
             # interesting case, the ordinary one at y -33..-27.
             found = []
+            # Both variants are ASKED FOR, but only one can answer: emitPieces
+            # passes the structure's own biome set to generate(), so the variant
+            # whose biome is wrong returns NOHIT. Before that, both generated
+            # everywhere with identical layouts at different y, every corridor
+            # was counted twice, and this hunt "matched" 26 of 27 villages.
             for ms in ("mineshaft_mesa", "mineshaft"):
                 ps = srv.pieces(seed, ms, vx, vz)
                 if not ps:

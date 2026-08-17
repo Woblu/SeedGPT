@@ -389,7 +389,15 @@ public class OutpostWorldgen {
             try {
                 StructureStart start = st.value().generate(worldgen, cg, bsrc, rs,
                     templates, seed, new ChunkPos(tcx + dcx, tcz + dcz), 0,
-                    OVERWORLD_HEIGHT, b -> true);
+                    // The structure's OWN biome set, not "any biome". With
+                    // b -> true, mineshaft and mineshaft_mesa BOTH generate at
+                    // every location -- same x/z, same layout, different y --
+                    // since nothing rejects the variant whose biome is wrong. A
+                    // spider-corridor hunt then counted every corridor twice and
+                    // matched 26 of 27 villages, which reads as a fine hit rate
+                    // and is a double count. A structure that cannot spawn here
+                    // yields NOHIT now, which is what the game would do.
+                    OVERWORLD_HEIGHT, b -> st.value().biomes().contains(b));
                 if (start != null && start.isValid()) found = start;
             } catch (Throwable t) { /* not here; keep looking */ }
         }
@@ -465,9 +473,18 @@ public class OutpostWorldgen {
                     // static property of the BLOCK -- water and lava declare it
                     // -- whereas a fluid state is ALSO non-empty for every
                     // waterlogged block, which the game's test does not count.
-                    // Both gave 55 of 94 on the seed measured, so nothing here
-                    // is waterlogged; this is the game's test rather than one
-                    // that happens to agree.
+                    // Both gave the same count on the seed measured, so
+                    // nothing there was waterlogged; this is the game's test
+                    // rather than one that happens to agree.
+                    //
+                    // Do NOT quote a skip RATE from this. The 55-of-94 figure
+                    // this comment used to carry was measured on a
+                    // mineshaft_mesa that the game does not place at that
+                    // location -- generate() was being passed b -> true, so both
+                    // mineshaft variants materialised everywhere. The real
+                    // mineshaft there skips 0 of 94: it sits at y -29, nowhere
+                    // near water, while the phantom sat at y 64. How much the
+                    // liquid rule actually costs is unmeasured.
                     if (ch.getBlockState(new BlockPos(x, y, z)).liquid())
                         return "1";
             }
