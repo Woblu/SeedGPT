@@ -799,7 +799,9 @@ What is worth visiting in a seed the user ALREADY HAS -- "what's good in seed X"
 in seed X". This is the opposite of a search: it needs a SEED and reports
 places. If they name a specific item, pass it.
   "tool": {"name": "cool_stuff", "seed": "<seed>", "item": "<id>", "min": N}
-Enchantment levels do not exist here: never promise "Looting III", only the item.
+For an ENCHANTMENT, use "ench" and "ench_min" instead of item/min:
+  "tool": {"name": "cool_stuff", "seed": "<seed>", "ench": "looting", "ench_min": 3}
+Levels ARE modelled, so "a Looting III golden sword" is a real query.
       "are these two structures REALLY overlapping / inside each other". The
       ordinary overlap condition compares nominal boxes; this intersects real
       piece bounding boxes. Exact for fortress and end_city; for anything else it
@@ -955,6 +957,10 @@ def api_gemini(body) -> dict:
         if isinstance(t.get("item"), str) and re.match(
                 r"^(minecraft:)?[a-z0-9_]{2,40}$", t["item"]):
             keep["item"] = t["item"].replace("minecraft:", "")
+        if isinstance(t.get("ench"), str) and re.match(r"^[a-z_]{3,40}$", t["ench"]):
+            keep["ench"] = t["ench"]
+        if isinstance(t.get("ench_min"), (int, float)):
+            keep["ench_min"] = max(1, min(10, int(t["ench_min"])))
         if isinstance(t.get("seeds"), str) and re.match(
                 r"^-?\d{1,20}(,-?\d{1,20})*$", t["seeds"]):
             keep["seed_list"] = t["seeds"]      # bedrock takes explicit seeds
@@ -1168,10 +1174,9 @@ def api_coolstuff(body) -> dict:
     the ones clearing a per-structure notability bar, or a specific item if one
     is named.
 
-    ENCHANTMENT LEVELS ARE NOT MODELLED. This engine knows item counts, not the
-    enchantment rolls on them, so "a Looting III sword" cannot be asked for --
-    only "a golden sword", which is a much weaker claim. Said plainly in the
-    response rather than approximated silently.
+    Enchantments and their LEVELS are read: item="golden_sword" with
+    ench="looting", ench_min=3 finds a Looting III golden sword. cubiomes has
+    carried these on ItemStack all along and nothing here read them until now.
     """
     seed = str(body.get("seed", "")).strip()
     if not re.match(r"^-?\d{1,20}$", seed):
@@ -1181,7 +1186,12 @@ def api_coolstuff(body) -> dict:
     args = [sys.executable, str(ROOT / "tier3-java" / "find_cool_stuff.py"),
             seed, "--version", version, "--radius", str(radius)]
     item = str(body.get("item", "")).strip()
-    if item:
+    ench = str(body.get("ench", "")).strip()
+    if ench:
+        if not re.match(r"^[a-z_]{3,40}$", ench):
+            raise Failure("enchantment must be a name, e.g. looting or sharpness")
+        args += ["--ench", ench, str(max(1, min(10, int(body.get("ench_min", 1)))))]
+    elif item:
         if not re.match(r"^(minecraft:)?[a-z0-9_]{2,40}$", item):
             raise Failure("item must be a block/item id, e.g. diamond")
         args += ["--item", item, "--min", str(max(1, min(64, int(body.get("min", 1)))))]
@@ -1203,8 +1213,8 @@ def api_coolstuff(body) -> dict:
     n = re.search(r"(\d+) chests read", out)
     return {"finds": finds, "chests": int(n.group(1)) if n else 0,
             "skipped": skipped,
-            "note": ("Enchantment levels are not modelled: this can find "
-                     "\"a golden sword\" but never \"a Looting III golden sword\".")}
+            "note": ("Enchantments and their levels are read -- ask for "
+                     "\"looting\" at level 3 to find a Looting III sword.")}
 
 
 def api_spidervillage(body) -> dict:

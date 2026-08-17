@@ -173,6 +173,13 @@ int main(int argc, char **argv)
         const char *nm = get_item_name(ctx, ctx->generated_items[k].item);
         int cnt = ctx->generated_items[k].count;
         printf(" %dx%s", cnt, nm);
+        const ItemStack *is = &ctx->generated_items[k];
+        for (int e = 0; e < is->enchantment_count && e < 16; e++) {
+            int rawid = is->enchantments[e].enchantment;
+            const char *en = get_enchantment_name(rawid);
+            if (en) printf("{%s %d}", en, is->enchantments[e].level);
+            else    printf("{enchant#%d %d}", rawid, is->enchantments[e].level);
+        }
         if (want && (strstr(nm, want))) wantCount += cnt;
     }
     printf("\n");

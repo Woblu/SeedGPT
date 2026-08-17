@@ -8,16 +8,15 @@ specific nether chest configurations.
 
     python find_cool_stuff.py <seed> [--version 1.21] [--radius 3000]
                               [--item minecraft:diamond --min 8]
+                              [--ench looting 3]
 
 With no --item it reports every chest that clears a built-in notability bar per
 structure. With --item it reports every chest holding at least --min of that
 item, notable or not.
 
-WHAT THIS CANNOT DO, stated up front because two of CoolStuffFinder's four
-targets need it: ENCHANTMENT LEVELS. This engine models item counts, not the
-enchantment rolls on them. "4+ Looting III golden swords" is not expressible --
-the closest available is "4+ golden swords", which is a different and much
-weaker claim. Those two presets are therefore absent rather than approximated.
+ENCHANTMENTS ARE READ, including levels: --ench looting 3 finds items carrying
+Looting III or better. cubiomes has carried these on ItemStack all along and
+nothing here read them until now.
 
 Bastion and fortress share salt and geometry and are MUTUALLY EXCLUSIVE at a
 site: locate reports whichever one is really there, so a site is scanned as one
@@ -62,6 +61,20 @@ NOTABLE = {
 }
 
 ITEM_RE = re.compile(r"(\d+)x(minecraft:[a-z_]+)")
+# "1xminecraft:golden_sword{looting 3}" -- checkloot prints these on an
+# "enchanted:" line, checkrpchest inline after the item.
+ENCH_RE = re.compile(r"(\d+)x(minecraft:[a-z_]+)\{([a-z_]+) (\d+)\}")
+
+# Configurations worth a special mention, the way CoolStuffFinder names four.
+# Only ones this engine can actually decide; nothing here is approximated.
+FAMOUS = [
+    ("bastion",       "obsidian",                None, 0, 46,
+     "a bastion double chest with 46+ obsidian"),
+    ("ruined_portal", "enchanted_golden_apple",  None, 0, 4,
+     "a ruined portal chest with 4+ enchanted golden apples"),
+    ("ruined_portal", "golden_sword",            "looting", 3, 1,
+     "a ruined portal chest with a Looting III golden sword"),
+]
 
 
 def run(args):
@@ -83,17 +96,19 @@ def locate(seed, version, structure, radius):
 
 
 def loot_at(seed, version, structure, x, z):
-    """{item: count} for the chests of one structure, or None if unreadable."""
+    """({item: count}, [(item, ench, level, count)]) or (None, None)."""
     if structure == "ruined_portal":
         txt = run([CHECKRP, str(seed), version, "--at", str(x), str(z)])
     else:
         txt = run([CHECKLOOT, str(seed), structure, str(x), str(z), version])
     if not txt or "unsupported" in txt:
-        return None
-    items = {}
+        return None, None
+    items, ench = {}, []
     for n, name in ITEM_RE.findall(txt):
         items[name] = items.get(name, 0) + int(n)
-    return items
+    for n, name, e, lv in ENCH_RE.findall(txt):
+        ench.append((name, e, int(lv), int(n)))
+    return items, ench
 
 
 def main():
@@ -102,7 +117,12 @@ def main():
     seed = sys.argv[1]
     version, radius = "1.21", 3000
     want_item, want_min = None, 1
+    want_ench, want_ench_lv = None, 1
     for i, a in enumerate(sys.argv):
+        if a == "--ench" and i + 1 < len(sys.argv):
+            want_ench = sys.argv[i + 1]
+            if i + 2 < len(sys.argv) and sys.argv[i + 2].isdigit():
+                want_ench_lv = int(sys.argv[i + 2])
         if a == "--version" and i + 1 < len(sys.argv): version = sys.argv[i + 1]
         if a == "--radius" and i + 1 < len(sys.argv):  radius = int(sys.argv[i + 1])
         if a == "--item" and i + 1 < len(sys.argv):    want_item = sys.argv[i + 1]
@@ -111,7 +131,9 @@ def main():
         want_item = "minecraft:" + want_item
 
     print(f"seed {seed}, {version}, within {radius} blocks of origin", flush=True)
-    if want_item:
+    if want_ench:
+        print(f"looking for items with {want_ench} {want_ench_lv}+", flush=True)
+    elif want_item:
         print(f"looking for chests with >= {want_min} {want_item}", flush=True)
     t0 = time.time()
     finds, scanned, skipped = [], 0, []
@@ -122,17 +144,35 @@ def main():
             skipped.append(st)
             continue
         for (x, z) in spots:
-            items = loot_at(seed, version, st, x, z)
+            items, ench = loot_at(seed, version, st, x, z)
             if items is None:
                 continue
             scanned += 1
-            if want_item:
+            if want_ench:
+                hits = [(f"{it.split(':')[-1]}", lv) for (it, e, lv, c) in ench
+                        if e == want_ench and lv >= want_ench_lv]
+                if hits:
+                    finds.append((st, x, z,
+                                  [(f"{want_ench} {lv} {nm}", 1) for nm, lv in hits],
+                                  items))
+            elif want_item:
                 n = items.get(want_item, 0)
                 if n >= want_min:
                     finds.append((st, x, z, [(want_item, n)], items))
             else:
                 hit = [(it, items.get(it, 0)) for it, need in NOTABLE.get(st, [])
                        if items.get(it, 0) >= need]
+                # The named configurations, checked alongside the ordinary bar.
+                for (fst, fitem, fe, flv, fn, label) in FAMOUS:
+                    if fst != st:
+                        continue
+                    if fe:
+                        c = sum(cc for (it, e, lv, cc) in ench
+                                if it.endswith(fitem) and e == fe and lv >= flv)
+                    else:
+                        c = items.get("minecraft:" + fitem, 0)
+                    if c >= fn:
+                        hit.append(("** " + label, c))
                 if hit:
                     finds.append((st, x, z, hit, items))
 
@@ -160,8 +200,7 @@ def main():
         # scan, and a hole reported as "nothing found there" is the failure this
         # project keeps rediscovering.
         print(f"NOT SCANNED (locate does not know these here): {', '.join(skipped)}")
-    print("Enchantment LEVELS are not modelled: a 'Looting III sword' cannot be "
-          "asked for, only 'a golden sword'.")
+    print("Enchantments and their levels ARE read -- try --ench looting 3.")
     return 0 if finds else 1
 
 
