@@ -1497,6 +1497,23 @@ void queryPrintPlan(const Query *q, FILE *f)
                         (long long)q->clim.lo[k], (long long)q->clim.hi[k]);
     }
     fprintf(f, "  est. pass-1 cost: %.0f ns/seed\n\n", q->est_cost_ns);
+
+    // World spawn is an ESTIMATE, and the estimator says so itself: cubiomes'
+    // getSpawn is documented "may be inaccurate because the world spawn depends
+    // on grass blocks". Grass is decoration, which nothing simulates at scan
+    // speed. A spawn-relative result is the one kind a player checks
+    // IMMEDIATELY -- they load the world and look -- so shipping it without the
+    // caveat is the over-claim most likely to be caught.
+    for (int i = 0; i < q->n; i++) {
+        if (q->cond[i].parent != PARENT_SPAWN) continue;
+        fprintf(f,
+            "  NOTE: distances measured from WORLD SPAWN are approximate. The\n"
+            "        spawn point depends on grass placement, which is decoration\n"
+            "        and is not simulated here, so the real in-game spawn can sit\n"
+            "        some way off. Structure positions are exact; their distance\n"
+            "        FROM SPAWN is not.\n\n");
+        break;
+    }
 }
 
 // ---------------------------------------------------------------- evaluation

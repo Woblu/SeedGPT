@@ -574,6 +574,13 @@ are in BLOCKS (a chunk is 16). "of" is "origin", "spawn", or another condition's
 id (forming a tree). If no distance is given, choose a sensible one and say so in
 notes. Do NOT order conditions for speed -- a cost planner reorders them.
 
+"of":"spawn" measures from WORLD SPAWN, which is an ESTIMATE -- it depends on
+grass placement, which is decoration and is not simulated. Structure positions
+are exact; their distance from spawn is not. When a request is spawn-relative,
+say so in notes rather than promising a spawn-adjacent result. "of":"origin"
+(0,0) is exact and is the better default when the user just means "near the
+middle of the world".
+
 "metric" chooses how "within" measures, and it matters more than it looks:
   omit it (default "euclidean") -- a DISC. Right for plain distance: "a village
       within 200 blocks", "near spawn".
