@@ -63,6 +63,11 @@ FAMILY = {
     "trial_chambers": ["trial_chambers"],
     "trail_ruins": ["trail_ruins"],
     "buried_treasure": ["buried_treasure"],
+    # Strongholds report the ACTUAL position; /locate reports the chunk-aligned
+    # corner, so all three in seed 20094 sit exactly 4 blocks off. That is a
+    # convention difference, not an error -- the default tolerance of 8 covers
+    # it, and tightening tol below 4 would flag every stronghold as a phantom.
+    "stronghold": ["stronghold"],
     "mineshaft": ["mineshaft", "mineshaft_mesa"],
     "fortress": ["fortress"],
     "bastion": ["bastion_remnant"],

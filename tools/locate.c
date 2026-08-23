@@ -77,10 +77,48 @@ int main(int argc, char **argv)
     }
 
     int radius = atoi(argv[4]);
+
     int cx = (argc > 5 && argv[5][0] != '-') ? atoi(argv[5]) : 0;
     int cz = (argc > 6 && argv[6][0] != '-') ? atoi(argv[6]) : 0;
     int skipViable = 0;
     for (int i = 5; i < argc; i++) if (!strcmp(argv[i], "--all")) skipViable = 1;
+
+    // STRONGHOLDS are not placed like other structures and cubiomes does not
+    // expose them through getStructurePos, so locate answered "does not exist in
+    // 1.21" for the structure players ask about most -- the one with the End
+    // portal in it. The engine has had them all along: initFirstStronghold and
+    // nextStronghold drive the `eyes` condition, and the cost model already
+    // rates a stronghold at ~10ms against ~1ns for a village, because the game
+    // samples many biomes to place one.
+    //
+    // They are generated in RINGS from the origin, in order, so this walks the
+    // iterator rather than scanning a region grid.
+    if (st == Stronghold) {
+        Generator gs;
+        setupGenerator(&gs, mc, 0);
+        applySeed(&gs, DIM_OVERWORLD, seed);
+        StrongholdIter sh;
+        initFirstStronghold(&sh, mc, seed);
+        uint64_t nsh = 0;
+        int64_t lim2 = (int64_t)radius * radius;
+        while (nextStronghold(&sh, &gs) > 0) {
+            int64_t dx = sh.pos.x - cx, dz = sh.pos.z - cz;
+            if (dx * dx + dz * dz <= lim2) {
+                printf("%d %d\n", sh.pos.x, sh.pos.z);
+                nsh++;
+            }
+            // The rings march outward, so once the ring itself is past the
+            // radius nothing later can come back inside it.
+            // sh.dist is the next ring distance in CHUNKS. Once the ring
+            // itself is well past the radius, nothing later in it can come
+            // back inside, so the walk can stop instead of running forever.
+            if (sh.dist * 16.0 > (double)radius * 2.0 + 2048.0)
+                break;
+        }
+        fprintf(stderr, "%" PRIu64 " stronghold within %d of (%d,%d) -- "
+                        "overworld coordinates\n", nsh, radius, cx, cz);
+        return nsh ? 0 : 1;
+    }
 
     StructureConfig sc;
     if (!getStructureConfig(st, mc, &sc)) {
