@@ -2,28 +2,46 @@
 # Regression suite. Encodes every check that has been run by hand so far, so a
 # refactor that breaks correctness fails here instead of silently shipping.
 #
-#   ./test.sh          run everything
+#   ./test.sh          run everything (~8 min on 16 threads)
 #   ./test.sh -v       show each command
+#   ./test.sh --quick  skip the slowest sections (the MITM solver, ~5 min)
+#   ./test.sh --kill   stop running find/locate/... binaries that hold build/
+#                      open (otherwise the suite refuses and lists them)
 #
-# Exit 0 = all green. Any failure is fatal and printed with context.
+# Exit 0 = all green. Any failure is fatal and printed with context. Skipped
+# checks are counted as skipped -- never as passed.
 set -u
 cd "$(dirname "$0")"
 
-VERBOSE=0
-[ "${1:-}" = "-v" ] && VERBOSE=1
+VERBOSE=0; QUICK=0; KILL=0
+for a in "$@"; do
+  case "$a" in
+    -v)      VERBOSE=1 ;;
+    --quick) QUICK=1 ;;
+    --kill)  KILL=1 ;;
+    *) echo "usage: ./test.sh [-v] [--quick] [--kill]" >&2; exit 2 ;;
+  esac
+done
 
-pass=0; fail=0
+pass=0; fail=0; nskip=0
 JC=/tmp/sc_test/classes
 mkdir -p /tmp/sc_test
 
+# Background helpers (the web server, the parallel MITM runs) must not outlive
+# the suite: an interrupted run used to leave serve.py on its port and mitm.exe
+# grinding through 2^48 on someone's machine.
+trap 'kill $(jobs -p) 2>/dev/null' EXIT
+
 ok()   { pass=$((pass+1)); printf '  \033[32mok\033[0m   %s\n' "$1"; }
 bad()  { fail=$((fail+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
+skip() { nskip=$((nskip+1)); printf '  \033[33mskip\033[0m %s\n' "$1"; }
 run()  { [ "$VERBOSE" = 1 ] && printf '     $ %s\n' "$*"; "$@"; }
 
 # Sections report their own wall time. Without it "the suite is slow" cannot be
 # turned into "which part", and the build section hid a four-minute serial
 # compile for a long time on exactly those grounds.
 _sec_t0=$(date +%s)
+_suite_t0=$_sec_t0
 _sec_name=""
 section() {
   if [ -n "$_sec_name" ]; then
@@ -42,43 +60,47 @@ section "build"
 # Both binaries a hunt spawns, not just the finder: the per-seed expansion runs
 # locate.exe, and an orphan of EITHER blocks the link. Narrowing this to find.exe
 # only moved the same failure one build down the chain.
-if command -v taskkill >/dev/null 2>&1; then
-  for exe in find.exe locate.exe fortoverlap.exe describe.exe; do
-    if tasklist //FI "IMAGENAME eq $exe" 2>/dev/null | grep -q "$exe"; then
-      taskkill //F //IM "$exe" >/dev/null 2>&1 || true
-      printf "  [33mnote[0m killed stale %s holding the binary
-" "$exe"
-    fi
+#
+# These used to be killed by NAME, every time -- which also killed a hunt the
+# user had running from the web UI, without a word. Now the suite lists what is
+# holding the binaries and stops; --kill opts in to ending them.
+if command -v tasklist >/dev/null 2>&1; then
+  held=""
+  for exe in find.exe locate.exe fortoverlap.exe describe.exe mitm.exe; do
+    tasklist //FI "IMAGENAME eq $exe" 2>/dev/null | grep -q "$exe" && held="$held $exe"
   done
-  sleep 1
+  if [ -n "$held" ]; then
+    if [ "$KILL" = 1 ]; then
+      for exe in $held; do taskkill //F //IM "$exe" >/dev/null 2>&1 || true; done
+      printf '  \033[33mnote\033[0m stopped running:%s\n' "$held"
+      sleep 1
+    else
+      printf '  \033[31mrunning:\033[0m%s -- a search or hunt (maybe from the web UI) holds\n' "$held"
+      printf '  build/ open and the build would fail. Stop it, or rerun with --kill.\n'
+      exit 1
+    fi
+  fi
 fi
 # The 27 tools used to be one long && chain, built one at a time. Two costs sat
 # in that: each link recompiled all of src/*.c from source (ten files, 27 times
 # = 270 redundant compiles), and nothing used more than one of the sixteen cores.
 #
 # build.sh caches src/ as objects now, which took a single link from 7.4s to
-# 0.73s, and the links below run in parallel. Measured on this machine the
+# 0.73s, and `build.sh all` links in parallel. Measured on this machine the
 # section went from roughly 200s to about 8s.
 #
-# The library is built ONCE up front, deliberately: parallel build.sh calls would
-# otherwise race to compile the same cubiomes objects into the same paths.
-TOOLS="find vocab xval describe map confidence checkeyes checkloot lootitems checkportal checkore checkvariant checkrpchest checkslime checkbiomearea checkbiome checkcluster checkheight checkplacement climatecheck cactus invert findat quad mitm locate fortoverlap structoverlap"
-if ! ./build.sh >/tmp/sc_test/blib 2>&1; then
-  bad "library build failed" "$(grep -i error /tmp/sc_test/blib | head -3)"
+# EVERY tool is built, not a list: seven tools the list left out (including
+# biomerecall, which the README tells people to run) could rot unnoticed.
+if ! ./build.sh all >/tmp/sc_test/blib 2>&1; then
+  bad "build failed: $(grep -E '^FAILED' /tmp/sc_test/blib)" \
+      "$(grep -E 'error' /tmp/sc_test/blib | head -3)"
   echo "aborting: nothing to test"; exit 1
 fi
-rm -f /tmp/sc_test/bfail
-printf '%s\n' $TOOLS | xargs -P "$(nproc 2>/dev/null || echo 4)" -I{} \
-  sh -c './build.sh tools/{}.c >/tmp/sc_test/b_{} 2>&1 || echo {} >>/tmp/sc_test/bfail'
-if [ ! -s /tmp/sc_test/bfail ]; then
-  ok "all tools compile ($(echo $TOOLS | wc -w) binaries)"
+ok "all tools compile ($(ls tools/*.c | wc -l) binaries)"
+if grep -q 'warning:' /tmp/sc_test/blib; then
+  bad "our code compiles with warnings" "$(grep 'warning:' /tmp/sc_test/blib | head -3)"
 else
-  # Name the tools that failed. The old handler cat'ed five fixed log files,
-  # so a break in the sixth-or-later tool reported an empty reason.
-  first=$(head -1 /tmp/sc_test/bfail)
-  bad "build failed: $(tr '\n' ' ' </tmp/sc_test/bfail)" \
-      "$(grep -iE 'error|fatal' "/tmp/sc_test/b_$first" 2>/dev/null | head -3)"
-  echo "aborting: nothing to test"; exit 1
+  ok "our code compiles without warnings under -Wall"
 fi
 
 javac -d "$JC" tools/XVal.java tools/Verify.java 2>/tmp/sc_test/jc \
@@ -707,7 +729,7 @@ section "web ui"
 # this suite (it needs playwright); this catches the cheap breakages -- a
 # syntax error in serve.py, a renamed tool, a broken parser.
 UIPORT=8791
-SEED_UI_PORT=$UIPORT python serve.py >/tmp/sc_test/ui.log 2>&1 &
+SEED_UI_PORT=$UIPORT SEED_UI_NO_BROWSER=1 python serve.py >/tmp/sc_test/ui.log 2>&1 &
 uipid=$!
 for _ in $(seq 1 30); do
   curl -s -m 1 "http://127.0.0.1:$UIPORT/api/vocab?v=1.21" >/dev/null 2>&1 && break
@@ -1132,6 +1154,9 @@ done
 # which is where the join's "decide before you compute" bug hid, so it is worth
 # the two minutes it costs to keep watching it.
 section "meet-in-the-middle solver"
+if [ "$QUICK" = 1 ]; then
+  skip "meet-in-the-middle solver (--quick)"
+else
 # The eight verifies are independent runs over disjoint structures, and this
 # section was 635s of an 811s suite -- 78% of the whole thing -- purely because
 # they went one after another. `--verify` is single-threaded (testPredicate and
@@ -1260,6 +1285,7 @@ done < <(awk '/^SEED/{print $2}' /tmp/sc_test/findat.out)
   || bad "did not recognise an unreachable chunk offset" ""
 
 
+fi   # --quick
 # ------------------------------------------- regressions from the casing work
 # Each of these is a bug that actually shipped and was found by hand. A suite
 # that only covers what was designed correctly does not stop the same class
@@ -1328,9 +1354,9 @@ for cand in "${JAVA21_HOME:-}" "${JAVA_HOME:-}" "/c/Program Files/Java/jdk-21"; 
   [ -n "$cand" ] && [ -x "$cand/bin/java.exe" ] && JAVA21="$cand/bin/java.exe" && break
 done
 if [ ! -f tier2-outpost/out/OreGen.class ] || [ ! -f tier2-outpost/cp.txt ]; then
-  ok "OreGen not built -- casing fill rule NOT CHECKED (skipped, not passed)"
+  skip "OreGen not built -- casing fill rule NOT CHECKED"
 elif [ -z "$JAVA21" ]; then
-  ok "no JDK 21 found -- casing fill rule NOT CHECKED (skipped, not passed)"
+  skip "no JDK 21 found -- casing fill rule NOT CHECKED"
 else
   ocp="out;$(tr -d '\r' < tier2-outpost/cp.txt | paste -sd';' -)"
   fills=$(printf '4 425 1977\n4 1737 153\n4 521 -1799\n4 1065 905\nquit\n' \
@@ -1425,5 +1451,7 @@ else
 fi
 
 # ---------------------------------------------------------------- summary
-printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"
+section "summary"
+printf '\n\033[1m%d passed, %d skipped, %d failed\033[0m (%ss total)\n' \
+  "$pass" "$nskip" "$fail" "$(( $(date +%s) - _suite_t0 ))"
 [ "$fail" -eq 0 ]

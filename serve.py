@@ -49,6 +49,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -149,13 +150,26 @@ def _kill_tree(proc):
 
 
 def run(args, timeout, stdin=None):
-    """Run a tool. No shell, so query text can never become a command."""
+    """Run a tool. No shell, so query text can never become a command.
+
+    On timeout the whole process TREE is killed. subprocess.run kills only the
+    direct child, and several tools are python -> JVM or python -> Minecraft
+    server chains: the python died and the server it started kept running,
+    holding gigabytes and a port, with nothing left that knew about it.
+    """
+    p = subprocess.Popen([str(a) for a in args], stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, stdin=subprocess.PIPE if stdin else None,
+                         text=True, encoding="utf-8", errors="replace", cwd=str(ROOT))
     try:
-        p = subprocess.run([str(a) for a in args], capture_output=True, text=True,
-                           timeout=timeout, input=stdin, cwd=str(ROOT))
+        out, err = p.communicate(input=stdin, timeout=timeout)
     except subprocess.TimeoutExpired:
+        _kill_tree(p)
+        try:
+            p.communicate(timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
         raise Failure(f"timed out after {timeout}s -- try a smaller range")
-    return p.returncode, p.stdout, p.stderr
+    return p.returncode, out, err
 
 
 def check_version(v: str) -> str:
@@ -164,16 +178,83 @@ def check_version(v: str) -> str:
     return v
 
 
+def java_seed(text) -> str:
+    """The world seed Minecraft would use for what the player typed, as text.
+
+    Java's rule (WorldOptions.parseSeed): trim; if it parses as a signed 64-bit
+    long that is the seed, otherwise the seed is the text's String.hashCode().
+    The tools parse with strtoll, which CLAMPS an out-of-range number -- so
+    "18446744073709551615" quietly became 9223372036854775807, a different world
+    from the one the game makes (it hashes the text). Normalising here means
+    every tool receives a plain in-range long. Mirrors src/seed.h.
+    """
+    s = str(text).strip()
+    if not s:
+        raise Failure("enter a seed")
+    if re.fullmatch(r"[+-]?\d+", s):
+        v = int(s)
+        if -(1 << 63) <= v < (1 << 63):
+            return str(v)
+    # String.hashCode runs over UTF-16 code units, surrogate pairs included.
+    data, h = s.encode("utf-16-le"), 0
+    for i in range(0, len(data), 2):
+        h = (31 * h + (data[i] | (data[i + 1] << 8))) & 0xFFFFFFFF
+    return str(h - (1 << 32) if h >= (1 << 31) else h)
+
+
+def clamp_threads(body, default=16) -> int:
+    """Worker threads for a native search: at least 1, at most this machine.
+
+    These were passed through unclamped -- 0 divided by zero inside find.exe,
+    and anything above 64 broke its thread wait -- and a page could ask for
+    more threads than the CPU has on a machine someone is using.
+    """
+    try:
+        n = int(body.get("threads", default))
+    except (TypeError, ValueError):
+        n = default
+    return max(1, min(n, os.cpu_count() or 16, 64))
+
+
+QUERY_DIR = BUILD / "tmp" / "queries"
+
+
 def write_query(body) -> Path:
-    """Persist the query where find.exe can read it."""
+    """Persist the query where find.exe can read it -- ONE FILE PER REQUEST.
+
+    This used to be a single queries/_ui.json shared by everything. A hunt
+    re-reads its query every batch, so clicking Plan with a different query in
+    the middle of a hunt silently changed what the hunt was searching for, and
+    two searches running at once raced on the same file. Callers remove theirs
+    with drop_query(); a hunt keeps its own until it ends.
+
+    The last query is still mirrored to queries/_ui.json, never read back, so it
+    stays a single command away for running find.exe by hand.
+    """
     q = body.get("query")
     if not isinstance(q, dict):
         raise Failure("missing 'query' object")
     check_version(str(q.get("version", "")))
-    path = ROOT / "queries" / "_ui.json"
-    path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps(q, indent=2), encoding="utf-8")
-    return path
+    text = json.dumps(q, indent=2)
+    QUERY_DIR.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix="q_", suffix=".json", dir=str(QUERY_DIR))
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    try:
+        last = ROOT / "queries" / "_ui.json"
+        last.parent.mkdir(exist_ok=True)
+        last.write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+    return Path(name)
+
+
+def drop_query(path):
+    try:
+        if path and Path(path).parent == QUERY_DIR:
+            Path(path).unlink()
+    except OSError:
+        pass
 
 
 # ------------------------------------------------------------------ parsing
@@ -457,35 +538,79 @@ def _plan_or_fail(path, extra=(), timeout=None, key="plan"):
 
 def api_plan(body) -> dict:
     path = write_query(body)
-    # range=1 thread=1: prints the plan, searches a single seed. Cheap and safe.
-    _, out, _ = _plan_or_fail(path, ["1", "1"])
+    try:
+        # range=1 thread=1: prints the plan, searches a single seed. Cheap and safe.
+        _, out, _ = _plan_or_fail(path, ["1", "1"])
+    finally:
+        drop_query(path)
     return {"plan": parse_plan(out), "notes": parse_notes(out), "raw": out}
 
 
 def api_explain(body) -> dict:
     path = write_query(body)
-    samples = int(body.get("samples", 2_000_000))
-    threads = int(body.get("threads", 16))
-    _, out, _ = _plan_or_fail(path, ["--explain", str(samples), str(threads)],
-                              TIMEOUTS["explain"], "explain")
+    samples = max(1000, min(50_000_000, int(body.get("samples", 2_000_000))))
+    try:
+        _, out, _ = _plan_or_fail(path, ["--explain", str(samples), str(clamp_threads(body))],
+                                  TIMEOUTS["explain"], "explain")
+    finally:
+        drop_query(path)
     return {"plan": parse_plan(out), "explain": parse_explain(out),
             "notes": parse_notes(out), "raw": out}
 
 
 def api_search(body) -> dict:
     path = write_query(body)
-    rng = int(body.get("range", 3_000_000))
-    threads = int(body.get("threads", 16))
-    _, out, _ = _plan_or_fail(path, [str(rng), str(threads)],
-                              TIMEOUTS["search"], "search")
+    rng = max(1, min(500_000_000, int(body.get("range", 3_000_000))))
+    try:
+        _, out, _ = _plan_or_fail(path, [str(rng), str(clamp_threads(body))],
+                                  TIMEOUTS["search"], "search")
+    finally:
+        drop_query(path)
     return {"plan": parse_plan(out), "seeds": parse_seeds(out),
             "funnel": parse_funnel(out), "notes": parse_notes(out), "raw": out}
 
 
+def api_check(body) -> dict:
+    """Does each of these seeds satisfy the query? (find --seed, per seed)
+
+    The question most of verifying a known find comes down to -- "does THIS
+    seed have it" -- had no endpoint; the only path was to search for it. Seeds
+    may be numbers or text, read the way Minecraft reads them.
+    """
+    raw = body.get("seeds")
+    if isinstance(raw, str):
+        raw = re.split(r"[\s,;]+", raw.strip())
+    if not isinstance(raw, list):
+        raise Failure("'seeds' must be a list (or a comma/space separated string)")
+    seeds = [str(s).strip() for s in raw if str(s).strip()][:200]
+    if not seeds:
+        raise Failure("give at least one seed")
+    path = write_query(body)
+    results = []
+    try:
+        for s in seeds:
+            ws = java_seed(s)
+            rc, out, err = run([tool("find"), path, "--seed", ws], TIMEOUTS["search"])
+            for marker in ("query error:", "plan error:"):
+                if marker in out or marker in err:
+                    raise Failure((out + err).split(marker, 1)[1].strip().splitlines()[0])
+            verdict = "yes" if rc == 0 else ("no" if rc == 3 else "error")
+            why = ""
+            m = re.search(r"^NO -- (.+)$", out, re.M)
+            if m:
+                why = m.group(1).strip()
+            hit = (parse_seeds("SEED " + ws + "\n" + out.split("YES", 1)[1])
+                   if verdict == "yes" and "YES" in out else [])
+            results.append({"input": s, "seed": ws, "verdict": verdict,
+                            "why": why, "hit": hit[0] if hit else None})
+    finally:
+        drop_query(path)
+    return {"results": results,
+            "matched": sum(1 for r in results if r["verdict"] == "yes")}
+
+
 def api_describe(body) -> dict:
-    seed = str(body.get("seed", "")).strip()
-    if not re.match(r"^-?\d+$", seed):
-        raise Failure("seed must be an integer")
+    seed = java_seed(body.get("seed", ""))
     v = check_version(str(body.get("version", "1.21")))
     radius = int(body.get("radius", 2000))
     # The world preset travels with the seed: describing a Large Biomes result
@@ -501,9 +626,7 @@ def api_describe(body) -> dict:
 
 def api_map(qs) -> bytes:
     """Render a seed's biome map. Returns raw PNG bytes."""
-    seed = (qs.get("seed") or [""])[0].strip()
-    if not re.match(r"^-?\d+$", seed):
-        raise Failure("seed must be an integer")
+    seed = java_seed((qs.get("seed") or [""])[0])
     v = check_version((qs.get("v") or ["1.21"])[0])
     radius = max(200, min(20000, int((qs.get("r") or ["2000"])[0])))
     px = max(64, min(1024, int((qs.get("px") or ["560"])[0])))
@@ -1112,13 +1235,42 @@ def _chat_url(base: str) -> str:
     return base + "/chat/completions"
 
 
+def _ai_base(body) -> str:
+    """The OpenAI-compatible base URL: the request's, else AI_API_BASE."""
+    return (str(body.get("base", "")).strip()
+            or os.environ.get("AI_API_BASE", "").strip())
+
+
+def _ai_key(body, provider) -> str:
+    """The API key to send -- and the reason it depends on WHERE it goes.
+
+    A key typed into the browser goes wherever that browser says. A key from
+    the server's environment must not: the compatible provider takes its base
+    URL from the request, so "else fall back to AI_API_KEY" sent the server's
+    key to any host a request named -- and since any web page can make a
+    request to this server, that was a way to steal it. An environment key now
+    goes only to the environment's own base (AI_API_BASE), or with no base in
+    the request at all. Gemini's endpoint is fixed, so its key cannot move.
+    """
+    key = str(body.get("key", "")).strip()
+    if key:
+        return key
+    if provider == "gemini":
+        return os.environ.get("GEMINI_API_KEY", "")
+    req_base = str(body.get("base", "")).strip().rstrip("/")
+    env_base = os.environ.get("AI_API_BASE", "").strip().rstrip("/")
+    if req_base and req_base != env_base:
+        return ""
+    return os.environ.get("AI_API_KEY", "")
+
+
 def _ai_compatible(body, text, system, key):
     """Ask an OpenAI-compatible endpoint. Returns the raw model text.
 
     Groq, OpenAI, OpenRouter, DeepSeek, Together and a local Ollama all take the
     same POST, so the provider is only a base URL and a model name.
     """
-    base = str(body.get("base", "")).strip()
+    base = _ai_base(body)
     if not base:
         raise Failure("no API base URL. Open settings and set one -- "
                       "https://api.groq.com/openai/v1 for Groq, "
@@ -1268,8 +1420,7 @@ def api_aitest(body) -> dict:
     than a hypothesis.
     """
     provider = str(body.get("provider", "")).strip().lower() or "gemini"
-    key = (str(body.get("key", "")).strip()
-           or os.environ.get("GEMINI_API_KEY" if provider == "gemini" else "AI_API_KEY", ""))
+    key = _ai_key(body, provider)
     if provider == "gemini":
         if not key:
             raise Failure("no key to test -- paste one first")
@@ -1298,9 +1449,11 @@ def api_aitest(body) -> dict:
                + quote(key, safe=""))
         headers = {"User-Agent": "seed-finder/1.0"}
     else:
-        base = str(body.get("base", "")).strip()
+        base = _ai_base(body)
         if not base:
             raise Failure("set the API base URL first")
+        if not base.startswith(("http://", "https://")):
+            raise Failure(f"the API base URL must start with http:// or https:// (got {base!r})")
         want = str(body.get("model", "")).strip()
         url = base.rstrip("/") + "/models"
         headers = {"User-Agent": "seed-finder/1.0"}
@@ -1380,8 +1533,7 @@ def api_gemini(body) -> dict:
     provider = str(body.get("provider", "")).strip().lower() or "gemini"
     if provider not in ("gemini", "compatible"):
         raise Failure(f"unknown provider {provider!r} -- use 'gemini' or 'compatible'")
-    key = (str(body.get("key", "")).strip()
-           or os.environ.get("GEMINI_API_KEY" if provider == "gemini" else "AI_API_KEY", ""))
+    key = _ai_key(body, provider)
     if not key and provider == "gemini":
         raise Failure("no Gemini API key yet. Open settings (the dot by the search "
                       "box) and paste one -- get a free key at "
@@ -1424,6 +1576,11 @@ def api_gemini(body) -> dict:
         except Exception:  # noqa: BLE001
             ver = v
     q = {"version": ver, "conditions": conds}
+    # The world preset. The prompt teaches the model to emit it and the engine
+    # parses it, but the rebuild dropped it -- so "large biomes" requests ran on
+    # the default generator and described a different world.
+    if obj.get("large_biomes") is True:
+        q["large_biomes"] = True
     # Sister-seed depth, if the planner judged the query needs it. Whitelisted
     # like everything else: a value that is not copied here vanishes silently,
     # which is exactly how "tool" once went missing while its prose survived.
@@ -1499,6 +1656,51 @@ def api_gemini(body) -> dict:
     return {"query": q, "notes": notes}
 
 
+def _jsonl(out: str):
+    """(hits, summary) from a tier worker's JSON-lines output.
+
+    Seeds are made strings here, once, for every worker: several emit them as
+    JSON numbers, and the browser's JSON.parse rounds anything past 2^53 -- a
+    64-bit seed then arrives as a different seed that does not have the find.
+    """
+    hits, summary = [], {}
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if "seed" in obj and obj["seed"] is not None:
+            obj["seed"] = str(obj["seed"])
+        if obj.get("summary"):
+            summary = obj
+        else:
+            hits.append(obj)
+    return hits, summary
+
+
+def _worker_ok(rc, err, hits, what, ok=(0,)):
+    """Raise when a worker CRASHED rather than finished empty.
+
+    A JVM that died on startup and a search that honestly found nothing both
+    return no hits; reporting the first as the second tells the user the seeds
+    do not exist when the tool never looked. `ok` is the worker's own set of
+    "finished" exit codes (the hunt scripts use 1 for "found nothing"); a
+    Python traceback is a crash whatever the code, since an uncaught exception
+    also exits 1.
+    """
+    if hits:
+        return
+    if rc in ok and "Traceback (most recent call last)" not in (err or ""):
+        return
+    tail = " / ".join((err or "").strip().splitlines()[-3:])
+    raise Failure(f"{what} failed (exit {rc})" + (f": {tail}" if tail else ""))
+
+
 def api_villagesmiths(body) -> dict:
     """Tier-2 search: run the real-Minecraft worldgen backend to find seeds with
     a village holding >= N smith buildings. Slow (real jigsaw generation), and
@@ -1519,19 +1721,8 @@ def api_villagesmiths(body) -> dict:
             "--start", str(start), "--workers", str(workers), "--limit", str(limit),
             "--building", building]
     rc, out, err = run(args, TIMEOUTS["villagesmiths"])
-    hits, summary = [], {}
-    for line in out.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        if obj.get("summary"):
-            summary = obj
-        else:
-            hits.append(obj)
+    hits, summary = _jsonl(out)
+    _worker_ok(rc, err, hits, "the worldgen worker")
     return {"hits": hits, "summary": summary}
 
 
@@ -1660,6 +1851,7 @@ def api_bedrockcasing(body) -> dict:
             hits.append({"seed": m.group(1), "x": int(m.group(2)),
                          "z": int(m.group(3)), "open_to": int(m.group(4)),
                          "chest_y": int(m.group(5)) + 1})
+    _worker_ok(rc, err, hits, "the bedrock-casing hunt", ok=(0, 1))
     tot = re.search(r"(\d+) treasures in", out)
     return {"hits": hits, "checked": int(tot.group(1)) if tot else 0,
             "note": ("A hit means the COLUMN reaches the bedrock band. Whether "
@@ -1681,9 +1873,7 @@ def api_coolstuff(body) -> dict:
     ench="looting", ench_min=3 finds a Looting III golden sword. cubiomes has
     carried these on ItemStack all along and nothing here read them until now.
     """
-    seed = str(body.get("seed", "")).strip()
-    if not re.match(r"^-?\d{1,20}$", seed):
-        raise Failure("cool stuff needs a seed")
+    seed = java_seed(body.get("seed", ""))
     version = check_version(str(body.get("version", "1.21")))
     radius = max(200, min(20000, int(body.get("radius", 3000))))
     args = [sys.executable, str(ROOT / "tier3-java" / "find_cool_stuff.py"),
@@ -1713,6 +1903,7 @@ def api_coolstuff(body) -> dict:
         k = re.match(r"NOT SCANNED[^:]*: (.+)$", line)
         if k:
             skipped = [x.strip() for x in k.group(1).split(",")]
+    _worker_ok(rc, err, finds, "the cool-stuff finder", ok=(0, 1))
     n = re.search(r"(\d+) chests read", out)
     return {"finds": finds, "chests": int(n.group(1)) if n else 0,
             "skipped": skipped,
@@ -1760,6 +1951,7 @@ def api_spidervillage(body) -> dict:
             cur["boxes"].append({"variant": b.group(1),
                                  "min": [int(b.group(i)) for i in (2, 3, 4)],
                                  "max": [int(b.group(i)) for i in (5, 6, 7)]})
+    _worker_ok(rc, err, hits, "the spider-village hunt", ok=(0, 1))
     tot = re.search(r"(\d+) villages checked", out)
     return {"hits": hits, "checked": int(tot.group(1)) if tot else 0,
             "note": ("Spawners that EXIST. Whether one is reachable or "
@@ -2006,16 +2198,8 @@ def api_exposedtreasure(body) -> dict:
             "--version", version, "--range", str(rng), "--limit", str(limit),
             "--workers", "6"]
     rc, out, err = run(args, TIMEOUTS["villagesmiths"])
-    hits, summary = [], {}
-    for line in out.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        (summary.update(obj) if obj.get("summary") else hits.append(obj))
+    hits, summary = _jsonl(out)
+    _worker_ok(rc, err, hits, "the treasure worker")
     return {"hits": hits, "summary": summary}
 
 
@@ -2031,8 +2215,24 @@ def _hunt_state(job):
         return dict(HUNTS.get(job) or {})
 
 
+HUNT_IDLE_SECONDS = 600
+
+
 def _hunt_loop(job, path, batch, want, threads, secs, casing="", radius=10000,
                uppers=0):
+    """Run a hunt; whatever way it ends, mark it stopped and drop its query."""
+    try:
+        _hunt_batches(job, path, batch, want, threads, secs, casing, radius, uppers)
+    finally:
+        with HUNTS_LOCK:
+            if job in HUNTS:
+                HUNTS[job]["running"] = False
+        if not casing:
+            drop_query(path)
+
+
+def _hunt_batches(job, path, batch, want, threads, secs, casing="", radius=10000,
+                  uppers=0):
     """Scan batch after batch, advancing FIND_OFFSET, until told to stop.
 
     Every batch covers seeds the previous ones did not: find.exe walks an index
@@ -2048,6 +2248,14 @@ def _hunt_loop(job, path, batch, want, threads, secs, casing="", radius=10000,
             if not st or st.get("stop"):
                 break
             if want and len(st["hits"]) >= want:
+                break
+            # Nobody has asked about this hunt in a while: the tab was closed,
+            # or the browser crashed. A hunt with want=0 never ends on its own,
+            # and an unwatched one would otherwise run until the server dies,
+            # on a machine someone is working on.
+            if time.time() - st.get("last_poll", time.time()) > HUNT_IDLE_SECONDS:
+                st["error"] = (f"stopped: no one checked on this hunt for "
+                               f"{HUNT_IDLE_SECONDS // 60} minutes")
                 break
         env = dict(os.environ)
         env["FIND_OFFSET"] = str(off)
@@ -2067,14 +2275,19 @@ def _hunt_loop(job, path, batch, want, threads, secs, casing="", radius=10000,
                 cmd = [str(tool("find")), str(path), str(batch), str(threads)]
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                cwd=str(ROOT), env=env)
+                encoding="utf-8", errors="replace", cwd=str(ROOT), env=env)
             job_register(job, proc)
-            out, _ = proc.communicate(timeout=secs + 900 if casing else secs + 120)
+            try:
+                out, _ = proc.communicate(timeout=secs + 900 if casing else secs + 120)
+            except subprocess.TimeoutExpired:
+                # communicate() does not kill on timeout, and job_done below
+                # forgets the process -- so it would run on, unreachable.
+                _kill_tree(proc)
+                raise
         except Exception as e:
             with HUNTS_LOCK:
                 if job in HUNTS:
                     HUNTS[job]["error"] = str(e)
-                    HUNTS[job]["running"] = False
             return
         finally:
             job_done(job)
@@ -2097,8 +2310,11 @@ def _hunt_loop(job, path, batch, want, threads, secs, casing="", radius=10000,
             # magma "hit" at (-2103,20,6969) had no chest in the column at all --
             # so an unconfirmed hit is a claim the tool cannot back. Candidates
             # are rare, so this costs a server boot per hit rather than per chest.
-            confirmed = []
+            confirmed, rejected, unknown = [], 0, 0
             for h in found:
+                with HUNTS_LOCK:
+                    if (HUNTS.get(job) or {}).get("stop"):
+                        break               # a confirm can take 20 min; honour Stop
                 try:
                     rc, cout, _ = run(
                         [sys.executable, str(ROOT / "tier3-java" / "confirm_casing.py"),
@@ -2110,13 +2326,21 @@ def _hunt_loop(job, path, batch, want, threads, secs, casing="", radius=10000,
                         if m:
                             h["faces"] = int(m.group(2))
                         confirmed.append(h)
-                except Exception:
-                    pass                    # unconfirmed is dropped, never reported
+                    elif rc == 1:
+                        rejected += 1       # the server looked and said no
+                    else:
+                        unknown += 1        # 2 = chunk would not load: UNKNOWN
+                except Exception:  # noqa: BLE001
+                    unknown += 1            # the confirmer itself failed
+            # Unconfirmed candidates are dropped, never reported -- but "the real
+            # server said no" and "we could not ask" are counted apart. Lumping
+            # them together made a missing server.jar look like 40 rejections.
             with HUNTS_LOCK:
                 st = HUNTS.get(job)
                 if st:
                     st["candidates"] = st.get("candidates", 0) + len(found)
-                    st["rejected"] = st.get("rejected", 0) + (len(found) - len(confirmed))
+                    st["rejected"] = st.get("rejected", 0) + rejected
+                    st["unknown"] = st.get("unknown", 0) + unknown
             found = confirmed
         else:
             found = parse_seeds(out) or []
@@ -2129,20 +2353,26 @@ def _hunt_loop(job, path, batch, want, threads, secs, casing="", radius=10000,
                 return
             seen = st["seen"]
             for h in found:
-                s = str(h.get("seed"))
+                h["seed"] = str(h.get("seed"))     # never a JSON number: > 2^53
+                s = h["seed"]
                 if s not in seen:
                     seen.add(s)
                     st["hits"].append(h)
             st["batches"] += 1
-            st["offset"] = off + batch
+            # Advance to where find says it actually got to. Under a time budget
+            # it stops part-way through the batch, and advancing by the whole
+            # batch skipped every seed it never reached -- while "scanned"
+            # claimed them. find.exe prints the gap-free resume point; a casing
+            # batch (a different worker) still advances by the batch.
+            m = re.search(r"resume with FIND_OFFSET=(\d+)", out or "")
+            nxt = int(m.group(1)) if (m and not casing) else off + batch
+            if nxt <= off:
+                nxt = off + 1          # never loop on the same range forever
+            st["offset"] = nxt
             # Reported so a quiet hunt is legible: "nothing yet" and "not
             # actually scanning" look identical from outside otherwise.
-            st["scanned"] += batch
-        off += batch
-
-    with HUNTS_LOCK:
-        if job in HUNTS:
-            HUNTS[job]["running"] = False
+            st["scanned"] += nxt - off
+        off = nxt
 
 
 def api_hunt(body) -> dict:
@@ -2156,25 +2386,38 @@ def api_hunt(body) -> dict:
     casing = str(body.get("casing", "")).strip()
     if casing and not re.match(r"^(minecraft:)?[a-z0-9_]{2,40}$", casing):
         raise Failure("casing must be a block id, e.g. magma_block or iron_ore")
-    # A casing hunt supplies its own query (buried treasure near origin), so the
-    # builder's query is neither needed nor meaningful for it.
-    path = ROOT / "queries" / "_ui.json" if casing else write_query(body)
     job = str(body.get("job", "")).strip()
     if not job:
         raise Failure("hunt needs a 'job' id so it can be polled and stopped")
     batch = max(10_000, min(50_000_000, int(body.get("batch", 2_000_000))))
     want = max(0, int(body.get("want", 1)))
-    threads = int(body.get("threads", 16))
+    threads = clamp_threads(body)
     secs = max(5, min(600, int(body.get("secs", 60))))
     radius = max(1000, min(60000, int(body.get("radius", 10000))))
+    uppers = max(0, min(65536, int(body.get("uppers", 0) or 0)))
+    if casing and not (ROOT / "tier3-java" / "server.jar").exists():
+        # Every casing candidate is confirmed on a real server. Without one,
+        # each would fail to confirm and the hunt would report a long run of
+        # "rejections" that were really "could not ask".
+        raise Failure("a casing hunt confirms every hit on a real Minecraft "
+                      "server, and tier3-java/server.jar is missing -- see "
+                      "tier3-java/README.md for the download")
     with HUNTS_LOCK:
         if job in HUNTS and HUNTS[job].get("running"):
             raise Failure(f"hunt {job} is already running")
+    # A casing hunt supplies its own query (buried treasure near origin), so the
+    # builder's query is neither needed nor meaningful for it. Everything else
+    # gets its OWN query file, which the hunt re-reads every batch -- no other
+    # request can change what it is searching for.
+    path = None if casing else write_query(body)
+    with HUNTS_LOCK:
         HUNTS[job] = {"hits": [], "seen": set(), "scanned": 0, "offset": 0,
                       "batches": 0, "running": True, "stop": False, "error": None,
-                      "candidates": 0, "rejected": 0}
+                      "candidates": 0, "rejected": 0, "unknown": 0,
+                      "last_poll": time.time()}
     threading.Thread(target=_hunt_loop,
-                     args=(job, path, batch, want, threads, secs, casing, radius),
+                     args=(job, path, batch, want, threads, secs, casing, radius,
+                           uppers),
                      daemon=True).start()
     return {"job": job, "started": True, "batch": batch, "want": want,
             "casing": casing or None}
@@ -2182,6 +2425,9 @@ def api_hunt(body) -> dict:
 
 def api_hunt_status(body) -> dict:
     job = str(body.get("job", "")).strip()
+    with HUNTS_LOCK:
+        if job in HUNTS:
+            HUNTS[job]["last_poll"] = time.time()   # someone is still watching
     st = _hunt_state(job)
     if not st:
         return {"job": job, "known": False}
@@ -2193,6 +2439,7 @@ def api_hunt_status(body) -> dict:
             # from "0 found" after no candidates at all.
             "candidates": st.get("candidates", 0),
             "rejected": st.get("rejected", 0),
+            "unknown": st.get("unknown", 0),
             "error": st.get("error")}
 
 
@@ -2222,9 +2469,15 @@ ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/bedrockoutpost": api_bedrockoutpost,
           "/api/structoverlap": api_structoverlap,
           "/api/cancel": api_cancel,
+          "/api/check": api_check,
           "/api/hunt": api_hunt,
           "/api/hunt/status": api_hunt_status,
           "/api/hunt/stop": api_hunt_stop}
+
+
+ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}", f"[::1]:{PORT}"}
+ALLOWED_ORIGINS = {"http://" + h for h in ALLOWED_HOSTS}
+MAX_BODY = 1 << 20      # a query is a few KB; nothing legitimate is near this
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2232,6 +2485,51 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         sys.stderr.write("  %s\n" % (fmt % args))
+
+    def _foreign(self, post: bool) -> str:
+        """Why this request must be refused, or "" if it may go ahead.
+
+        Binding to loopback keeps other MACHINES out -- not other web pages.
+        Any site open in the browser can send requests to 127.0.0.1: a
+        text/plain POST needs no CORS preflight, so a page could start a
+        six-hour search, a hunt, or a real Minecraft server without ever
+        reading the reply; and DNS rebinding (a hostile name re-pointed at
+        127.0.0.1) can read the replies as well. So:
+          - Host must name this server, which defeats rebinding;
+          - a cross-site Origin or Sec-Fetch-Site is refused;
+          - a POST body must be JSON, which a page on another origin can only
+            send after a preflight this server never approves.
+        curl and the UI itself pass all three untouched.
+        """
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host not in ALLOWED_HOSTS:
+            return f"unexpected Host {host!r}"
+        origin = self.headers.get("Origin")
+        if origin is not None and origin.strip().lower().rstrip("/") not in ALLOWED_ORIGINS:
+            return f"cross-origin request from {origin!r}"
+        site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if site and site not in ("same-origin", "none"):
+            return f"cross-site request ({site})"
+        if post:
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                return "POST bodies must be application/json"
+        return ""
+
+    def _read_body(self) -> dict:
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise Failure("bad Content-Length")
+        if n < 0 or n > MAX_BODY:
+            raise Failure(f"request body must be 0..{MAX_BODY} bytes")
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            raise Failure("request body is not valid JSON")
+        if not isinstance(body, dict):
+            raise Failure("request body must be a JSON object")
+        return body
 
     def _send(self, code, payload, ctype="application/json"):
         data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
@@ -2257,6 +2555,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        # The page and its images are harmless to anyone (and following a link
+        # here is a cross-site navigation), so only the API is gated -- except
+        # the Host check, which applies everywhere: it is what stops rebinding.
+        why = self._foreign(post=False)
+        if why and (u.path.startswith("/api/") or why.startswith("unexpected Host")):
+            self._send(403, {"error": f"refused: {why}"}); return
         try:
             if u.path in ("/", "/index.html"):
                 if not UI.exists():
@@ -2295,15 +2599,21 @@ class Handler(BaseHTTPRequestHandler):
         except Failure as e:
             self._send(400, {"error": str(e)}); return
         rng = str(max(1, min(500_000_000, int(body.get("range", 3_000_000)))))
-        threads = str(max(1, min(64, int(body.get("threads", 16)))))
+        threads = str(clamp_threads(body))
         env = dict(os.environ); env["FIND_STREAM"] = "1"
         # A time budget lets the caller say "look for ten minutes" instead of
         # guessing a seed count, which is the honest unit for a leaderboard:
         # how far a range gets you depends entirely on the query.
         seconds = float(body.get("seconds", 0) or 0)
         seconds = max(0.0, min(seconds, MAX_SEARCH_SECONDS))
-        if seconds:
-            env["FIND_SECONDS"] = str(seconds)
+        # With no budget the search used to run until the watchdog KILLED it at
+        # TIMEOUTS["search"] -- and a killed find.exe prints no results and no
+        # funnel, so a slow search that had found seeds was reported as "no
+        # seeds in that range". Giving find a budget just inside the watchdog
+        # lets it stop itself and report what it has; the funnel then says the
+        # budget ran out instead of pretending the range was exhausted.
+        budget = seconds or max(5.0, TIMEOUTS["search"] - 20.0)
+        env["FIND_SECONDS"] = str(budget)
         # How many of a structure seed's 65536 sister world seeds to try before
         # moving on. The default of 64 is right when the biome half of a query is
         # common and badly wrong when it is rare -- the answer then lives in a
@@ -2324,15 +2634,19 @@ class Handler(BaseHTTPRequestHandler):
 
         p = subprocess.Popen([str(find), str(path), rng, threads],
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, cwd=str(ROOT), env=env, bufsize=1)
+                             text=True, encoding="utf-8", errors="replace",
+                             cwd=str(ROOT), env=env, bufsize=1)
         job = str(body.get("job", "")).strip()
         job_register(job, p)
-        # The watchdog has to outlast the budget, or it would kill the search
-        # just as it was about to report what it found.
-        watchdog = threading.Timer(
-            (seconds + 60) if seconds else TIMEOUTS["search"], p.terminate)
+        # The watchdog is a backstop now (find stops itself at its budget), and
+        # it has to outlast that budget or it would kill the search just as it
+        # was about to report. If it does fire, the reply says so.
+        def _watchdog_fire():
+            p.sc_watchdog = True
+            _kill_tree(p)
+        watchdog = threading.Timer(budget + 60, _watchdog_fire)
         watchdog.start()
-        buf = []
+        buf, block, streamed = [], [], []
         try:
             for line in p.stdout:
                 if line.startswith("@TICK "):
@@ -2341,20 +2655,36 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) > 1:
                         msg["n"] = parts[1]   # total seeds scanned so far
                     self._write_line(msg)
-                else:
-                    buf.append(line)
+                    continue
+                buf.append(line)
+                # find prints each hit as a SEED block the moment it is found
+                # (FIND_STREAM), ending in a blank line. Forward each one as it
+                # completes: results appear while the scan runs, and survive a
+                # Stop -- before, they existed only in the final report.
+                if line.startswith("SEED "):
+                    block = [line]
+                elif block:
+                    if line.strip():
+                        block.append(line)
+                    else:
+                        hits = parse_seeds("".join(block))
+                        block = []
+                        if hits:
+                            streamed.append(hits[0])
+                            self._write_line({"hit": hits[0]})
         except (BrokenPipeError, ConnectionError, OSError):
-            p.terminate(); return
+            _kill_tree(p); return
         finally:
             watchdog.cancel()
             p.wait()
             job_done(job)
-        # A cancelled search was killed mid-scan, so whatever it printed is a
-        # partial funnel, not a result. Say it was stopped rather than reporting
-        # an empty search that looks like "no seeds exist".
+            drop_query(path)
+        # A cancelled search was killed mid-scan, so its funnel is partial. Say
+        # it was stopped -- and hand back what it had already found, which is
+        # real, rather than a result that looks like "no seeds exist".
         if getattr(p, "sc_cancelled", False):
             try:
-                self._write_line({"cancelled": True})
+                self._write_line({"cancelled": True, "seeds": streamed})
             except (BrokenPipeError, ConnectionError, OSError):
                 pass
             return
@@ -2364,32 +2694,61 @@ class Handler(BaseHTTPRequestHandler):
             if "query error" in low or "plan error" in low:
                 tail = out.strip().splitlines()
                 self._write_line({"error": tail[-1] if tail else "search failed"})
+            elif p.returncode not in (0, 3) and not getattr(p, "sc_watchdog", False):
+                # 0 = found, 3 = searched and found nothing. Anything else is a
+                # crash, and "no seeds" would be a false statement about the seeds.
+                tail = out.strip().splitlines()[-3:]
+                self._write_line({"error": f"find.exe failed (exit {p.returncode})"
+                                           + (": " + " / ".join(tail) if tail else ""),
+                                  "seeds": streamed})
             else:
+                funnel = parse_funnel(out)
+                if getattr(p, "sc_watchdog", False):
+                    funnel["killed"] = True
+                    funnel["timed_out"] = True
+                funnel["budget_s"] = budget
+                funnel["budget_was_default"] = not seconds
+                m = re.search(r"resume with FIND_OFFSET=(\d+)", out)
+                if m:
+                    funnel["resume_offset"] = int(m.group(1))
+                seeds = parse_seeds(out) or streamed
                 self._write_line({"done": {
-                    "plan": parse_plan(out), "seeds": parse_seeds(out),
-                    "funnel": parse_funnel(out), "notes": parse_notes(out),
+                    "plan": parse_plan(out), "seeds": seeds,
+                    "funnel": funnel, "notes": parse_notes(out),
                     "raw": out}})
         except (BrokenPipeError, ConnectionError, OSError):
             return
 
     def do_POST(self):
         u = urlparse(self.path)
+        why = self._foreign(post=True)
+        if why:
+            # The body was never read; on a kept-alive connection it would be
+            # parsed as the next request line. Close instead.
+            self.close_connection = True
+            self._send(403, {"error": f"refused: {why}"}); return
         try:
             if u.path == "/api/stream":
-                n = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(n) or b"{}")
+                body = self._read_body()
                 self._stream_search(body)
                 return
             fn = ROUTES.get(u.path)
             if fn is None:
                 self._send(404, {"error": "not found"}); return
-            n = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(n) or b"{}")
-            self._send(200, fn(body))
+            body = self._read_body()
+            result = fn(body)
         except Failure as e:
-            self._send(400, {"error": str(e)})
+            self.close_connection = True     # the body may be partly unread
+            self._send(400, {"error": str(e)}); return
         except Exception as e:  # noqa: BLE001
-            self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            self.close_connection = True
+            self._send(500, {"error": f"{type(e).__name__}: {e}"}); return
+        # Sent outside the try: a failure while WRITING the reply must not be
+        # answered with a second response on the same connection.
+        try:
+            self._send(200, result)
+        except (BrokenPipeError, ConnectionError, OSError):
+            pass
 
 
 def main():
@@ -2398,21 +2757,70 @@ def main():
             tool(name)
         except Failure as e:
             print(f"! {e}", file=sys.stderr)
-            print("  run: ./build.sh tools/find.c && ./build.sh tools/vocab.c "
-                  "&& ./build.sh tools/describe.c && ./build.sh tools/map.c",
-                  file=sys.stderr)
+            print("  run: ./build.sh all", file=sys.stderr)
             return 1
+    stale = _stale_tools()
+    if stale:
+        # A binary older than its sources still runs -- and silently ignores
+        # any query field added since it was built, which reads as "no seeds".
+        print(f"! older than their sources: {', '.join(stale)} -- run ./build.sh all",
+              file=sys.stderr)
 
     url = f"http://127.0.0.1:{PORT}"
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)   # loopback only
+    srv.daemon_threads = True
     print(f"seed finder UI -> {url}")
     print("  ctrl-c to stop\n")
-    threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    # SEED_UI_NO_BROWSER: the test suite starts this server, and every run used
+    # to open a browser tab on the developer's screen.
+    if not os.environ.get("SEED_UI_NO_BROWSER"):
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\nstopped")
+    finally:
+        _stop_everything()
     return 0
+
+
+def _stale_tools():
+    """Tools whose binary predates src/ or their own source file."""
+    try:
+        newest_src = max(p.stat().st_mtime for p in (ROOT / "src").glob("*.[ch]"))
+    except ValueError:
+        return []
+    stale = []
+    for name in ("find", "vocab", "describe", "map", "lootitems"):
+        exe = BUILD / f"{name}.exe"
+        srcf = ROOT / "tools" / f"{name}.c"
+        if not exe.exists():
+            continue
+        newest = max(newest_src, srcf.stat().st_mtime if srcf.exists() else 0)
+        if exe.stat().st_mtime < newest:
+            stale.append(exe.name)
+    return stale
+
+
+def _stop_everything():
+    """Kill every search and hunt still running when the server stops.
+
+    Handler and hunt threads are daemons, so they vanish with the process --
+    but the find.exe, JVM and Minecraft-server children they started do not,
+    and a six-hour search would carry on pinning the CPU with nothing left that
+    knew it existed.
+    """
+    with HUNTS_LOCK:
+        for st in HUNTS.values():
+            st["stop"] = True
+    with JOBS_LOCK:
+        procs = list(JOBS.values())
+        JOBS.clear()
+    for p in procs:
+        p.sc_cancelled = True
+        _kill_tree(p)
+    if procs:
+        print(f"  stopped {len(procs)} running job(s)")
 
 
 if __name__ == "__main__":
