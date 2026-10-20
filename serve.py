@@ -379,6 +379,26 @@ def parse_seeds(out: str) -> list:
                 {"x2": int(m.group(1)), "z2": int(m.group(2)), "structure2": m.group(3),
                  "gap": int(m.group(4)), "area": int(m.group(5))})
             continue
+        # A stronghold reports its roof, then (indented, no id) the teleport to
+        # its shallowest piece. Unparsed, these rows fell through to "raw" and
+        # a stronghold hit showed no coordinates at all.
+        m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+stronghold, roof y=(-?\d+), (.+)$", line)
+        if m and cur:
+            cur.setdefault("stronghold", []).append(
+                {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
+                 "roof": int(m.group(4)), "state": m.group(5).strip()})
+            continue
+        m = re.match(r"^\s+/tp (-?\d+) (-?\d+) (-?\d+) -- the shallowest part, (\d+) "
+                     r"block\(s\) of ground over it, (.+)$", line)
+        if m and cur and cur.get("stronghold"):
+            sh = cur["stronghold"][-1]
+            sh["tp"] = {"x": int(m.group(1)), "y": int(m.group(2)), "z": int(m.group(3))}
+            sh["depth"] = int(m.group(4))
+            sh["where"] = m.group(5).strip()
+            continue
+        if cur and cur.get("stronghold") and "NOTE: tall stronghold" in line:
+            cur["stronghold"][-1]["tall"] = True
+            continue
         m = re.match(r"^\s+(\w+)\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+(\d+)-block cactus, base y=(-?\d+)", line)
         if m and cur:
             cur.setdefault("cactus", []).append(
@@ -2623,6 +2643,11 @@ class Handler(BaseHTTPRequestHandler):
         uppers = int(body.get("uppers", 0) or 0)
         if uppers:
             env["FIND_UPPERS"] = str(max(1, min(65536, uppers)))
+        # "Continue with the next seeds": start where the last run's coverage
+        # ended (find prints it), so nothing is scanned twice and nothing skipped.
+        offset = max(0, int(body.get("offset", 0) or 0))
+        if offset:
+            env["FIND_OFFSET"] = str(offset)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -2638,6 +2663,14 @@ class Handler(BaseHTTPRequestHandler):
                              cwd=str(ROOT), env=env, bufsize=1)
         job = str(body.get("job", "")).strip()
         job_register(job, p)
+        # First line: how long find was given, so the progress line can say
+        # when the run will end -- and that it will end there if the user set
+        # no budget of their own.
+        try:
+            self._write_line({"budget": budget, "default_budget": not seconds,
+                              "offset": offset})
+        except (BrokenPipeError, ConnectionError, OSError):
+            _kill_tree(p); job_done(job); drop_query(path); return
         # The watchdog is a backstop now (find stops itself at its budget), and
         # it has to outlast that budget or it would kill the search just as it
         # was about to report. If it does fire, the reply says so.

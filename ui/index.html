@@ -19,7 +19,7 @@
     --slot-edge:#0e0e12;
     --ink:      #ECECEC;
     --ink-soft: #B9BCC4;
-    --ink-faint:#7E828C;
+    --ink-faint:#A2A6AF;   /* >= 4.5:1 on --stone (was 2.8:1) */
     --edge-lt:  rgba(255,255,255,.16);
     --edge-dk:  rgba(0,0,0,.45);
     --grass:    #6DBE45;   /* XP / grass green */
@@ -61,6 +61,29 @@
   }
   b, strong { font-weight: 700; }
   .hidden { display: none !important; }
+
+  /* Read by screen readers, invisible on screen: announces run progress and
+     results, which otherwise change silently. */
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  /* Which game this searches, always in view: the Bedrock oracle measured
+     structures as NOT matching Java, so a Java seed is not a Bedrock seed. */
+  .edition { margin-top: 8px; font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink-soft); display: flex; gap: 8px; align-items: center;
+    justify-content: center; flex-wrap: wrap; }
+  .edition b { color: var(--ink); }
+  .edition button { font-size: 11px; padding: 1px 7px; }
+  .understood { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    margin: 4px 0 10px; font-size: 12.5px; }
+  .understood .lbl { color: var(--ink-soft); font-family: var(--mono); font-size: 11px; }
+  .understood .cond { background: var(--slot); border: 1px solid var(--slot-edge);
+    padding: 2px 8px; font-family: var(--mono); font-size: 11.5px; }
+  .dimtag { font-family: var(--mono); font-size: 10.5px; padding: 0 5px; margin-right: 6px;
+    border: 1px solid currentColor; }
+  .dimtag.nether { color: #ff7a5c; } .dimtag.end { color: #c9a8ff; }
+  button.coord { background: none; border: none; padding: 0; color: inherit;
+    font: inherit; cursor: pointer; text-decoration: underline dotted; }
+  .next-steps { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
   a { color: var(--diamond); }
 
   ::-webkit-scrollbar { width: 11px; height: 11px; }
@@ -145,7 +168,7 @@
     padding: 2px 6px; color: var(--ink);
   }
   .cond .dim {
-    font-family: var(--mono); font-size: 9px; letter-spacing: .08em;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
     text-transform: uppercase; color: var(--ink-faint);
   }
   .cond .grid { display: grid; grid-template-columns: 1fr 76px; gap: 7px; }
@@ -170,7 +193,7 @@
   }
 
   .tag-exp {
-    font-family: var(--mono); font-size: 8.5px; letter-spacing: .06em;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em;
     text-transform: uppercase; color: var(--diamond);
     border: 1px solid var(--diamond); padding: 1px 5px; margin-left: 6px;
     vertical-align: middle; white-space: nowrap;
@@ -180,7 +203,7 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .exportbar { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px; flex-wrap: wrap; }
   .exportbar .exl {
-    font-family: var(--mono); font-size: 9px; letter-spacing: .09em;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em;
     text-transform: uppercase; color: var(--ink-faint);
   }
 
@@ -220,7 +243,7 @@
   .note.bad  { border-left-color: var(--redstone); }
 
   .stats { display: flex; flex-wrap: wrap; gap: 18px; }
-  .stat .k { font-family: var(--mono); font-size: 9px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); }
+  .stat .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); }
   .stat .v { font-family: var(--mono); font-size: 18px; font-variant-numeric: tabular-nums; margin-top: 2px; }
   .stat .v.good { color: var(--grass); }
   .stat .v.warn { color: var(--gold); }
@@ -397,7 +420,7 @@
      one thing a first-time visitor needed -- what can I even ask? -- was the
      one thing the screen never said. */
   .chips { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; margin-top: 18px; }
-  .chips .chl { width: 100%; font-family: var(--mono); font-size: 9.5px;
+  .chips .chl { width: 100%; font-family: var(--mono); font-size: 10.5px;
     letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 2px; }
   .chip { font-size: 12px; font-weight: 500; padding: 6px 11px; border-radius: 999px;
     color: var(--ink-soft); background: var(--stone-dk);
@@ -460,7 +483,7 @@
     border-bottom: 3px solid transparent; }
   .tab:hover:not(:disabled) { color: var(--ink); filter: none; border-color: var(--stone-lt); }
   .tab.on { color: var(--grass); border-bottom-color: var(--grass); }
-  .tab .sub { display: block; font-family: var(--mono); font-size: 9px;
+  .tab .sub { display: block; font-family: var(--mono); font-size: 10.5px;
     letter-spacing: .05em; text-transform: uppercase; opacity: .75;
     font-weight: 400; margin-top: 3px; }
   .drawer-body { flex: 1; overflow-y: auto; padding: 16px 16px 60px; }
@@ -507,12 +530,12 @@
 
   <main class="main" id="main">
     <div class="topbar">
-      <button class="icon-only" id="menuBtn" title="History">☰</button>
+      <button class="icon-only" id="menuBtn" title="History" aria-label="Search history">☰</button>
       <div class="brand" id="topBrand"><span class="logo">🌱</span> SeedGPT</div>
       <span class="spacer"></span>
       <button id="buildBtn" title="Build a search by hand, without the AI">🧱 <span class="lbl">Build</span></button>
       <button id="toolsBtn" title="Specialist engines: real worldgen, Bedrock, per-seed">🧰 <span class="lbl">Tools</span></button>
-      <button class="icon-only" id="gear" title="Settings">⚙</button>
+      <button class="icon-only" id="gear" title="Settings" aria-label="Settings">⚙</button>
     </div>
 
     <div class="hero" id="hero">
@@ -521,11 +544,15 @@
         <div class="hero-title">SeedGPT</div>
         <div class="hero-sub">Describe the Minecraft world you want. It scans millions of seeds and shows the matches.</div>
         <form class="prompt" id="promptForm">
-          <textarea id="nl" rows="1"
+          <textarea id="nl" rows="1" aria-label="Describe the world you want"
             placeholder="e.g. a woodland mansion within 300 blocks of spawn, with a village next to it"></textarea>
-          <button type="submit" id="go" class="iconbtn go" title="Search">➜</button>
+          <button type="submit" id="go" class="iconbtn go" title="Search" aria-label="Search">➜</button>
         </form>
-        <div id="aiNote" class="ai-note"></div>
+        <div class="edition" id="edition">
+          Searching <b>Java Edition</b> · MC <b id="edVer">…</b><span id="edLarge"></span>
+          <button type="button" class="tiny" id="edChange">change</button>
+        </div>
+        <div id="aiNote" class="ai-note" aria-live="polite"></div>
 
         <div class="chips" id="chips">
           <div class="chl">Try one</div>
@@ -542,7 +569,7 @@
     </div>
 
     <div class="scroll hidden" id="scroll">
-      <div class="scroll-head"><span class="dot"></span><span id="scrollMeta">scanning…</span>
+      <div class="scroll-head"><span class="dot"></span><span id="scrollMeta" role="status">scanning…</span>
         <button id="stopBtn" class="tiny stop" type="button">■ stop</button></div>
       <div class="scroll-track" id="scrollTrack"></div>
     </div>
@@ -551,10 +578,11 @@
   </main>
 </div>
 
-<div class="toasts" id="toasts"></div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<div class="sr-only" id="srStatus" role="status" aria-live="polite"></div>
 <div class="scrim hidden" id="scrim"></div>
 
-<aside class="drawer hidden" id="drawer">
+<aside class="drawer hidden" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" inert>
   <div class="drawer-head">
     <b id="drawerTitle">Build a search</b>
     <span class="spacer"></span>
@@ -998,7 +1026,23 @@
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
   const el = (t, c, x) => { const n = document.createElement(t);
-    if (c) n.className = c; if (x !== undefined) n.textContent = x; return n; };
+    if (c) n.className = c; if (x !== undefined) n.textContent = x;
+    // A seed number is clicked to copy it, in a dozen places. As a bare <span>
+    // it could not be reached by keyboard at all; made a button here, once,
+    // every one of them can (Enter/Space is handled below).
+    if (c === 'num' && t === 'span') {
+      n.setAttribute('role', 'button'); n.tabIndex = 0;
+      n.setAttribute('aria-label', 'copy seed ' + (x || ''));
+    }
+    return n; };
+  document.addEventListener('keydown', e => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches &&
+        e.target.matches('span.num[role="button"]')) { e.preventDefault(); e.target.click(); }
+  });
+  // Something worth saying aloud: progress, a result, a stop. Screen readers
+  // otherwise hear nothing while results replace each other on screen.
+  const announce = msg => { const s = document.getElementById('srStatus');
+    if (s) { s.textContent = ''; setTimeout(() => { s.textContent = msg; }, 30); } };
   const esc = s => String(s).replace(/[&<>"]/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -1147,6 +1191,8 @@
       const line = `cubiomes · MC ${d.version} · ${Object.keys(d.structures).length} structures · ${Object.keys(d.biomes).length} biomes`;
       $('#engine').textContent = line;
       $('#engineInfo').textContent = line;
+      vocabTries = 0;
+      syncEdition();
       // Drop conditions this version can't express, rather than failing later.
       // Only structure/biome names are version-scoped; ore, eyes, loot and slime
       // (slime placement is version-independent) carry across any version.
@@ -1159,9 +1205,26 @@
     } catch (e) {
       $('#engine').textContent = 'vocab failed: ' + e.message;
       $('#engineInfo').textContent = 'vocab failed: ' + e.message;
+      // Without the vocabulary the builder has no structure or biome to offer,
+      // and nothing used to try again. A server still starting up is the
+      // usual cause, so a few spaced retries fix it without a reload.
+      if (++vocabTries <= 4) setTimeout(loadVocab, 1500 * vocabTries);
+      else toast('could not load the structure list from the server — reload the page');
     }
   }
+  let vocabTries = 0;
   $('#version').onchange = loadVocab;
+  // Edition, version and world type, always visible next to the prompt. The
+  // version lived only in the Build drawer, and the page never said "Java" --
+  // which matters, because Bedrock structures do not match Java's (measured
+  // 0/14), so a Java seed is not a Bedrock seed.
+  function syncEdition() {
+    const v = (vocab && vocab.version) || $('#version').value;
+    $('#edVer').textContent = v;
+    $('#edLarge').textContent = largeBiomes() ? ' · Large Biomes' : '';
+  }
+  $('#edChange').onclick = () => { openDrawer('build'); setTimeout(() => $('#version').focus(), 0); };
+  $('#largeBiomes').addEventListener('change', syncEdition);
 
   // Toasts float over the page. They used to be prepended into the results
   // column, which on the landing screen is empty and well below the fold --
@@ -1865,6 +1928,11 @@
 
   // ---- build the query ---------------------------------------------------
   function buildQuery() {
+    // Untouched since it was loaded (from a prompt, a share link or a re-run):
+    // run EXACTLY that query, every field the builder cannot show included.
+    if (loadedQuery && builderSnapshot() === loadedSnap)
+      return JSON.parse(JSON.stringify(loadedQuery));
+    loadedQuery = null;
     const q = buildConditions();
     if (rank.on && rankable().some(c => c.id === rank.of))
       q.rank = { of: rank.of, by: rank.by || 'auto', top: rank.top || 10 };
@@ -2009,11 +2077,20 @@
 
   // ---- rendering output --------------------------------------------------
   const out = $('#out');
+  // Every action renders into #out, so make sure it can be SEEN. Tool runs and
+  // their errors used to land behind the still-open drawer and below the
+  // full-height hero -- the same "message never seen" failure the toasts fixed.
+  function reveal() {
+    closeDrawer();
+    $('#main').classList.add('searched');
+    out.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
   const busy = t => {
+    reveal();
     out.innerHTML = `<div class="card"><div class="busy">${esc(t)}</div></div>`;
   };
-  const fail = (e) => { out.innerHTML =
-    `<div class="err"><b>error</b>${esc(e)}</div>`; };
+  const fail = (e) => { reveal(); out.innerHTML =
+    `<div class="err"><b>error</b>${esc(e)}</div>`; announce('error: ' + e); };
 
   function nsFmt(n) {
     if (n >= 1e6) return (n/1e6).toFixed(1) + ' ms';
@@ -2095,8 +2172,17 @@
   async function post(path, body, signal) {
     const r = await fetch(path, { method:'POST', signal,
       headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || 'request failed');
+    // Not every failure is our JSON: a proxy, a crashed handler or a stopped
+    // server answers with HTML or nothing, and r.json() then surfaced as
+    // "Unexpected token <" -- true, and no help at all.
+    const text = await r.text();
+    let d;
+    try { d = JSON.parse(text); }
+    catch (_) {
+      throw new Error(r.ok ? 'the server replied with something that is not JSON'
+                           : `HTTP ${r.status}${text ? ': ' + text.slice(0, 200) : ''}`);
+    }
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
     return d;
   }
 
@@ -2145,33 +2231,71 @@
   // ---- streaming search + live seed scroll -------------------------------
   function setBusyUI(on) {
     $('#go').disabled = on;
-    const sb = $('#searchBtn'); if (sb) sb.disabled = on;
+    // Plan and Estimate render into the same results area; letting them run
+    // mid-search put a plan on top of a live result list.
+    ['#searchBtn', '#planBtn', '#explainBtn'].forEach(id => { const b = $(id); if (b) b.disabled = on; });
   }
   function startScroll() {
     const s = $('#scroll'); s.classList.remove('hidden');
-    $('#scrollTrack').innerHTML = ''; $('#scrollMeta').textContent = 'scanning…';
+    $('#scrollTrack').innerHTML = ''; $('#scrollMeta').textContent = 'starting…';
   }
   function stopScroll() { $('#scroll').classList.add('hidden'); }
-  let scanRange = 0;   // seeds requested this run, for the progress %
+  let scanRange = 0;          // seeds requested this run, for the progress line
+  let runStart = 0;           // when this run started (ms)
+  let runBudget = 0;          // seconds find was given (the server says, first line)
+  let runBudgetDefault = false; // true = no budget was set; the server's own cap
+  let liveSeeds = [];         // hits streamed so far -- kept when a run is stopped
+  let liveCard = null;
   // The query behind the results currently on screen. renderResults needs it to
   // decide whether to show the world-spawn caveat, and it is NOT a parameter
   // there -- reaching for `query` inside renderResults threw on every search.
   let shownQuery = null;
+  // The last finished result. "Back" from a map or a describe used to press
+  // Search again -- re-running a long or ranked search from scratch just to
+  // see results that were already on screen a moment ago.
+  let lastResult = null;
+
+  const fmtN = n => { n = Number(n) || 0;
+    return n >= 1e9 ? (n / 1e9).toFixed(1) + 'B'
+         : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M'
+         : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'k' : String(Math.round(n)); };
+  const fmtT = s => { s = Math.max(0, Math.round(s));
+    return s < 60 ? s + ' s'
+         : s < 3600 ? Math.floor(s / 60) + ' min ' + String(s % 60).padStart(2, '0') + ' s'
+         : Math.floor(s / 3600) + ' h ' + Math.floor((s % 3600) / 60) + ' min'; };
+
   function pushSeed(seed, hit, scanned) {
     const t = $('#scrollTrack');
-    const d = el('div', 's' + (hit ? ' hit' : ''), (hit ? '✓ found  ' : 'seed  ') + seed);
+    const d = el('div', 's' + (hit ? ' hit' : ''), (hit ? '✓ found  ' : 'testing  ') + seed);
     t.appendChild(d);                                  // newest at the bottom
     while (t.childElementCount > 20) t.removeChild(t.firstChild);
-    if (!hit && scanned !== undefined) {
-      const n = Number(scanned);
-      const pct = scanRange > 0 ? Math.min(100, Math.floor(n * 100 / scanRange)) : 0;
-      $('#scrollMeta').textContent =
-        `scanning… ${n.toLocaleString()} seeds` + (scanRange > 0 ? ` (${pct}%)` : '');
+    if (!hit && scanned !== undefined) progressLine(Number(scanned));
+  }
+  // One line that answers "how is it going": how far, how fast, how long is
+  // left, how many found. A bare count and a percentage of the range said
+  // nothing on a time-budgeted run, and nothing about when it would end.
+  function progressLine(n) {
+    const secs = (Date.now() - runStart) / 1000;
+    const rate = secs > 0.5 ? n / secs : 0;
+    const userBudget = runBudget && !runBudgetDefault;
+    const parts = [`scanned ${fmtN(n)}` + (userBudget ? '' : ` of ${fmtN(scanRange)}`) + ' seeds',
+                   fmtT(secs) + ' elapsed'];
+    if (rate) parts.push(fmtN(rate) + ' seeds/s');
+    let left = (!userBudget && scanRange && rate) ? (scanRange - n) / rate : null;
+    let capped = false;
+    if (runBudget) {
+      const b = runBudget - secs;
+      if (left == null || b < left) { left = b; capped = runBudgetDefault; }
     }
+    if (left != null) parts.push('~' + fmtT(left) + ' left'
+      + (capped ? ' (stops there: no time budget set)' : ''));
+    parts.push(liveSeeds.length + ' found');
+    $('#scrollMeta').textContent = parts.join(' · ');
   }
 
-  // Read the newline-delimited stream from /api/stream: {"t":seed} heartbeats,
-  // then a final {"done":{...}} (or {"error":...}).
+  // Read the newline-delimited stream from /api/stream: {"budget"} first, then
+  // {"t":seed} heartbeats and {"hit":{...}} as each seed is found, then a final
+  // {"done":{...}} (or {"error":...}).
   // ---- stopping a run ------------------------------------------------------
   //
   // A run is a chain of requests (Gemini, then the search), so "stop" has to
@@ -2203,14 +2327,24 @@
   function endRun() { runCtl = null; runJob = null; }
   const isAbort = e => e && (e.name === 'AbortError' || /abort/i.test(e.message || ''));
 
+  // Stop keeps what was found. The hits stream in as they happen, so a search
+  // stopped at minute 29 of 30 still has everything it found by then -- before,
+  // results existed only in the final report and Stop threw them all away.
   $('#stopBtn').onclick = () => {
+    const kept = liveSeeds.slice();
     abortRun(); stopScroll(); setBusyUI(false);
     aiNote('stopped.');
-    out.innerHTML = '';
-    out.append(el('div', 'note warn', 'Search stopped. Ask something else, or press ➜ to run it again.'));
+    if (kept.length) {
+      renderResults({ seeds: kept, funnel: { stopped: true }, notes: [] });
+    } else {
+      out.innerHTML = '';
+      out.append(el('div', 'note warn',
+        'Search stopped before it found anything. Ask something else, or press ➜ to run it again.'));
+    }
+    announce('search stopped' + (kept.length ? `, ${kept.length} seeds kept` : ''));
   };
 
-  async function streamSearch(query, onTick) {
+  async function streamSearch(query, onTick, onHit, extra) {
     const resp = await fetch('/api/stream', {
       signal: runCtl ? runCtl.signal : undefined,
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2219,12 +2353,16 @@
       // structure seed's sister worlds tried), not something a user should have
       // to know to set. The planner emits it; without forwarding it here the
       // planner could ask and nothing would happen.
-      body: JSON.stringify({ query, job: runJob,
+      body: JSON.stringify(Object.assign({ query, job: runJob,
                              range: +$('#range').value || 3000000,
                              seconds: budgetSeconds(),
                              uppers: query.uppers || 0,
-                             threads: +$('#threads').value || 16 }) });
-    if (!resp.ok) throw new Error((await resp.text()) || ('HTTP ' + resp.status));
+                             threads: +$('#threads').value || 16 }, extra || {})) });
+    if (!resp.ok) {
+      const t = await resp.text();
+      let m = t; try { m = JSON.parse(t).error || t; } catch (_) {}
+      throw new Error(m || ('HTTP ' + resp.status));
+    }
     const reader = resp.body.getReader(), dec = new TextDecoder();
     let buf = '', result = null;
     for (;;) {
@@ -2237,6 +2375,8 @@
         if (!line.trim()) continue;
         let msg; try { msg = JSON.parse(line); } catch (_) { continue; }
         if (msg.t !== undefined) onTick(msg.t, msg.n);
+        else if (msg.hit) onHit(msg.hit);
+        else if (msg.budget !== undefined) { runBudget = +msg.budget || 0; runBudgetDefault = !!msg.default_budget; }
         else if (msg.done) result = msg.done;
         else if (msg.cancelled) return null;   // stopped on purpose, not a failure
         else if (msg.error) throw new Error(msg.error);
@@ -2251,7 +2391,9 @@
   const budgetSeconds = () =>
     Math.max(0, Math.min(360, +$('#budgetMin').value || 0)) * 60;
 
-  async function runSearch(query, inheritedToken) {
+  // `extra` carries per-run options the controls do not hold -- the offset a
+  // "continue" run resumes from.
+  async function runSearch(query, inheritedToken, extra) {
     if (!query || !(query.conditions || []).length) { fail('nothing to search — add a condition'); return; }
     // A query may request a different MC version (e.g. something that only exists
     // on an older release). Switch the version selector and reload its vocab
@@ -2264,9 +2406,6 @@
         await loadVocab();
       }
     }
-    // reflect into the builder so result rows resolve their icons and the user
-    // can open settings and tweak.
-    loadQueryIntoBuilder(query);
     // A budget from the natural-language layer drives the same controls the
     // user would have set by hand, so what runs is visible rather than hidden.
     if (query.budget) {
@@ -2274,45 +2413,299 @@
       if (query.budget.seeds)   $('#range').value = query.budget.seeds;
       delete query.budget;                  // not part of the engine's schema
     }
-    $('#main').classList.add('searched');   // collapse the hero, ChatGPT-style
+    // reflect into the builder so result rows resolve their icons and the user
+    // can open settings and tweak. The query itself is kept as loaded and runs
+    // unchanged until the builder is edited (see buildQuery).
+    loadQueryIntoBuilder(query);
+    reveal();
     // A prompt hands down its own token (the Gemini call and the search are one
     // run); a direct Search press starts a fresh one, which also stops anything
     // still running.
     const token = (inheritedToken !== undefined) ? inheritedToken : beginRun();
     setBusyUI(true); startScroll(); out.innerHTML = '';
     scanRange = Math.max(1, Math.min(500000000, +$('#range').value || 3000000));
+    runStart = Date.now(); runBudget = budgetSeconds(); runBudgetDefault = !runBudget;
+    liveSeeds = []; liveCard = null;
     shownQuery = query;
+    out.append(understoodCard(query));
+    announce('searching');
     try {
-      const d = await streamSearch(query, (s, n) => pushSeed(s, false, n));
+      const d = await streamSearch(query,
+        (s, n) => { if (token === runToken) pushSeed(s, false, n); },
+        hit => {
+          if (token !== runToken) return;
+          liveSeeds.push(hit); pushSeed(hit.seed, true); showLive();
+        }, extra);
       if (token !== runToken) return;     // superseded by a newer ask
       stopScroll();
       if (!d) return;                     // stopped; the Stop handler owns the UI
-      (d.seeds || []).slice(0, 12).forEach(s => pushSeed(s.seed, true));
       renderResults(d);
+      announce(`${(d.seeds || []).length} seeds found`);
     } catch (e) {
       stopScroll();
-      if (!isAbort(e) && token === runToken) fail(e.message);
+      if (isAbort(e) || token !== runToken) return;
+      // A failure part-way does not erase what was already found.
+      if (liveSeeds.length)
+        renderResults({ seeds: liveSeeds.slice(), funnel: {}, notes: [], partialError: e.message });
+      else fail(e.message);
     } finally {
       if (token === runToken) { setBusyUI(false); endRun(); }
     }
   }
 
+  // Results as they arrive, replaced by the final report when the run ends.
+  function showLive() {
+    const c = seedsCard(liveSeeds,
+      `Found so far: ${liveSeeds.length} — still searching; Stop keeps these`);
+    if (liveCard && liveCard.parentNode) liveCard.replaceWith(c); else out.append(c);
+    liveCard = c;
+  }
+
+  // ---- what the search is looking for ------------------------------------
+  // The natural-language path used to be a black box: the prompt was cleared
+  // and what the model understood was visible only by opening Build. This puts
+  // the interpretation at the top of every result, with ways to change it.
+  const ofLabel = of => !of || of === 'origin' ? 'origin' : of === 'spawn' ? 'spawn' : of;
+  function condText(c) {
+    const w = c.within !== undefined ? ` ≤${c.within} from ${ofLabel(c.of)}` : '';
+    if (c.eyes !== undefined) return `end portal with ≥${c.eyes} eyes`;
+    if (c.loot) return `${c.loot.count || 1}+ ${pretty(c.loot.item)} in a ${pretty(c.loot.structure)} chest${w}`;
+    if (c.ore) return `${c.count || 1}+ ${pretty(c.ore)} ore${c.exposed ? ' (exposed)' : ''}${c.vein ? `, vein ≥${c.vein}` : ''} within ${c.within || 64}`;
+    if (c.slime !== undefined) return `${c.slime}+ slime chunks within ${c.within || 128}`;
+    if (c.biome_area) return `${pretty(c.biome_area)} covering ${c.pct || 50}%+ within ${c.within || 800}`;
+    if (c.island) return `island spawn, ${c.pct || 75}%+ ocean`;
+    if (c.stronghold !== undefined) return `stronghold${c.max_depth !== undefined ? ` ≤${c.max_depth} blocks under the ground` : ''}${c.land === false ? ' (sea floor allowed)' : ''}${w}`;
+    if (Array.isArray(c.overlap)) return `${pretty(c.overlap[0])} overlapping a ${pretty(c.overlap[1])}${w}`;
+    if (c.height !== undefined || c.relief !== undefined)
+      return (c.relief ? `${c.relief}+ blocks of relief` : `terrain ≥ y${c.height}`) + `${c.exact ? ' (exact)' : ''} within ${c.within}`;
+    if (c.cactus !== undefined) return `cactus ≥${c.cactus} tall within ${c.within}`;
+    if (c.structure) return `${(c.count || 1) > 1 ? c.count + '× ' : ''}${pretty(c.structure)}${w}`;
+    if (c.biome) return `${pretty(c.biome)} biome${w}`;
+    return c.id;
+  }
+  function understoodCard(query) {
+    const box = el('div', 'understood');
+    box.append(el('span', 'lbl', `Java ${query.version || $('#version').value}${query.large_biomes ? ' · Large Biomes' : ''} · looking for:`));
+    (query.conditions || []).forEach(c => {
+      const chip = el('span', 'cond', condText(c));
+      chip.title = `condition "${c.id}"`;
+      box.append(chip);
+    });
+    if (query.rank) box.append(el('span', 'cond', `ranked by ${query.rank.of} (top ${query.rank.top || 10})`));
+    const edit = el('button', 'tiny', 'edit'); edit.type = 'button';
+    edit.onclick = () => openDrawer('build');
+    const est = el('button', 'tiny', 'estimate rarity'); est.type = 'button';
+    est.onclick = () => $('#explainBtn').click();
+    const sh = el('button', 'tiny', 'share'); sh.type = 'button';
+    sh.onclick = () => shareLink(sh);
+    box.append(edit, est, sh);
+    return box;
+  }
+
+  // ---- copying -----------------------------------------------------------
+  // Awaited, and honest about failure: "copied" used to appear even when the
+  // clipboard refused (non-secure context, denied permission).
+  async function copyText(btn, text) {
+    const was = btn.textContent;
+    try { await navigator.clipboard.writeText(text); btn.textContent = '✓'; announce('copied'); }
+    catch (_) { btn.textContent = '✗'; toast('could not copy — select the text and copy it by hand'); }
+    setTimeout(() => { btn.textContent = was; }, 900);
+  }
+  // A teleport that works from wherever the player is standing. A plain
+  // "/tp @s x ~ z" for a fortress teleports to those coordinates in the
+  // OVERWORLD if that is where you are.
+  function tpCommand(x, z, dim, y) {
+    const yy = (y === undefined || y === null) ? '~' : y;
+    if (!dim || dim === 'overworld') return `/tp @s ${x} ${yy} ${z}`;
+    const id = dim === 'nether' ? 'minecraft:the_nether' : 'minecraft:the_end';
+    return `/execute in ${id} run tp @s ${x} ${yy} ${z}`;
+  }
+
+  // ---- results ------------------------------------------------------------
+  function seedsCard(seeds, title) {
+    const c = el('div', 'card');
+    c.append(el('h3', null, title || 'Seeds — click a number to copy'));
+    c.append(exportBar(seeds));
+    // Result rows carry the condition id (e.g. "s5"); map it back to the
+    // structure name so the row shows the right icon, not a generic pin.
+    const condName = {};
+    conds.forEach(x => { if (x.kind === 'structure') condName[x.id] = x.name; });
+    seeds.forEach(s => {
+      const box = el('div', 'seed');
+      const n = el('div', 'n');
+      const num = el('span', 'num', s.seed);
+      num.title = 'copy';
+      num.onclick = () => copySeed(num, s.seed);
+      const mapb = el('button', 'tiny', '🗺 map');
+      mapb.onclick = () => mapView(s.seed);
+      const desc = el('button', 'tiny', 'describe');
+      desc.onclick = () => describe(s.seed);
+      n.append(num, mapb, desc);
+      // Ranked runs carry the score that put this seed on the board.
+      if (s.score !== undefined)
+        n.append(el('span', 'dim', `${s.metric} ${s.score.toLocaleString()}`));
+      box.append(n);
+      const t = el('table');
+      // Every coordinate in a result opens the map there. Reading "x=1424
+      // z=736" and then panning to it by hand is the step that made results
+      // feel unverifiable. Nether and End rows say so, carry the right /tp,
+      // and a nether row gives the overworld spot a portal there leads to.
+      const goCell = (x, z, structure, y) => {
+        const td = el('td');
+        const dim = structure ? (vocab.structures[structure] || 'overworld') : 'overworld';
+        if (dim !== 'overworld') td.append(el('span', 'dimtag ' + dim, dim === 'nether' ? 'NETHER' : 'END'));
+        const link = el('button', 'coord',
+          `x=${x}  z=${z}` + (y !== undefined && y !== null ? `  y=${y}` : ''));
+        link.type = 'button';
+        link.title = 'show this on the map';
+        link.onclick = () => mapView(s.seed, { cx: x, cz: z, dim, radius: 600 });
+        const cp = el('button', 'tiny', '⧉');
+        cp.type = 'button'; cp.title = 'copy coordinates';
+        cp.setAttribute('aria-label', `copy coordinates ${x} ${z}`);
+        cp.style.marginLeft = '6px';
+        cp.onclick = () => copyText(cp, `${x} ${z}`);
+        const tp = el('button', 'tiny', '/tp');
+        tp.type = 'button'; tp.title = 'copy a teleport command for this spot, in the right dimension';
+        tp.onclick = () => copyText(tp, tpCommand(x, z, dim, y));
+        td.append(link, cp, tp);
+        if (dim === 'nether') td.append(el('span', 'dim', `  ≈ overworld ${x * 8}, ${z * 8}`));
+        return td;
+      };
+      const row = (idc, cell, detail) => {
+        const tr = el('tr'); tr.append(idc, cell, el('td', 'd', detail)); t.append(tr);
+      };
+      if (s.spawn) row(idCell('spawn', '', 'Spawn'), goCell(s.spawn.x, s.spawn.z), '');
+      if (s.portal) row(idCell('eyes', '', 'End Portal'), goCell(s.portal.x, s.portal.z),
+                        s.portal.eyes + '/12 eyes');
+      (s.loot || []).forEach(l => row(idCell('item', l.item, pretty(l.id)), goCell(l.x, l.z),
+        `${l.count} ${pretty(l.item)}`));
+      (s.ore || []).forEach(o => {
+        let detail = `${o.count.toLocaleString()}${o.exposed ? ' exposed' : ''} within ${o.within}`;
+        if (o.vein !== undefined) detail += ` · biggest vein ${o.vein}`;
+        row(idCell('item', o.material, pretty(o.material)), goCell(o.x, o.z), detail);
+      });
+      (s.overlap || []).forEach(o => {
+        row(idCell('structure', o.structure, pretty(o.structure)), goCell(o.x, o.z, o.structure),
+            o.gap !== undefined ? `${o.gap} blocks apart` : '');
+        if (o.structure2 !== undefined)
+          row(idCell('structure', o.structure2, pretty(o.structure2)),
+              goCell(o.x2, o.z2, o.structure2), `overlaps ${o.area} blocks²`);
+      });
+      (s.stronghold || []).forEach(o => {
+        // The roof AND the ground over it -- a roof at y=60 is a metre down on
+        // a plain and buried in a mountain -- and the /tp goes to the
+        // shallowest piece, which can be 100+ blocks from the start chunk.
+        row(idCell('structure', 'stronghold', 'Stronghold'), goCell(o.x, o.z, 'stronghold'),
+            `roof y=${o.roof}, ${o.state}`);
+        if (o.tp) row(idCell('structure', 'stronghold', 'Shallowest part'),
+                      goCell(o.tp.x, o.tp.z, 'stronghold', o.tp.y),
+                      `${o.depth} block(s) of ground over it, ${o.where}`
+                      + (o.tall ? ' — tall stronghold: heights right ~2 in 3, verify' : ''));
+      });
+      (s.cactus || []).forEach(o => row(idCell('item', 'cactus', 'Cactus'), goCell(o.x, o.z),
+        `${o.height} blocks tall, base y=${o.base_y}`));
+      (s.slime || []).forEach(o => row(idCell('slime', '', 'Slime Chunks'), goCell(o.x, o.z),
+        `${o.count.toLocaleString()} within ${o.within}`));
+      (s.area || []).forEach(o => row(idCell('biome', o.biome, pretty(o.biome)), goCell(o.x, o.z),
+        `${o.pct}% within ${o.within}`));
+      (s.island || []).forEach(o => {
+        const c2 = el('td', 'id'); c2.append(el('span', 'ic', '🏝️'), document.createTextNode('Island Spawn'));
+        row(c2, goCell(o.x, o.z), `${o.pct}% ocean within ${o.within}`);
+      });
+      (s.height || []).forEach(o => {
+        // Exact terrain is a measurement; the default is an estimate. Say
+        // which one produced the number.
+        const t2 = o.exact ? '' : '~', tag = o.exact ? ' (exact)' : ' (approx)';
+        const detail = o.relief !== undefined
+          ? `${t2}${o.relief} relief, ${t2}${o.peak} peak${tag}`
+          : `${t2}${o.peak} peak${tag}`;
+        row(idCell('height', '', o.relief !== undefined ? 'Terrain Relief' : 'Terrain Height'),
+            goCell(o.x, o.z), detail);
+      });
+      (s.biome || []).forEach(o => row(idCell('biome', o.biome, pretty(o.biome)), goCell(o.x, o.z),
+        `${o.dist} from ${o.ref}`));
+      (s.cluster || []).forEach(o => row(
+        idCell('structure', o.structure, `${o.count}× ${pretty(o.structure)}`),
+        goCell(o.x, o.z, o.structure),
+        o.tight ? `${o.count} within ${o.spread} of each other` : `${o.count} within ${o.within}`));
+      (s.places || []).forEach(p => row(
+        idCell('structure', condName[p.id] || p.id, pretty(condName[p.id] || p.id)),
+        goCell(p.x, p.z, condName[p.id]),
+        p.dist + ' from ' + (p.ref || 'origin') + (p.size ? `, size ${p.size}` : '')));
+      if (t.childElementCount) box.append(t);
+      c.append(box);
+    });
+    return c;
+  }
+  function copySeed(span, seed) {
+    (navigator.clipboard ? navigator.clipboard.writeText(seed) : Promise.reject()).then(() => {
+      span.textContent = 'copied'; announce('seed copied');
+    }, () => { span.textContent = 'copy failed'; })
+      .finally(() => setTimeout(() => { span.textContent = seed; }, 800));
+  }
+
+  // What to do next, offered as buttons -- above all when nothing was found,
+  // which used to get one generic sentence and no way forward.
+  function nextSteps(d) {
+    const f = d.funnel || {};
+    const box = el('div', 'next-steps');
+    const q = lastResult && lastResult.query;
+    if (q && f.resume_offset !== undefined && (f.timed_out || !d.seeds.length)) {
+      const cont = el('button', 'tiny', 'continue with the next seeds');
+      cont.title = 'scan fresh seeds starting where this run stopped -- nothing is scanned twice';
+      cont.onclick = () => runSearch(JSON.parse(JSON.stringify(q)), undefined,
+                                     { offset: f.resume_offset });
+      box.append(cont);
+    }
+    if (q && !d.seeds.length) {
+      const more = el('button', 'tiny', 'search 10× more seeds');
+      more.onclick = () => {
+        $('#range').value = Math.min(500000000, (+$('#range').value || 3000000) * 10);
+        runSearch(JSON.parse(JSON.stringify(q)));
+      };
+      const est = el('button', 'tiny', 'estimate how rare this is');
+      est.onclick = () => $('#explainBtn').click();
+      const edit = el('button', 'tiny', 'loosen a condition');
+      edit.onclick = () => openDrawer('build');
+      box.append(more, est, edit);
+    }
+    return box;
+  }
+
   function renderResults(d) {
       const f = d.funnel || {};
+      d.seeds = d.seeds || [];
+      lastResult = { d, query: shownQuery };
       out.innerHTML = '';
+      if (shownQuery) out.append(understoodCard(shownQuery));
       out.append(...noteCards(d.notes));   // caveats first: they qualify what follows
 
-      out.append(statsCard('Result', [
-        ['seeds found', String(d.seeds.length), d.seeds.length ? 'good' : 'warn'],
-        ['scanned', (f.scanned ?? 0).toLocaleString()],
-        ['elapsed', (f.seconds ?? 0) + ' s'],
-        ['throughput', (f.mseeds_s ?? 0) + ' M/s'],
-      ]));
+      if (f.scanned !== undefined)
+        out.append(statsCard('Result', [
+          ['seeds found', String(d.seeds.length), d.seeds.length ? 'good' : 'warn'],
+          ['scanned', (f.scanned ?? 0).toLocaleString()],
+          ['elapsed', (f.seconds ?? 0) + ' s'],
+          ['throughput', (f.mseeds_s ?? 0) + ' M/s'],
+        ]));
+      if (f.stopped)
+        out.append(el('div', 'note warn',
+          `Stopped by you. These are the ${d.seeds.length} seed(s) found before then — the scan did not finish.`));
+      if (d.partialError)
+        out.append(el('div', 'note bad',
+          `The search failed part-way (${d.partialError}). These ${d.seeds.length} seed(s) were found before it did.`));
       // "Best of N" has to name the N that was actually reached, not the one
       // that was requested before the clock ran out.
-      if (f.timed_out)
-        out.append(el('div','note',
+      if (f.timed_out && f.budget_was_default)
+        out.append(el('div', 'note warn',
+          `Stopped after ${fmtT(f.budget_s || 0)}, the limit for a search without a time budget, `
+          + `having scanned ${(f.scanned ?? 0).toLocaleString()} seeds — not the whole range. `
+          + `Set a time budget under Build to let it run longer, or continue with the next seeds below.`));
+      else if (f.timed_out)
+        out.append(el('div', 'note',
           `Time budget reached — this is the best of the ${(f.scanned ?? 0).toLocaleString()} seeds actually scanned, not the full range. Give it longer for better results.`));
+      if (f.killed)
+        out.append(el('div', 'note bad',
+          'The server had to force-stop this search, so its counts are incomplete.'));
       // World spawn is an estimate. find.exe prints this caveat, but its output
       // is parsed as JSON so the line never reached anyone -- and a
       // spawn-relative result is the one a player checks IMMEDIATELY, by loading
@@ -2325,181 +2718,35 @@
           + 'their distance from spawn is not.'));
 
       if (f.pass1_pct != null) {
-        const c = el('div','card');
+        const c = el('div', 'card');
         c.append(el('h3', null, 'Funnel'));
-        const bar = el('div','funnel'), i = el('i');
+        const bar = el('div', 'funnel'), i = el('i');
         i.style.width = Math.max(1.5, Math.min(100, f.pass1_pct)) + '%';
         if (f.pass1_pct > 50) i.style.background = 'var(--gold)';
         bar.append(i); c.append(bar);
-        c.append(el('div','funnel-l',
-          `pass 1 kept ${f.pass1_pct}% (${(f.pass1||0).toLocaleString()}) · pass 2 confirmed ${(f.pass2||0).toLocaleString()}`));
-        if (f.too_loose) c.append(el('div','note warn',
+        c.append(el('div', 'funnel-l',
+          `pass 1 kept ${f.pass1_pct}% (${(f.pass1 || 0).toLocaleString()}) · pass 2 confirmed ${(f.pass2 || 0).toLocaleString()}`));
+        if (f.too_loose) c.append(el('div', 'note warn',
           "Pass 1 isn't filtering — every seed paid full biome cost. Tighten a radius."));
         out.append(c);
       }
 
       if (!d.seeds.length) {
-        out.append(el('div','note warn',
-          'No seeds in that range. Scan more seeds, loosen a radius, or run Estimate first.'));
+        out.append(el('div', 'note warn',
+          f.stopped || f.killed ? 'Nothing was found before the search stopped.'
+            : 'No seeds in what was scanned — which is not the same as none existing.'));
       } else {
-        const c = el('div','card');
-        c.append(el('h3', null, `Seeds — click a number to copy`));
-        c.append(exportBar(d.seeds));
-        // Result rows carry the condition id (e.g. "s5"); map it back to the
-        // structure name so the row shows the right icon, not a generic pin.
-        const condName = {};
-        conds.forEach(x => { if (x.kind === 'structure') condName[x.id] = x.name; });
-        d.seeds.forEach(s => {
-          const box = el('div','seed');
-          const n = el('div','n');
-          const num = el('span','num', s.seed);
-          num.title = 'copy';
-          num.onclick = () => { navigator.clipboard?.writeText(s.seed);
-            num.textContent = 'copied'; setTimeout(()=>num.textContent = s.seed, 800); };
-          const mapb = el('button','tiny','🗺 map');
-          mapb.onclick = () => mapView(s.seed);
-          const desc = el('button','tiny','describe');
-          desc.onclick = () => describe(s.seed);
-          n.append(num, mapb, desc);
-          // Ranked runs carry the score that put this seed on the board.
-          if (s.score !== undefined)
-            n.append(el('span','dim', `${s.metric} ${s.score.toLocaleString()}`));
-          box.append(n);
-          if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime || s.area || s.island || s.biome || s.cluster || s.height || s.overlap) {
-            const t = el('table');
-            // Every coordinate in a result opens the map there. Reading "x=1424
-            // z=736" and then panning to it by hand is the step that made
-            // results feel unverifiable.
-            const goCell = (x, z, structure) => {
-              const td = el('td');
-              const link = el('span', null, `x=${x}  z=${z}`);
-              link.style.cssText = 'cursor:pointer;text-decoration:underline dotted';
-              link.title = 'show this on the map';
-              const dim = structure ? (vocab.structures[structure] || 'overworld') : 'overworld';
-              link.onclick = () => mapView(s.seed, { cx: x, cz: z, dim, radius: 600 });
-              // Copying the coordinates is the thing you actually do with a
-              // result -- paste them into a /tp, or into another tool. The
-              // teleport form keeps the Y as ~ so it drops you on the surface.
-              const cp = el('button', 'tiny', '⧉');
-              cp.title = 'copy coordinates (shift-click for a /tp command)';
-              cp.style.marginLeft = '6px';
-              cp.onclick = (e) => {
-                const text = e.shiftKey ? `/tp @s ${x} ~ ${z}` : `${x} ${z}`;
-                navigator.clipboard?.writeText(text);
-                const was = cp.textContent;
-                cp.textContent = '✓'; setTimeout(() => cp.textContent = was, 800);
-              };
-              td.append(link, cp);
-              return td;
-            };
-            if (s.spawn) {
-              const tr = el('tr');
-              tr.append(idCell('spawn','','Spawn'),
-                        goCell(s.spawn.x, s.spawn.z),
-                        el('td','d',''));
-              t.append(tr);
-            }
-            if (s.portal) {
-              const tr = el('tr');
-              tr.append(idCell('eyes','','End Portal'),
-                        goCell(s.portal.x, s.portal.z),
-                        el('td','d', s.portal.eyes + '/12 eyes'));
-              t.append(tr);
-            }
-            (s.loot || []).forEach(l => {
-              const tr = el('tr');
-              tr.append(idCell('item', l.item, pretty(l.id)),
-                        goCell(l.x, l.z),
-                        el('td','d', `${l.count} ${pretty(l.item)}`));
-              t.append(tr);
-            });
-            (s.ore || []).forEach(o => {
-              const tr = el('tr');
-              let detail = `${o.count.toLocaleString()}${o.exposed ? ' exposed' : ''} within ${o.within}`;
-              if (o.vein !== undefined) detail += ` · biggest vein ${o.vein}`;
-              tr.append(idCell('item', o.material, pretty(o.material)),
-                        goCell(o.x, o.z),
-                        el('td','d', detail));
-              t.append(tr);
-            });
-            (s.overlap || []).forEach(o => {
-              const tr = el('tr');
-              tr.append(idCell('structure', o.structure, pretty(o.structure)),
-                        goCell(o.x, o.z, o.structure),
-                        el('td','d', o.gap !== undefined ? `${o.gap} blocks apart` : ''));
-              t.append(tr);
-              if (o.structure2 !== undefined) {
-                const tr2 = el('tr');
-                tr2.append(idCell('structure', o.structure2, pretty(o.structure2)),
-                           goCell(o.x2, o.z2, o.structure2),
-                           el('td','d', `overlaps ${o.area} blocks²`));
-                t.append(tr2);
-              }
-            });
-            (s.slime || []).forEach(o => {
-              const tr = el('tr');
-              tr.append(idCell('slime', '', 'Slime Chunks'),
-                        goCell(o.x, o.z),
-                        el('td','d', `${o.count.toLocaleString()} within ${o.within}`));
-              t.append(tr);
-            });
-            (s.area || []).forEach(o => {
-              const tr = el('tr');
-              tr.append(idCell('biome', o.biome, pretty(o.biome)),
-                        goCell(o.x, o.z),
-                        el('td','d', `${o.pct}% within ${o.within}`));
-              t.append(tr);
-            });
-            (s.island || []).forEach(o => {
-              const tr = el('tr');
-              const c = el('td','id'); c.append(el('span','ic','🏝️'), document.createTextNode('Island Spawn'));
-              tr.append(c, goCell(o.x, o.z),
-                        el('td','d', `${o.pct}% ocean within ${o.within}`));
-              t.append(tr);
-            });
-            (s.height || []).forEach(o => {
-              const tr = el('tr');
-              // Exact terrain is a measurement; the default is an estimate. Say
-              // which one produced the number.
-              const t2 = o.exact ? '' : '~', tag = o.exact ? ' (exact)' : ' (approx)';
-              const detail = o.relief !== undefined
-                ? `${t2}${o.relief} relief, ${t2}${o.peak} peak${tag}`
-                : `${t2}${o.peak} peak${tag}`;
-              tr.append(idCell('height', '', o.relief !== undefined ? 'Terrain Relief' : 'Terrain Height'),
-                        goCell(o.x, o.z),
-                        el('td','d', detail));
-              t.append(tr);
-            });
-            (s.biome || []).forEach(o => {
-              const tr = el('tr');
-              tr.append(idCell('biome', o.biome, pretty(o.biome)),
-                        goCell(o.x, o.z),
-                        el('td','d', `${o.dist} from ${o.ref}`));
-              t.append(tr);
-            });
-            (s.cluster || []).forEach(o => {
-              const tr = el('tr');
-              const detail = o.tight ? `${o.count} within ${o.spread} of each other`
-                                     : `${o.count} within ${o.within}`;
-              tr.append(idCell('structure', o.structure, `${o.count}× ${pretty(o.structure)}`),
-                        goCell(o.x, o.z, o.structure),
-                        el('td','d', detail));
-              t.append(tr);
-            });
-            s.places.forEach(p => {
-              const tr = el('tr');
-              tr.append(idCell('structure', condName[p.id] || p.id, pretty(condName[p.id] || p.id)),
-                        goCell(p.x, p.z, condName[p.id]),
-                        el('td','d', p.dist + ' from ' + (p.ref || 'origin')));
-              t.append(tr);
-            });
-            box.append(t);
-          }
-          c.append(box);
-        });
-        out.append(c);
+        out.append(seedsCard(d.seeds));
       }
-      out.append(planCard(d.plan), rawCard(d.raw));
+      out.append(nextSteps(d));
+      if (d.plan) out.append(planCard(d.plan));
+      if (d.raw) out.append(rawCard(d.raw));
+  }
+
+  // Back from a map or a describe: show the results that were already there.
+  function showLastResults() {
+    if (lastResult) { shownQuery = lastResult.query; renderResults(lastResult.d); }
+    else $('#searchBtn').click();
   }
 
   $('#searchBtn').onclick = () => { if (!guard()) return; closeDrawer(); runSearch(buildQuery()); };
@@ -2521,7 +2768,7 @@
     let cx = o.cx || 0, cz = o.cz || 0, radius = o.radius || 2000;
     let dim = o.dim || 'overworld';
     const v = $('#version').value;
-    out.innerHTML = ''; $('#main').classList.add('searched');
+    reveal(); out.innerHTML = '';
     const card = el('div', 'card');
     card.append(el('h3', null, '🗺 Map · world ' + seed));
 
@@ -2574,18 +2821,28 @@
     card.append(lg);
     card.append(el('div', 'hint', 'Drag to pan · scroll to zoom · click for coordinates.'));
     const back = el('button', 'tiny', '← back to results');
-    back.onclick = () => $('#searchBtn').click();
+    back.onclick = showLastResults;
     card.append(back); out.append(card);
 
+    // Every pan or zoom renders a whole PNG on the server, so requests are
+    // debounced (a fast wheel spin used to queue a dozen renders, all but the
+    // last wasted), and the view says when it is loading or failed.
+    let loadTimer = null;
+    img.onload  = () => { info.textContent = `${dim} · centre ${cx}, ${cz}  ·  ±${radius} blocks`; };
+    img.onerror = () => { info.textContent = 'map render failed — try again, or zoom out'; };
     function load() {
-      img.src = `/api/map?seed=${encodeURIComponent(seed)}&v=${encodeURIComponent(v)}`
-        + (largeBiomes() ? '&large=1' : '')
-        + (dim !== 'overworld' ? `&dim=${dim}` : '')
-              + `&r=${radius}&px=${PX}&cx=${cx}&cz=${cz}`;
-      info.textContent = `${dim} · centre ${cx}, ${cz}  ·  ±${radius} blocks`;
+      clearTimeout(loadTimer);
+      info.textContent = `loading ${dim} · centre ${cx}, ${cz}  ·  ±${radius} blocks…`;
+      loadTimer = setTimeout(() => {
+        img.src = `/api/map?seed=${encodeURIComponent(seed)}&v=${encodeURIComponent(v)}`
+          + (largeBiomes() ? '&large=1' : '')
+          + (dim !== 'overworld' ? `&dim=${dim}` : '')
+                + `&r=${radius}&px=${PX}&cx=${cx}&cz=${cz}`;
+      }, 180);
     }
     zin.onclick  = () => { radius = Math.max(200, Math.round(radius / 2)); load(); };
     zout.onclick = () => { radius = Math.min(20000, radius * 2); load(); };
+    zin.setAttribute('aria-label', 'zoom in'); zout.setAttribute('aria-label', 'zoom out');
     home.onclick = () => { cx = 0; cz = 0; radius = 2000; dim = 'overworld'; syncDim(); load(); };
 
     let drag = null, moved = false;
@@ -2600,8 +2857,15 @@
       vp.style.cursor = 'grab'; img.style.transform = '';
       if (moved) { const rw = vp.getBoundingClientRect().width || PX, span = 2 * radius;
         cx -= Math.round(dx / rw * span); cz -= Math.round(dy / rw * span); load(); } };
+    // Zoom about the cursor, the way every map does: the point under the
+    // pointer stays put instead of everything rushing to the centre.
     vp.onwheel = e => { e.preventDefault();
+      const rect = vp.getBoundingClientRect();
+      const fx = (e.clientX - rect.left) / rect.width - 0.5;
+      const fz = (e.clientY - rect.top) / rect.height - 0.5;
+      const px = cx + fx * 2 * radius, pz = cz + fz * 2 * radius;
       radius = e.deltaY > 0 ? Math.min(20000, radius * 2) : Math.max(200, Math.round(radius / 2));
+      cx = Math.round(px - fx * 2 * radius); cz = Math.round(pz - fz * 2 * radius);
       load(); };
     vp.onclick = e => { if (moved) return;
       const rect = vp.getBoundingClientRect();
@@ -2655,8 +2919,8 @@
 
       const p = el('pre'); p.textContent = d.raw; c.append(p);
       out.append(c);
-      const back = el('button','tiny','← back to search');
-      back.onclick = () => $('#searchBtn').click();
+      const back = el('button','tiny','← back to results');
+      back.onclick = showLastResults;
       out.append(back);
     } catch (e) { fail(e.message); }
   }
@@ -2790,11 +3054,30 @@
   }
   $$('.tab').forEach(t => { t.onclick = () => showPane(t.dataset.pane); });
 
+  // The drawer is `inert` while closed, so Tab cannot wander into a panel you
+  // cannot see; opening moves focus in, closing hands it back to where it was.
+  let drawerReturnFocus = null;
   function openDrawer(pane) {
     if (pane) showPane(pane);
-    $('#drawer').classList.remove('hidden'); $('#scrim').classList.remove('hidden');
+    const d = $('#drawer');
+    const wasOpen = !d.classList.contains('hidden');
+    d.classList.remove('hidden'); d.inert = false; $('#scrim').classList.remove('hidden');
+    if (!wasOpen) {
+      drawerReturnFocus = document.activeElement;
+      const first = d.querySelector('.tab.on') || d.querySelector('button, select, input');
+      if (first) setTimeout(() => first.focus(), 0);
+    }
   }
-  function closeDrawer() { $('#drawer').classList.add('hidden'); $('#scrim').classList.add('hidden'); }
+  function closeDrawer() {
+    const d = $('#drawer');
+    if (d.classList.contains('hidden')) return;
+    d.classList.add('hidden'); d.inert = true; $('#scrim').classList.add('hidden');
+    if (drawerReturnFocus && document.contains(drawerReturnFocus)) drawerReturnFocus.focus();
+    drawerReturnFocus = null;
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('#drawer').classList.contains('hidden')) closeDrawer();
+  });
   // Open the Tools tab with one engine already unfolded and scrolled to. Used
   // both by the toolbar and by a routed prompt that needs input we don't have.
   function openTool(id, focusSel) {
@@ -2858,13 +3141,42 @@
 
   // Inverse of buildQuery: turn a query object back into the builder's condition
   // list, so an AI-generated search shows up (and can be tweaked) in settings.
+  //
+  // The builder cannot express everything a query can (a distance metric, a
+  // biome family, a Y band, cave_below...), and this mapping used to drop
+  // whole condition types: an overlap or a stronghold came back as a PLAINS
+  // BIOME, and Back, Continue and Save then ran that instead. So the loaded
+  // query is kept exactly as it was, and buildQuery returns it untouched until
+  // the builder is actually edited (builderSnapshot differs).
+  let loadedQuery = null, loadedSnap = null;
+  const builderSnapshot = () => JSON.stringify({ c: conds, v: $('#version').value,
+    lb: largeBiomes(), r: rank.on ? [rank.of, rank.by, rank.top] : null });
   function loadQueryIntoBuilder(query) {
     conds = (query.conditions || []).map(c => {
       if (c.eyes !== undefined) return { id: c.id, kind: 'eyes', eyes: c.eyes };
       if (c.loot) return { id: c.id, kind: 'loot', struct: c.loot.structure,
         item: c.loot.item, count: c.loot.count, within: c.within || 3000 };
-      if (c.ore) return { id: c.id, kind: 'ore', mat: c.ore, count: c.count || 1,
-        within: c.within || 64, of: c.of || 'origin' };
+      if (c.ore) {
+        const o = { id: c.id, kind: 'ore', mat: c.ore, count: c.count || 1,
+          within: c.within || 64, of: c.of || 'origin' };
+        if (c.vein) o.vein = c.vein;
+        if (c.exposed) o.exposed = true;
+        if (c.deepslate || (c.y_max !== undefined && c.y_max < 0)) o.deepslate = true;
+        return o;
+      }
+      if (c.stronghold !== undefined && c.stronghold !== null && c.stronghold !== false) {
+        const named = { exposed: 0, shallow: 4 };
+        const depth = c.max_depth !== undefined ? c.max_depth
+                    : typeof c.stronghold === 'number' ? c.stronghold
+                    : named[c.stronghold] !== undefined ? named[c.stronghold] : 60;
+        return { id: c.id, kind: 'stronghold', depth, land: c.land !== false,
+                 within: c.within || 3000, of: c.of || 'origin' };
+      }
+      if (Array.isArray(c.overlap)) return { id: c.id, kind: 'overlap',
+        a: c.overlap[0], b: c.overlap[1], pad: c.pad || 0,
+        within: c.within || 2000, of: c.of || 'origin',
+        minRoofY: c.min_roof_y !== undefined ? c.min_roof_y : null,
+        maxDepth: c.max_depth !== undefined ? c.max_depth : null };
       if (c.slime !== undefined) return { id: c.id, kind: 'slime', count: c.slime,
         within: c.within || 128, of: c.of || 'origin' };
       if (c.biome_area) return { id: c.id, kind: 'area', name: c.biome_area,
@@ -2882,13 +3194,27 @@
         ['surface', 'giant', 'abandoned', 'basement', 'ship'].forEach(k => { if (c[k]) o[k] = true; });
         if (c.count) o.count = c.count;
         if (c.spread) o.spread = c.spread;
+        if (c.structure === 'geode') {
+          if (c.size) o.gsize = c.size;
+          if (c.cracked === false) o.sealed = 'sealed';
+          if (c.cracked === true) o.sealed = 'cracked';
+        }
         return o;
       }
       return { id: c.id, kind: 'biome', name: c.biome || 'plains',
         within: c.within || 400, of: c.of || 'origin', precision: c.precision || 'fine' };
     });
-    nextId = conds.length + 1;
+    nextId = conds.reduce((m, c) =>
+      Math.max(m, parseInt(String(c.id).replace(/\D/g, '')) || 0), conds.length) + 1;
+    $('#largeBiomes').checked = !!query.large_biomes;
+    rank.on = !!query.rank;
+    if (query.rank) { rank.of = query.rank.of || ''; rank.by = query.rank.by || 'auto';
+                      rank.top = query.rank.top || 10; }
+    syncEdition();
     render();
+    loadedQuery = JSON.parse(JSON.stringify(query));
+    delete loadedQuery.budget; delete loadedQuery.tool;
+    loadedSnap = builderSnapshot();
   }
 
   async function submitPrompt() {
@@ -2970,7 +3296,13 @@
     nlBox.style.height = 'auto'; nlBox.style.height = Math.min(200, nlBox.scrollHeight) + 'px';
   });
   nlBox.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitPrompt(); }
+    // isComposing: Enter also CONFIRMS a word in Japanese/Chinese/Korean input,
+    // and submitting then sent half a sentence. And the ➜ button is disabled
+    // while a run is busy; Enter has to respect that too.
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+      e.preventDefault();
+      if (!$('#go').disabled) submitPrompt();
+    }
   });
 
   // ---- bedrock glitched outpost -----------------------------------------
@@ -3415,6 +3747,33 @@
   // A rare casing is exactly the case a single batch cannot answer: at ~0.015%
   // one pass is nowhere near enough, and without an advancing offset a second
   // pass would rescan the first. So the casing panel can run open-ended too.
+  // A hunt renders into its OWN view inside #out. The pollers used to wipe
+  // #out every few seconds whatever was on screen -- open a map mid-hunt and
+  // it vanished on the next tick. Now a poll redraws only while its view is
+  // still showing, and keeps polling regardless (the server stops hunts that
+  // nobody checks on). A lost server, or one that restarted and no longer
+  // knows the hunt, is said out loud instead of reading as "nothing yet".
+  function huntPoller(job, view, every, draw, onEnd) {
+    let misses = 0;
+    const timer = setInterval(async () => {
+      let s;
+      try { s = await post('/api/hunt/status', { job }); misses = 0; }
+      catch (e) {
+        if (++misses === 3 && out.contains(view))
+          view.prepend(el('div', 'note bad', 'Lost contact with the server — is it still running? Retrying…'));
+        return;
+      }
+      if (!s.known) {
+        if (out.contains(view)) view.prepend(el('div', 'note bad',
+          'The server no longer knows this hunt — it was probably restarted. Start it again.'));
+        clearInterval(timer); onEnd(); return;
+      }
+      if (out.contains(view)) { view.innerHTML = ''; draw(s); }
+      if (!s.running) { clearInterval(timer); onEnd(); }
+    }, every);
+    return timer;
+  }
+
   let tcJob = null, tcPoll = null;
   function tcStopUI() {
     clearInterval(tcPoll); tcPoll = null; tcJob = null;
@@ -3425,24 +3784,27 @@
     const want = Math.max(1, Math.min(10, +$('#tcLimit').value || 1));
     const batch = Math.max(100000, Math.min(50000000, +$('#tcRange').value || 3000000));
     tcJob = 'casing-' + Date.now();
+    const job = tcJob;
     $('#tcKeep').disabled = true; $('#tcBtn').disabled = true; $('#tcStop').disabled = false;
     busy(`hunting a ${pretty(casing)} casing across batch after batch of fresh seeds. `
        + `At ~0.015% for the rare ones this is the only way it can succeed.`);
     try {
       const tcRad = Math.max(1000, Math.min(60000, +$('#tcRadius').value || 10000));
-      await post('/api/hunt', { job: tcJob, casing, batch, want, secs: 600, radius: tcRad,
+      await post('/api/hunt', { job, casing, batch, want, secs: 600, radius: tcRad,
                                 query: { version: $('#version').value, conditions: [] } });
     } catch (e) { fail(e.message); tcStopUI(); return; }
-    tcPoll = setInterval(async () => {
-      if (!tcJob) return;
-      let s; try { s = await post('/api/hunt/status', { job: tcJob }); } catch (e) { return; }
-      out.innerHTML = '';
-      out.append(statsCard('Casing hunt · ' + pretty(casing), [
+    const view = el('div', null, 'started — first report in a few seconds…');
+    out.innerHTML = ''; out.append(view);
+    tcPoll = huntPoller(job, view, 4000, s => {
+      view.append(statsCard('Casing hunt · ' + pretty(casing), [
         ['batches', String(s.batches || 0)],
         ['seeds scanned', (s.scanned || 0).toLocaleString()],
-        ['found', String((s.hits || []).length), (s.hits || []).length ? 'good' : ''],
+        ['candidates', String(s.candidates || 0)],
+        ['server said no', String(s.rejected || 0)],
+        ['could not check', String(s.unknown || 0), (s.unknown || 0) ? 'warn' : ''],
+        ['confirmed', String((s.hits || []).length), (s.hits || []).length ? 'good' : ''],
       ]));
-      if (s.error) out.append(el('div', 'note warn', s.error));
+      if (s.error) view.append(el('div', 'note warn', s.error));
       if ((s.hits || []).length) {
         const c = el('div', 'card');
         c.append(el('h3', null, 'Encased treasures'));
@@ -3450,22 +3812,23 @@
           const box = el('div', 'seed'), n = el('div', 'n');
           const num = el('span', 'num', String(h.seed));
           num.title = 'copy';
-          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
-            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          num.onclick = () => copySeed(num, String(h.seed));
           n.append(num, el('span', 'dim', `x=${h.x}  y=${h.y ?? '?'}  z=${h.z}`));
+          const tp = el('button', 'tiny', '/tp'); tp.type = 'button';
+          tp.onclick = () => copyText(tp, tpCommand(h.x, h.z, 'overworld', h.y));
+          n.append(tp);
           box.append(n);
           const cb = el('button', null, 'confirm on real server');
           cb.onclick = () => confirmCasing(cb, h.seed, h.x, h.z, casing);
           box.append(cb); c.append(box);
         });
-        out.append(c);
+        view.append(c);
       } else if (!s.error) {
-        out.append(el('div', 'note',
+        view.append(el('div', 'note',
           `Nothing yet after ${(s.scanned || 0).toLocaleString()} seeds. Each batch covers ` +
           `seeds the earlier ones did not, so this is progress rather than a loop.`));
       }
-      if (!s.running) tcStopUI();
-    }, 4000);
+    }, () => { if (tcJob === job) tcStopUI(); });
   };
   $('#tcStop').onclick = async () => {
     if (!tcJob) return;
@@ -3488,42 +3851,33 @@
     const batch = Math.max(10000, Math.min(50000000, +$('#huBatch').value || 2000000));
     const want = Math.max(1, Math.min(50, +$('#huWant').value || 1));
     huntJob = 'hunt-' + Date.now();
+    const job = huntJob;
     $('#huBtn').disabled = true; $('#huStop').disabled = false;
     busy('searching fresh seeds batch after batch — this keeps going until it finds what you asked for.');
     try {
-      await post('/api/hunt', { query, job: huntJob, batch, want, secs: 60, threads: 16 });
+      await post('/api/hunt', { query, job, batch, want, secs: 60,
+                                threads: +$('#threads').value || 16 });
     } catch (e) { fail(e.message); huntStopUI(); return; }
-    huntPoll = setInterval(async () => {
-      if (!huntJob) return;
-      let s;
-      try { s = await post('/api/hunt/status', { job: huntJob }); }
-      catch (e) { return; }                 // a dropped poll is not a failure
-      out.innerHTML = '';
-      out.append(statsCard('Open-ended search', [
+    shownQuery = query;
+    const view = el('div', null, 'started — first report in a few seconds…');
+    out.innerHTML = ''; out.append(understoodCard(query), view);
+    huntPoll = huntPoller(job, view, 3000, s => {
+      view.append(statsCard('Open-ended search', [
         ['batches', String(s.batches || 0)],
         ['seeds scanned', (s.scanned || 0).toLocaleString()],
         ['found', String((s.hits || []).length), (s.hits || []).length ? 'good' : ''],
       ]));
-      if (s.error) out.append(el('div', 'note warn', s.error));
+      if (s.error) view.append(el('div', 'note warn', s.error));
       if ((s.hits || []).length) {
-        const c = el('div', 'card');
-        c.append(el('h3', null, 'Seeds — click to copy'));
-        s.hits.forEach(h => {
-          const box = el('div', 'seed'), n = el('div', 'n');
-          const num = el('span', 'num', String(h.seed));
-          num.title = 'copy';
-          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
-            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
-          n.append(num); box.append(n); c.append(box);
-        });
-        out.append(c);
+        // The same rich rows as a search -- coordinates, map links, /tp --
+        // rather than bare seed numbers.
+        view.append(seedsCard(s.hits, `Found: ${s.hits.length}`));
       } else if (!s.error) {
-        out.append(el('div', 'note',
+        view.append(el('div', 'note',
           `Nothing yet after ${(s.scanned || 0).toLocaleString()} seeds. Every batch ` +
           `covers seeds the earlier ones did not, so this is progress, not a loop.`));
       }
-      if (!s.running) { huntStopUI(); }
-    }, 3000);
+    }, () => { if (huntJob === job) huntStopUI(); });
   };
   $('#huStop').onclick = async () => {
     if (!huntJob) return;
@@ -3689,10 +4043,21 @@
              // recipient silently gets a plain filter search instead.
              b: budgetSeconds() / 60,
              k: rank.on ? { of: rank.of, by: rank.by, top: rank.top } : null,
-             lb: largeBiomes() };
+             lb: largeBiomes(),
+             // The exact query when the builder has not been edited since it
+             // was loaded -- the builder cannot express every field, and a link
+             // to an AI search must reopen as that search, not a lossy copy.
+             q: (loadedQuery && builderSnapshot() === loadedSnap) ? loadedQuery : null };
   }
   function applyState(s) {
     if (!s || !Array.isArray(s.c)) return false;
+    if (s.q && Array.isArray(s.q.conditions)) {
+      if (s.r) $('#range').value = s.r;
+      if (s.t) $('#threads').value = s.t;
+      if (s.b !== undefined) $('#budgetMin').value = s.b;
+      loadQueryIntoBuilder(s.q);
+      return true;
+    }
     if (s.v) $('#version').value = s.v;
     if (s.r) $('#range').value = s.r;
     if (s.t) $('#threads').value = s.t;
@@ -3718,6 +4083,20 @@
         atob(str.replace(/-/g, '+').replace(/_/g, '/')))));
     } catch (e) { return null; }
   }
+  // Share: the query rides in the URL hash. The hint promised a Share button
+  // on results; there was none, and encodeState had no caller left.
+  async function shareLink(btn) {
+    const url = location.origin + location.pathname + '#q=' + encodeState(currentState());
+    history.replaceState(null, '', url);
+    try {
+      await navigator.clipboard.writeText(url);
+      if (btn) { const was = btn.textContent; btn.textContent = 'link copied';
+                 setTimeout(() => { btn.textContent = was; }, 1200); }
+      toast('link copied — it reopens this search on any copy of SeedGPT running locally', 'good');
+    } catch (_) {
+      toast('could not copy; the link is in the address bar now');
+    }
+  }
   function getSaved() { try { return JSON.parse(localStorage.getItem('sf-saved') || '[]'); } catch (e) { return []; } }
   function setSaved(a) { localStorage.setItem('sf-saved', JSON.stringify(a)); renderSaved(); }
   function renderSaved() {
@@ -3728,7 +4107,13 @@
       const row = el('div', 'saved');
       const name = el('button', 'tiny', it.name);
       name.title = 'load this search'; name.style.flex = '1';
-      name.onclick = () => { if (applyState(it.state)) { render(); toast('loaded “' + it.name + '”'); } };
+      // The saved version's vocabulary has to load too, or the builder shows
+      // the conditions against another version's structure list.
+      name.onclick = async () => {
+        const v = it.state && (it.state.q ? it.state.q.version : it.state.v);
+        if (v && v !== $('#version').value) { $('#version').value = v; await loadVocab(); }
+        if (applyState(it.state)) { render(); toast('loaded “' + it.name + '”'); }
+      };
       const del = el('button', 'tiny x', '×'); del.title = 'delete';
       del.onclick = () => { const b = getSaved(); b.splice(i, 1); setSaved(b); };
       row.append(name, del); box.append(row);
@@ -3763,6 +4148,12 @@
         if (o.structure2) push('overlap', o.structure2, o.x2, o.z2,
           o.gap + ' blocks away, ' + o.area + ' blocks² overlap');
       });
+      (s.stronghold || []).forEach(o => {
+        push('stronghold', o.id, o.x, o.z, 'roof y=' + o.roof + ', ' + o.state);
+        if (o.tp) push('stronghold_shallowest', o.id, o.tp.x, o.tp.z,
+          'y=' + o.tp.y + ', ' + o.depth + ' block(s) of ground over it, ' + o.where);
+      });
+      (s.cactus || []).forEach(o => push('cactus', o.id, o.x, o.z, o.height + ' tall, base y=' + o.base_y));
       (s.slime || []).forEach(o => push('slime', o.id, o.x, o.z, o.count + ' within ' + o.within));
       (s.area  || []).forEach(o => push('biome_area', o.biome, o.x, o.z, o.pct + '% within ' + o.within));
       (s.height|| []).forEach(o => push('height', 'terrain', o.x, o.z,
@@ -3800,14 +4191,38 @@
     return bar;
   }
 
+  // ---- one run per tool button ------------------------------------------
+  // The single-shot tools (some boot a Minecraft or Bedrock server) could be
+  // started twice by a double-click, and nothing showed one was running. Each
+  // button is disabled for exactly as long as its own request runs. The hunt
+  // buttons manage their own state and are not wrapped.
+  ['#boBtn', '#csBtn', '#etBtn', '#flBtn', '#foBtn', '#soBtn', '#svBtn', '#vsBtn',
+   '#tcBtn', '#keyTest'].forEach(id => {
+    const b = $(id); if (!b || !b.onclick) return;
+    const handler = b.onclick;
+    b.onclick = async e => {
+      if (b.dataset.running) return;
+      b.dataset.running = '1'; b.disabled = true; b.setAttribute('aria-busy', 'true');
+      try { await handler.call(b, e); }
+      finally { delete b.dataset.running; b.disabled = false; b.removeAttribute('aria-busy'); }
+    };
+  });
+
   // ---- start -------------------------------------------------------------
   loadAssets();
   renderSaved();
+  // A shared link (#q=...) rebuilds its query. Its version is set BEFORE the
+  // vocabulary loads, so the builder checks the conditions against the right
+  // version's structures instead of discarding ones the default lacks.
+  const shareHash = location.hash.match(/^#q=(.+)$/);
+  const shared = shareHash ? decodeState(shareHash[1]) : null;
+  const sharedV = shared && (shared.q ? shared.q.version : shared.v);
+  if (sharedV && Array.from($('#version').options).some(o => o.value === sharedV))
+    $('#version').value = sharedV;
   loadVocab().then(() => {
-    // A shared link (#q=...) rebuilds its query; otherwise start from a demo.
+    // Otherwise start from a demo.
     let restored = false;
-    const h = location.hash.match(/^#q=(.+)$/);
-    if (h) { const s = decodeState(h[1]); if (s && applyState(s)) restored = true; }
+    if (shared && applyState(shared)) restored = true;
     if (!restored) {
       conds = [
         { id:'mansion', kind:'structure', name:'mansion', within:300, of:'origin' },
