@@ -2556,7 +2556,10 @@
       mapb.onclick = () => mapView(s.seed);
       const desc = el('button', 'tiny', 'describe');
       desc.onclick = () => describe(s.seed);
-      n.append(num, mapb, desc);
+      const rec = el('button', 'tiny', 'copy as record');
+      rec.title = 'seed, version, every coordinate with its /tp, the value -- the fields a seedfinding record lists';
+      rec.onclick = () => copyText(rec, recordText(s));
+      n.append(num, mapb, desc, rec);
       // Ranked runs carry the score that put this seed on the board.
       if (s.score !== undefined)
         n.append(el('span', 'dim', `${s.metric} ${s.score.toLocaleString()}`));
@@ -2657,6 +2660,40 @@
     });
     return c;
   }
+  // A find written up the way seedfinding records are listed (seed, version,
+  // coordinates, value, finder), ready to paste into a post or the records
+  // wiki. The version is the one SEARCHED; whether it holds on other versions
+  // was not tested, and the text says so rather than implying a range.
+  function recordText(s) {
+    const q = shownQuery || {};
+    const v = q.version || $('#version').value;
+    const lines = [
+      `Seed: ${s.seed}`,
+      `Edition: Java · version searched: ${v}${q.large_biomes ? ' · Large Biomes' : ''}`
+        + ' (other versions not checked)',
+    ];
+    if (s.score !== undefined) lines.push(`Value: ${s.metric} = ${s.score}`);
+    if ((q.conditions || []).length)
+      lines.push('Searched for: ' + q.conditions.map(condText).join('; '));
+    lines.push('Where:');
+    const rows = seedRows([s]).slice(1);          // [seed, kind, id, x, z, detail]
+    const kindDim = r => {
+      const st = r[1] === 'structure' || r[1] === 'cluster' || r[1] === 'overlap' ? r[2] : '';
+      const nm = (conds.find(c => c.id === st) || {}).name || st;
+      return vocab.structures[nm] || 'overworld';
+    };
+    rows.forEach(r => {
+      if (r[3] === '' || r[3] === undefined) return;
+      const dim = kindDim(r);
+      lines.push(`  - ${r[2] || r[1]}${dim !== 'overworld' ? ' (' + dim + ')' : ''}: `
+        + `x=${r[3]} z=${r[4]}${r[5] ? ' -- ' + r[5] : ''}   ${tpCommand(r[3], r[4], dim)}`);
+    });
+    lines.push('Finder: ');
+    lines.push(`Found with SeedGPT (cubiomes engine) on ${new Date().toISOString().slice(0, 10)}.`
+      + ' Positions are exact engine output; verify in game before claiming a record.');
+    return lines.join('\n');
+  }
+
   function copySeed(span, seed) {
     (navigator.clipboard ? navigator.clipboard.writeText(seed) : Promise.reject()).then(() => {
       span.textContent = 'copied'; announce('seed copied');
