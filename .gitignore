@@ -57,3 +57,10 @@ tier3-java/*.jsonl
 tier3-java/*.log
 server-1.16.5.jar
 boot165/
+
+# Minecraft server/client jars, anywhere. Mojang's binaries may be downloaded
+# for local use but not redistributed, and this repo is public: one was once
+# committed by accident because the ignore rule above named only one path.
+# Fetch them with the download+SHA1 steps in tier3-java/README.md instead.
+*.jar
+!**/gradle/wrapper/gradle-wrapper.jar
