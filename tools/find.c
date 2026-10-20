@@ -100,12 +100,37 @@ static int g_hitstream = 0;   // FIND_HITSTREAM: print every hit, uncapped
 static ULONGLONG g_deadline = 0;          // 0 = no limit
 static volatile LONG g_expired = 0;
 
+// How often the deadline is looked at, ADAPTED to what a seed actually costs.
+//
+// This used to be a flat "every 1024 seeds", on the reasoning that
+// GetTickCount64 is cheap but not free and the fastest queries run millions of
+// seeds a second. That holds only while a seed is cheap. A stronghold overlap
+// costs ~4 s per structure seed -- the ring walk is re-run for every world seed,
+// since initFirstStronghold takes the WORLD seed -- so a thread could not notice
+// the budget until it had finished 1024 of them. Measured: FIND_SECONDS=90 ran
+// for 3867 s. A time budget that overshoots by 40x is not a budget, and the
+// machine it overruns on is someone's.
+//
+// So the interval starts at "every seed" and only relaxes once cheap seeds have
+// proved themselves. Getting this backwards is what made the bug: the expensive
+// case is the one that cannot afford to wait for the first checkpoint, and it is
+// also the one where a per-seed GetTickCount64 costs nothing in relative terms.
+// A fast query reaches the old 1023 interval within ten seeds.
+static _Thread_local uint64_t tl_chkMask = 0;
+static _Thread_local ULONGLONG tl_lastChk = 0;
+
 static inline int outOfTime(uint64_t scanned)
 {
-    // Checked once every 1024 seeds: GetTickCount64 is cheap but not free, and
-    // the fastest queries run millions of seeds a second.
-    if (!g_deadline || (scanned & 1023)) return 0;
-    if (GetTickCount64() < g_deadline) return 0;
+    if (!g_deadline) return 0;
+    if (scanned & tl_chkMask) return 0;
+    ULONGLONG now = GetTickCount64();
+    if (tl_lastChk) {
+        ULONGLONG d = now - tl_lastChk;
+        if (d > 250) { tl_chkMask >>= 1; }
+        else if (d < 25 && tl_chkMask < 1023) { tl_chkMask = (tl_chkMask << 1) | 1; }
+    }
+    tl_lastChk = now;
+    if (now < g_deadline) return 0;
     InterlockedExchange(&g_expired, 1);
     return 1;
 }
@@ -264,6 +289,51 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
             if (!strncmp(it, "minecraft:", 10)) it += 10;
             printf("   %-14s x=%6d z=%6d   %d %s\n", cd->id,
                    mm->pos[c].x, mm->pos[c].z, mm->lootCount[c], it);
+            continue;
+        }
+        if (cd->type == CT_STRONGHOLD) {
+            // The roof AND the depth. The roof alone is not the find -- a roof
+            // at y=60 is a metre down on a plain and buried inside a mountain --
+            // so the number that decides whether it is worth flying to is how
+            // far under the surface it sits.
+            int d = mm->shDepth[c];
+            printf("   %-14s x=%6d z=%6d   stronghold, roof y=%d, %s\n", cd->id,
+                   mm->pos[c].x, mm->pos[c].z, mm->shRoof[c],
+                   d <= 0 ? "BREAKS THE SURFACE"
+                          : (d <= 4 ? "just under the surface" : "underground"));
+            // WHERE it is exposed to. A roof open to water is still "exposed",
+            // and flying to one and finding ocean is exactly how this project's
+            // ruined portals earned their reputation. Measured on a hit reported
+            // EXPOSED at roof y=51: water sat directly on 466 of its 546 roof
+            // columns -- genuinely open, genuinely underwater.
+            int surf = mm->shRoof[c] + d;
+            // Above y=52 the roof is the structure's own height: vanilla pins a
+            // tall stronghold at span+1 instead of rolling a height for it. So
+            // any surplus piece the generator invents raises the roof one for
+            // one, and this is the band where we have seen it happen.
+            //
+            // Measured against end portal frames on a real 1.16.5 server:
+            // 15 of 15 exact below y=52, 2 of 3 above it. The miss was a
+            // stronghold whose real vertical span was 59 where the model built
+            // 67 -- same bottom, eight blocks of extra corridor on top.
+            //
+            // An exposed stronghold on land needs a roof near y=60, so this
+            // search lives in that band by construction. The coordinate is
+            // worth flying to; it is not yet worth trusting.
+            if (mm->shRoof[c] > 52)
+                printf("   %-14s NOTE: tall stronghold (roof above y=52). Heights "
+                       "here come out right about 2 times in 3 -- verify before "
+                       "believing it.\n", "");
+            // The teleport goes to the SHALLOWEST PIECE, not the stronghold's
+            // start chunk. Those are different places -- up to 112 blocks apart
+            // -- and the start is often deep while the exposed part is not, so a
+            // coordinate taken from the start lands you on ordinary ground.
+            printf("   %-14s /tp %d %d %d -- the shallowest part, %d block(s) of "
+                   "ground over it, %s (surface height is an estimate "
+                   "before 1.18)\n", "",
+                   mm->partner[c].x, mm->shRoof[c] + 1, mm->partner[c].z,
+                   d > 0 ? d : 0,
+                   surf < 62 ? "ON THE SEA FLOOR, water above it" : "on dry land");
             continue;
         }
         if (cd->type == CT_OVERLAP) {
@@ -433,7 +503,16 @@ int main(int argc, char **argv)
     }
     int explain = (argc > 2) && !strcmp(argv[2], "--explain");
     int bias    = (argc > 2) && !strcmp(argv[2], "--bias");
-    uint64_t range   = (argc > 2 && !explain && !bias) ? strtoull(argv[2], NULL, 10) : 5000000;
+    // --seed: does THIS world seed satisfy the query?
+    //
+    // FIND_OFFSET cannot answer that. It is an index that goes through mix64
+    // before becoming a seed, so there is no offset you can pass to reach a
+    // particular seed. Checking a seed someone hands you -- which is most of
+    // what verifying a known find consists of -- had no path through this tool
+    // at all, and the alternative was to search for it, which is absurd.
+    int seedmode = (argc > 3) && !strcmp(argv[2], "--seed");
+    uint64_t oneseed = seedmode ? (uint64_t)strtoll(argv[3], NULL, 10) : 0;
+    uint64_t range   = (argc > 2 && !explain && !bias && !seedmode) ? strtoull(argv[2], NULL, 10) : 5000000;
     uint64_t samples = ((explain || bias) && argc > 3) ? strtoull(argv[3], NULL, 10) : 200000;
     int nthreads = (explain || bias) ? ((argc > 4) ? atoi(argv[4]) : 16)
                                      : ((argc > 3) ? atoi(argv[3]) : 16);
@@ -471,6 +550,33 @@ int main(int argc, char **argv)
 
     if (bias)    { explainCompare(&q, samples, nthreads, stdout); free(json); return 0; }
     if (explain) { explainQuery(&q, samples, nthreads, stdout);   free(json); return 0; }
+
+    if (seedmode) {
+        Generator g;
+        setupGenerator(&g, q.mc, queryGenFlags(&q));
+        Match m;
+        // Stage 1 works on the lower 48 bits, stage 2 on the whole seed. Both
+        // must be reported separately: "the structures are placed but a biome
+        // rules it out" and "the placement never happened" are different
+        // answers, and collapsing them into one no would hide which.
+        int s1 = queryStage1(&q, oneseed & ((1ULL << 48) - 1), &m);
+        LootCache *lc = lootCacheNew();
+        int s2 = s1 && queryStage2(&q, &g, oneseed, &m, lc);
+        printf("--- seed %" PRId64 " ---\n", (int64_t)oneseed);
+        if (!s1) {
+            printf("NO -- fails the 48-bit structure pass: the placements this query\n"
+                   "      needs are not in this seed at all.\n");
+        } else if (!s2) {
+            printf("NO -- placements exist, but the full-seed pass rejects it\n"
+                   "      (biome, viability, terrain or a Y/loot condition).\n");
+        } else {
+            printf("YES -- this seed satisfies the query.\n\n");
+            printHit(&q, oneseed, &m, NULL);
+        }
+        if (lc) lootCacheFree(lc);
+        free(json);
+        return s2 ? 0 : 3;
+    }
 
     const char *secs = getenv("FIND_SECONDS");
     if (secs && atof(secs) > 0) {

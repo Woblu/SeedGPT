@@ -1,0 +1,74 @@
+diff --git a/features/stronghold.c b/features/stronghold.c
+index 75433fa..28113af 100644
+--- a/features/stronghold.c
++++ b/features/stronghold.c
+@@ -363,7 +363,19 @@ static void extendStrongholdPiece(StrongholdPieceEnv *env, Piece *piece) {
+     }
+ }
+ 
+-int getStrongholdPieces(Piece *list, int n, int mc, uint64_t seed, int chunkX, int chunkZ) {
++// adjustY: run vanilla's moveBelowSeaLevel so the pieces carry their real Y.
++//
++// Upstream leaves this off because Y does not affect loot, and it costs
++// correctness elsewhere to turn on: the drain loop below normally exits early
++// on generationStopped, which SKIPS the `nextInt(len)` that vanilla spends
++// picking each queued piece. Those draws land on the same RNG that the height
++// roll then reads, so a partially drained queue gives a plausible-looking but
++// wrong Y. With adjustY the queue is drained in full, exactly as
++// StrongholdFeature.Start does, and only then is the height applied.
++//
++// getStrongholdPieces keeps adjustY=0 and is bit-identical to before, so the
++// validated loot and eye-count paths are untouched.
++int getStrongholdPiecesOpt(Piece *list, int n, int mc, uint64_t seed, int chunkX, int chunkZ, int adjustY) {
+     static const int OLD_ROTATIONS[] = {2, 3, 0, 1};
+ 
+     int x = (chunkX << 4) + 2;
+@@ -421,7 +433,7 @@ int getStrongholdPieces(Piece *list, int n, int mc, uint64_t seed, int chunkX, i
+         p->next = NULL;
+ 
+         extendStrongholdPiece(&env, p);
+-        while (list->next && !env.generationStopped) {
++        while (list->next && (adjustY || !env.generationStopped)) {
+             Piece *q = list;
+             int len = 0;
+             while (q->next) {
+@@ -437,7 +449,7 @@ int getStrongholdPieces(Piece *list, int n, int mc, uint64_t seed, int chunkX, i
+ 
+         // necessary for <=1.12.2 to simulate random calls
+         // optional for >1.12.2, could add flag for accurate heights
+-        if (mc <= MC_1_12_2 && !env.portal) {
++        if (adjustY || (mc <= MC_1_12_2 && !env.portal)) {
+             int minY = p->bb0.y;
+             int maxY = p->bb1.y;
+             for (int i = 0; i < count; i++) {
+@@ -472,6 +484,10 @@ int getStrongholdPieces(Piece *list, int n, int mc, uint64_t seed, int chunkX, i
+     return *env.n;
+ }
+ 
++int getStrongholdPieces(Piece *list, int n, int mc, uint64_t seed, int chunkX, int chunkZ) {
++    return getStrongholdPiecesOpt(list, n, mc, seed, chunkX, chunkZ, 0);
++}
++
+ static inline void rotPos(Pos3 bb0, Pos3 bb1, int *x, int *z, int rot) {
+     int posX, posZ;
+     switch (rot) {
+diff --git a/features/stronghold.h b/features/stronghold.h
+index ae35fb7..ad759db 100644
+--- a/features/stronghold.h
++++ b/features/stronghold.h
+@@ -33,6 +33,15 @@ extern "C" {
+  */
+ int getStrongholdPieces(Piece *list, int n, int mc, uint64_t seed, int chunkX, int chunkZ);
+ 
++/**
++ * As getStrongholdPieces, but with adjustY=1 the pieces carry their REAL
++ * Y-coordinate (vanilla moveBelowSeaLevel) instead of a start piece pinned at
++ * Y=64. Needed to answer "how deep is this stronghold" and "does it break the
++ * surface". Use a generous buffer: accurate Y requires draining the whole
++ * piece queue, so a short buffer changes the answer.
++ */
++int getStrongholdPiecesOpt(Piece *list, int n, int mc, uint64_t seed, int chunkX, int chunkZ, int adjustY);
++
+ enum {
+     SH_STRAIGHT = 0,
+     SH_PRISON_HALL,

@@ -72,5 +72,41 @@ echo "compat shim written"
 git -C cubiomes checkout --quiet -- .
 git -C cubiomes apply ../patches/fortress-piece-bound.patch
 echo "fortress piece-bound patch applied"
+
+# Stronghold pieces with their REAL Y. Upstream pins the start piece at Y=64 and
+# says so in the header: the height costs extra RNG bookkeeping and loot does not
+# depend on it. But "is this stronghold exposed" is a question about Y and
+# nothing else, so the engine could not answer it at all.
+#
+# The patch adds getStrongholdPiecesOpt(..., adjustY) and leaves
+# getStrongholdPieces bit-identical, so the validated loot and eye-count paths
+# are untouched. Without this the stronghold conditions in src/query.c do not
+# compile, which is why it belongs here rather than in a developer's working
+# tree -- cubiomes/ is gitignored and the checkout above would discard it.
+git -C cubiomes apply ../patches/stronghold-accurate-y.patch
+echo "stronghold accurate-Y patch applied"
+
+# The filler-corridor rule upstream gates at 1.17; the evidence says 1.18.
+#
+# extendStrongholdPiece tries filler-corridor lengths i = 2,1,0 and upstream
+# stops at i=1 from MC_1_17 on, so a 1.17 stronghold gets fewer corridors, is
+# shorter, and its roof lands lower. That is testable, because exposed
+# strongholds are a known 1.17.1 find: against DylanDC14's 12 published seeds
+# (8 village, 3 mansion, 1 ocean, all verified in game at 1.17.1) upstream's
+# gate confirms 3 of 12, and moving it to 1.18 confirms 8 of 12 -- five seeds
+# flip from wrong to right and none flip the other way. Two examples, same
+# seed, same coordinates:
+#     upstream 1.17   84 -2220  pieces=121  maxY=56  surface=61  depth= 5
+#     gate at 1.18    84 -2220  pieces=189  maxY=64  surface=61  depth=-3 EXPOSED
+# The remaining 4 sit 1-5 blocks under our SMOOTHED surface estimate, which is
+# mapApproxHeight for anything below 1.18 and provably cannot see a sharp dip --
+# a separate limit, not this gate.
+#
+# 1.16 and 1.18+ are bit-identical before and after (verified by re-running the
+# same seeds), so only 1.17 moves. NOT independently confirmed against a real
+# 1.17 server: 1.17 stronghold piece lists change, so 1.17 eye counts and
+# stronghold loot may shift with it. The validated paths are 1.16.5.
+git -C cubiomes apply ../patches/stronghold-1-17-filler-corridor.patch
+echo "stronghold 1.17 filler-corridor patch applied"
 echo
 echo "next: ./build.sh tools/find.c   then   ./test.sh"

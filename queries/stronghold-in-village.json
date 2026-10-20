@@ -1,0 +1,1 @@
+{"version":"1.17","conditions":[{"id":"sh","overlap":["stronghold","village"],"within":3000,"of":"origin","max_depth":0}]}

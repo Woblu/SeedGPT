@@ -55,6 +55,7 @@ typedef enum {
     CT_ISLAND,      // land at the reference, ocean covering >= N% of the disc
     CT_OVERLAP,     // two structures whose footprint boxes intersect
     CT_CACTUS,      // a cactus at least N blocks tall within `within`
+    CT_STRONGHOLD,  // a stronghold whose roof is near (or above) the surface
 } CondType;
 
 // What a leaderboard search ranks by. AUTO picks the condition's natural
@@ -136,6 +137,28 @@ typedef struct {
     int      cactusMin;     // CT_CACTUS: minimum cactus height in blocks. One
                             // placement is 1-3, so anything above ~6 needs
                             // several patches stacking on one column.
+    // CT_OVERLAP with a stronghold operand. A stronghold is not a region
+    // structure -- it has no getStructurePos and no fixed footprint -- so the
+    // overlap is tested against its actual PIECE bounding boxes. minRoofY then
+    // asks how high the highest piece reaches, which is the version-independent
+    // way to say "shallow" or "exposed": a stronghold whose roof is at y=62 is
+    // at the surface in any version, with no terrain generator needed.
+    int      hasRoofMin;    // CT_OVERLAP/CT_STRONGHOLD: minRoofY is meaningful
+    int      minRoofY;      // CT_OVERLAP/CT_STRONGHOLD: top piece at or above this
+    // CT_STRONGHOLD: how far the roof may sit BELOW the surface. 0 means the
+    // stronghold breaks ground; small positive numbers mean "a few blocks of
+    // dirt over it". This is the honest form of the question -- a bare Y
+    // threshold calls a stronghold at y=60 shallow whether the ground above it
+    // is at 63 or at 130.
+    int      hasMaxDepth;
+    int      maxDepth;
+    // CT_STRONGHOLD: require DRY LAND above it. Default ON, and that default is
+    // deliberate: most strongholds whose roof reaches the surface do so because
+    // the surface there is an ocean floor, so "exposed" without this returns
+    // mostly sites you fly to and find nothing but water over. Same failure the
+    // ruined portals had. "land": false includes the sea-floor ones, and either
+    // way the report says which.
+    int      landOnly;
     int      overlapPad;    // CT_OVERLAP: slack in blocks. 0 = the two footprint
                             // boxes must genuinely intersect; N = within N blocks
                             // of each other, for "practically on top of".
@@ -147,6 +170,9 @@ typedef struct {
                             // mineable blob), not the scattered total
     int      oreExposed;    // CT_ORE: count only blocks open to air -- a cave
                             // wall you can see the ore in. 1.18+ overworld, SLOW.
+    int      oreYMin;       // CT_ORE: inclusive Y band. "deepslate emerald" is
+    int      oreYMax;       // just emerald with oreYMax = -1, since the block
+                            // form follows the stone it replaced.
     int      slimeMin;      // CT_SLIME: minimum slime chunks in range
     int      areaPct;       // CT_BIOME_AREA: min % of the disc that is biomeId
     int      structMin;     // CT_STRUCTURE: min instances in range (1 = single)
@@ -276,6 +302,8 @@ typedef struct {
     int overlapArea[MAX_COND];// CT_OVERLAP: footprint intersection, blocks^2
     int cactusTall[MAX_COND]; // CT_CACTUS: tallest cactus found, in blocks
     int cactusBase[MAX_COND]; // CT_CACTUS: world Y its lowest block stands on
+    int shRoof[MAX_COND];     // CT_STRONGHOLD: world Y of its highest piece
+    int shDepth[MAX_COND];    // CT_STRONGHOLD: surface - roof. <=0 breaks ground
 } Match;
 
 // Leaderboard scoring. Returns the ranked condition's measurement for this

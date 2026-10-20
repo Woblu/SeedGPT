@@ -18,6 +18,9 @@ typedef struct { const char *name; int block; int dim; } OreMaterial;
 // Returns the material table (NULL-terminated) and its length via *n.
 const OreMaterial *oreMaterials(int *n);
 
+// Sentinel for "no Y bound" on oreScan.
+#define ORE_Y_ANY 4096
+
 // Look up a material by user name ("diamond"); NULL if unknown.
 const OreMaterial *oreMaterialByName(const char *name);
 
@@ -43,6 +46,12 @@ int oreCountMaterial(const Generator *g, const SurfaceNoise *sn, int mc,
 // candidate chunk (milliseconds). It under-reports at chunk borders: a
 // neighbour outside the generated chunk is treated as solid, which can only
 // miss an exposed block, never invent one.
+//   yMin/yMax  count only blocks in this inclusive Y band. This is how
+//             "deepslate emerald ore" is expressed: deepslate is not a separate
+//             ore, it is what the SAME ore becomes when it replaces deepslate
+//             instead of stone, so the block form is decided purely by the Y it
+//             generated at (below y=0 on 1.18+). Pass -ORE_Y_ANY/ORE_Y_ANY for
+//             no bound.
 int oreScan(const Generator *g, const SurfaceNoise *sn, int mc, uint32_t gflags,
             const OreMaterial *mat, int cx, int cz, int radius,
-            int exposed, int *veinMax);
+            int exposed, int *veinMax, int yMin, int yMax);

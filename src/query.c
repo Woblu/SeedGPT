@@ -37,6 +37,14 @@
 #define NS_BIOME_AT    5460.0
 #define NS_SPAWN    2300000.0   // getSpawn: ~437/s
 #define NS_EYES    10250000.0   // locate stronghold + pieces + loot: ~98/s
+// Walking the stronghold rings for an overlap, MEASURED rather than assumed:
+// 524288 world seeds in 69.9s on 8 threads with within=2000 is 1.07 ms of
+// wall-clock per world seed per thread. The first guess here was NS_EYES, which
+// overstated it by 10x -- eyes also rolls pieces and loot, and this does not.
+#define NS_SH_RINGS 1070000.0
+// Water fills to y=62 (sea level 63 means the top water block is 62), so a
+// surface below this is under the ocean.
+#define SEA_LEVEL_Y 62
 #define NS_LOOT       47000.0   // structure viability + a ~5us loot roll
 #define NS_ORE_CHUNK   4000.0   // per chunk: one biome probe + config scan + gen
 #define NS_SLIME_CHUNK    6.0   // per chunk: one Java-RNG isSlimeChunk call
@@ -101,7 +109,16 @@ static double geomCost(const Query *q, int i)
 {
     const Cond *c = &q->cond[i];
     StructureConfig sc;
-    if (!getStructureConfig(c->structType, q->mc, &sc)) return NS_STRUCT_POS;
+    // A stronghold has no region config. Price the pair off the PARTNER's grid,
+    // which is the only part pass 1 can actually filter on. Without this the
+    // lookup fails and the condition is costed at a single structure probe --
+    // the cheapest thing in the query -- so the scheduler would run the most
+    // expensive condition we have first.
+    if (c->type == CT_OVERLAP && c->structType == Stronghold) {
+        if (!getStructureConfig(c->structType2, q->mc, &sc)) return NS_STRUCT_POS;
+    } else if (c->type == CT_OVERLAP && c->structType2 == Stronghold) {
+        if (!getStructureConfig(c->structType, q->mc, &sc)) return NS_STRUCT_POS;
+    } else if (!getStructureConfig(c->structType, q->mc, &sc)) return NS_STRUCT_POS;
     // regions we must scan to cover a disc of radius `within`
     double span = sc.regionSize * 16.0;
     double reach = c->within + (c->parent == PARENT_SPAWN ? SPAWN_MARGIN : 0);
@@ -163,8 +180,18 @@ static double viabCost(const Query *q, int i)
         }
         return cost + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
     }
-    if (c->type == CT_OVERLAP)   // both halves of the pair must be viable
+    if (c->type == CT_STRONGHOLD)
+        return NS_SH_RINGS + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+    if (c->type == CT_OVERLAP) {
+        // Walking the stronghold rings costs a biome-heavy nextStronghold per
+        // ring, the same order as resolving an end portal -- roughly four
+        // orders of magnitude above a structure position lookup. Charging it
+        // honestly is what keeps this condition scheduled last.
+        if (c->structType == Stronghold || c->structType2 == Stronghold)
+            return NS_SH_RINGS + 2.0 * NS_VIABLE +
+                   (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
         return 2.0 * NS_VIABLE + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+    }
     if (c->type == CT_HEIGHT) {
         if (c->exactTerrain) {
             // Real per-block terrain: ~one heavy noise column per 4x4 cell over
@@ -312,6 +339,19 @@ static int str2struct_(const char *s)
     return -1;
 }
 
+// "stronghold" is deliberately NOT in STRUCT_TBL. Every other consumer of that
+// table -- the cluster search, the loot scan, the UI's structure list -- goes
+// through getStructurePos, and a stronghold has no region position to return:
+// it is placed by walking rings with the biome generator. Listing it there
+// would offer the user searches that silently cannot work.
+//
+// Overlap is the one place it does make sense, so it is accepted only here.
+static int str2overlapStruct_(const char *s)
+{
+    if (!strcmp(s, "stronghold")) return Stronghold;
+    return str2struct_(s);
+}
+
 // Structures cubiomes places from the chunk POPULATION seed rather than the
 // region-based structure algorithm. The distinction matters here: a region
 // structure's position depends only on the lower 48 bits (which is what makes
@@ -363,6 +403,12 @@ static int structHalfExtent(int stype)
     case Trial_Chambers:  return 48;
     case Fortress:        return 48;
     case Ancient_City:    return 64;
+    // extendStronghold refuses to place a piece more than 112 blocks from the
+    // start, so this is the true worst case. It is only used to decide WHICH
+    // partners are worth testing -- the overlap itself is tested against the
+    // real piece boxes, because a 112-block box would call almost anything an
+    // overlap.
+    case Stronghold:      return 112;
     default:              return 16;
     }
 }
@@ -445,7 +491,57 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
         cJSON *jrelief = cJSON_GetObjectItem(e, "relief");
         cJSON *jisland = cJSON_GetObjectItem(e, "island");
         cJSON *jovl = cJSON_GetObjectItem(e, "overlap");
-        if (jovl && cJSON_IsArray(jovl) && cJSON_GetArraySize(jovl) == 2) {
+        cJSON *jsh = cJSON_GetObjectItem(e, "stronghold");
+        if (jsh && !cJSON_IsNull(jsh)) {
+            // A stronghold on its own: "an exposed stronghold", "a stronghold
+            // right under the grass". Not a CT_STRUCTURE -- it has no region
+            // position and cannot go through getStructurePos -- and not an
+            // overlap either, because there is no second structure involved.
+            c->type = CT_STRONGHOLD;
+            c->dim  = DIM_OVERWORLD;
+            if (cJSON_IsString(jsh) && jsh->valuestring) {
+                if (!strcmp(jsh->valuestring, "exposed")) {
+                    c->hasMaxDepth = 1; c->maxDepth = 0;
+                } else if (!strcmp(jsh->valuestring, "shallow")) {
+                    c->hasMaxDepth = 1; c->maxDepth = 4;
+                } else if (strcmp(jsh->valuestring, "any")) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": stronghold must be true, \"any\", "
+                        "\"shallow\" or \"exposed\" -- got \"%s\"",
+                        c->id, jsh->valuestring);
+                    goto done;
+                }
+            } else if (cJSON_IsNumber(jsh)) {
+                c->hasMaxDepth = 1; c->maxDepth = jsh->valueint;
+            }
+            cJSON *jd = cJSON_GetObjectItem(e, "max_depth");
+            if (!jd) jd = cJSON_GetObjectItem(e, "maxDepth");
+            if (jd && cJSON_IsNumber(jd)) { c->hasMaxDepth = 1; c->maxDepth = jd->valueint; }
+            cJSON *jr = cJSON_GetObjectItem(e, "min_roof_y");
+            if (!jr) jr = cJSON_GetObjectItem(e, "minRoofY");
+            if (jr && cJSON_IsNumber(jr)) { c->hasRoofMin = 1; c->minRoofY = jr->valueint; }
+
+            // The same hard bound the overlap form checks, for the same reason:
+            // from 1.18 moveBelowSeaLevel starts the structure 64 blocks lower,
+            // so its roof cannot reach a surface that still sits near y=63.
+            if (q->mc >= MC_1_18 && c->hasMaxDepth && c->maxDepth <= 0) {
+                snprintf(err, errlen,
+                    "impossible: condition \"%s\" asks for a stronghold breaking "
+                    "the surface, but from 1.18 a stronghold's roof can never be "
+                    "above y=52 while the ground stays near y=63. Surface-level "
+                    "strongholds are a pre-1.18 thing -- try version 1.17, or ask "
+                    "for \"shallow\" instead of \"exposed\".", c->id);
+                goto done;
+            }
+            cJSON *jland = cJSON_GetObjectItem(e, "land");
+            c->landOnly = (jland && cJSON_IsFalse(jland)) ? 0 : 1;
+            cJSON *sw = cJSON_GetObjectItem(e, "within");
+            c->within = (sw && cJSON_IsNumber(sw)) ? sw->valueint : 3000;
+            if (c->within > 30000) c->within = 30000;
+            if (c->within < 64)    c->within = 64;
+            cJSON *of = cJSON_GetObjectItem(e, "of");
+            snprintf(c->ofId, ID_LEN, "%s", (of && cJSON_IsString(of)) ? of->valuestring : "origin");
+        } else if (jovl && cJSON_IsArray(jovl) && cJSON_GetArraySize(jovl) == 2) {
             // Two structures generating into the same ground: a ruined portal
             // inside a village, a mineshaft under a monument. Distance alone
             // cannot express this -- "within 30 blocks" is satisfied by two
@@ -458,15 +554,119 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 snprintf(err, errlen, "condition \"%s\": overlap needs two structure names", c->id);
                 goto done;
             }
-            c->structType  = str2struct_(an);
-            c->structType2 = str2struct_(bn);
+            c->structType  = str2overlapStruct_(an);
+            c->structType2 = str2overlapStruct_(bn);
             if (c->structType < 0 || c->structType2 < 0) {
                 snprintf(err, errlen, "condition \"%s\": unknown structure in overlap", c->id);
                 goto done;
             }
+            if (c->structType == Stronghold && c->structType2 == Stronghold) {
+                snprintf(err, errlen,
+                    "condition \"%s\": two strongholds cannot overlap -- they are "
+                    "generated in rings and never share ground", c->id);
+                goto done;
+            }
+            // How high the stronghold's highest piece must reach. This is the
+            // version-independent way to ask for a SHALLOW stronghold: block
+            // terrain only exists from 1.18 here, but a roof at y=62 is at the
+            // surface in every version.
+            cJSON *jroof = cJSON_GetObjectItem(e, "min_roof_y");
+            if (!jroof) jroof = cJSON_GetObjectItem(e, "minRoofY");
+            if (jroof) {
+                if (c->structType != Stronghold && c->structType2 != Stronghold) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": min_roof_y only means something for a "
+                        "stronghold overlap -- no other structure here carries a Y",
+                        c->id);
+                    goto done;
+                }
+                c->minRoofY = jroof->valueint;
+                c->hasRoofMin = 1;
+                // A roof above y=52 is impossible from 1.18, and saying so here
+                // saves an overnight search that could never hit.
+                //
+                // moveBelowSeaLevel puts the roof at k = span + minY + 1, then
+                // draws k += nextInt(53 - k) only while k < 53. So k lands below
+                // 53 unless span + minY + 1 already clears it. Before 1.18 minY
+                // is 0, so a span of 52+ blocks pushes the roof up -- that is
+                // exactly what the shallow strongholds are. From 1.18 minY is
+                // -64, so k starts 64 lower and would need a 116-block vertical
+                // span to reach 53, which no stronghold has.
+                if (q->mc >= MC_1_18 && c->minRoofY > 52) {
+                    snprintf(err, errlen,
+                        "impossible: from 1.18 a stronghold's roof can never be "
+                        "above y=52 (moveBelowSeaLevel starts it 64 blocks lower "
+                        "than it used to), so min_roof_y=%d has no solutions. "
+                        "Surface-level strongholds are a pre-1.18 phenomenon -- "
+                        "try version 1.17.",
+                        c->minRoofY);
+                    goto done;
+                }
+            }
+            // max_depth: ground over the piece that meets the partner, in
+            // blocks. 0 = it breaks the surface, i.e. genuinely EXPOSED. This
+            // is the terrain-aware question; min_roof_y above is only a proxy
+            // for it, and the two disagree in exactly the case people care
+            // about -- a roof at y=60 under a hill is 5 blocks down, not out.
+            cJSON *jdep = cJSON_GetObjectItem(e, "max_depth");
+            if (!jdep) jdep = cJSON_GetObjectItem(e, "maxDepth");
+            if (jdep && cJSON_IsNumber(jdep)) {
+                if (c->structType != Stronghold && c->structType2 != Stronghold) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": max_depth only means something for a "
+                        "stronghold overlap -- no other structure here carries a Y",
+                        c->id);
+                    goto done;
+                }
+                c->maxDepth = jdep->valueint;
+                c->hasMaxDepth = 1;
+                // Default to dry land, exactly as the standalone condition
+                // does. Without it the first results were strongholds breaking
+                // out through a river bed at y<=52 -- true by the arithmetic,
+                // useless to walk to, and a village on the bank does nothing to
+                // make them the find people mean.
+                cJSON *jl = cJSON_GetObjectItem(e, "land");
+                c->landOnly = (jl && cJSON_IsFalse(jl)) ? 0 : 1;
+                if (q->mc >= MC_1_18 && c->maxDepth <= 0) {
+                    snprintf(err, errlen,
+                        "impossible: condition \"%s\" asks for a stronghold that "
+                        "breaks the surface, but from 1.18 the roof tops out at "
+                        "y=52 while the ground stays near y=63. Exposed "
+                        "strongholds are a pre-1.18 phenomenon -- try version "
+                        "1.17.", c->id);
+                    goto done;
+                }
+            }
+            // A stronghold has no StructureConfig; it is always overworld.
             StructureConfig sa, sb;
-            if (!getStructureConfig(c->structType, q->mc, &sa) ||
-                !getStructureConfig(c->structType2, q->mc, &sb)) {
+            if (c->structType == Stronghold) {
+                if (!getStructureConfig(c->structType2, q->mc, &sb)) {
+                    snprintf(err, errlen, "condition \"%s\": %s does not exist in %s",
+                             c->id, bn, jv->valuestring);
+                    goto done;
+                }
+                sa = sb; sa.dim = DIM_OVERWORLD;
+                if (sb.dim != DIM_OVERWORLD) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": a stronghold is an overworld structure and "
+                        "%s is not -- they can never overlap", c->id, bn);
+                    goto done;
+                }
+            } else if (c->structType2 == Stronghold) {
+                if (!getStructureConfig(c->structType, q->mc, &sa)) {
+                    snprintf(err, errlen, "condition \"%s\": %s does not exist in %s",
+                             c->id, an, jv->valuestring);
+                    goto done;
+                }
+                sb = sa; sb.dim = DIM_OVERWORLD;
+                if (sa.dim != DIM_OVERWORLD) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": a stronghold is an overworld structure and "
+                        "%s is not -- they can never overlap", c->id, an);
+                    goto done;
+                }
+            } else if (!getStructureConfig(c->structType, q->mc, &sa) ||
+                       !getStructureConfig(c->structType2, q->mc, &sb)) {
                 snprintf(err, errlen, "condition \"%s\": a structure in overlap does not exist in %s",
                          c->id, jv->valuestring);
                 goto done;
@@ -622,6 +822,33 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                     goto done;
                 }
                 c->oreExposed = 1;
+            }
+            // Y band. "deepslate emerald ore" is not a different ore -- it is
+            // the SAME ore, wearing whatever stone it replaced, so the block
+            // form is decided entirely by the Y it generated at. Below y=0 on
+            // 1.18+ is deepslate; above it is stone. Expressing it as a band
+            // means every ore gets the distinction for free, and the engine
+            // never has to carry two block ids for one material.
+            c->oreYMin = -ORE_Y_ANY; c->oreYMax = ORE_Y_ANY;
+            cJSON *jdeep = cJSON_GetObjectItem(e, "deepslate");
+            if (jdeep && cJSON_IsTrue(jdeep)) {
+                if (q->mc < MC_1_18) {
+                    snprintf(err, errlen,
+                        "condition \"%s\": deepslate only exists from 1.18 -- "
+                        "before that the whole column is stone", c->id);
+                    goto done;
+                }
+                c->oreYMax = -1;
+            }
+            cJSON *jymin = cJSON_GetObjectItem(e, "y_min");
+            if (jymin && cJSON_IsNumber(jymin)) c->oreYMin = jymin->valueint;
+            cJSON *jymax = cJSON_GetObjectItem(e, "y_max");
+            if (jymax && cJSON_IsNumber(jymax)) c->oreYMax = jymax->valueint;
+            if (c->oreYMin > c->oreYMax) {
+                snprintf(err, errlen,
+                    "condition \"%s\": y_min %d is above y_max %d, so no block "
+                    "can satisfy it", c->id, c->oreYMin, c->oreYMax);
+                goto done;
             }
             // Counting is per-chunk over the whole column, so cost scales with
             // area. Default modest; cap so it cannot wedge the search.
@@ -980,7 +1207,20 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 }
             }
         } else {
-            snprintf(err, errlen, "condition \"%s\": need \"structure\" or \"biome\"", c->id);
+            // "exposed" on its own is a near miss, not nonsense: it is a
+            // buried-treasure modifier, and a planner reaching for an exposed
+            // STRONGHOLD writes it by analogy. Saying "need structure or biome"
+            // to that is technically true and useless -- name the key it wanted.
+            if (cJSON_GetObjectItem(e, "exposed"))
+                snprintf(err, errlen,
+                    "condition \"%s\": \"exposed\" is a modifier, not a condition. "
+                    "For a stronghold breaking the surface write "
+                    "{\"id\":\"%s\",\"stronghold\":\"exposed\",\"within\":3000,"
+                    "\"of\":\"origin\"} -- and it needs a pre-1.18 version. For an "
+                    "exposed buried treasure chest, add \"structure\":"
+                    "\"buried_treasure\" alongside it.", c->id, c->id);
+            else
+                snprintf(err, errlen, "condition \"%s\": need \"structure\" or \"biome\"", c->id);
             goto done;
         }
     }
@@ -1431,10 +1671,43 @@ const char *condDesc(const Query *q, int i, char *buf, size_t n)
                      c->oreMin, tab[c->oreMat].name, exp, c->within, c->ofId);
         return buf;
     }
+    if (c->type == CT_STRONGHOLD) {
+        if (c->hasMaxDepth && c->hasRoofMin)
+            snprintf(buf, n, "a stronghold with its roof <= %d below the surface "
+                             "and at or above y=%d, within %d of %s",
+                     c->maxDepth, c->minRoofY, c->within, c->ofId);
+        else if (c->hasMaxDepth)
+            snprintf(buf, n, "a stronghold with its roof %s (<= %d below the "
+                             "surface), %s, within %d of %s",
+                     c->maxDepth <= 0 ? "BREAKING THE SURFACE" : "near the surface",
+                     c->maxDepth, c->landOnly ? "on dry land" : "sea floor allowed",
+                     c->within, c->ofId);
+        else if (c->hasRoofMin)
+            snprintf(buf, n, "a stronghold whose roof reaches y=%d, within %d of %s",
+                     c->minRoofY, c->within, c->ofId);
+        else
+            snprintf(buf, n, "a stronghold within %d of %s", c->within, c->ofId);
+        return buf;
+    }
     if (c->type == CT_OVERLAP) {
-        snprintf(buf, n, "%s and %s footprints meet%s (within %d of %s, nominal boxes)",
-                 struct2str(c->structType), struct2str(c->structType2),
-                 c->overlapPad > 0 ? "+pad" : "", c->within, c->ofId);
+        // A stronghold pair is tested against real piece boxes, so calling it
+        // "nominal" would understate it -- and the roof threshold has to appear
+        // here or a query that silently filters on Y reads as one that does not.
+        int sh = (c->structType == Stronghold || c->structType2 == Stronghold);
+        if (sh && c->hasRoofMin)
+            snprintf(buf, n, "%s and %s meet%s (within %d of %s, real stronghold "
+                             "pieces, roof at or above y=%d)",
+                     struct2str(c->structType), struct2str(c->structType2),
+                     c->overlapPad > 0 ? "+pad" : "", c->within, c->ofId,
+                     c->minRoofY);
+        else if (sh)
+            snprintf(buf, n, "%s and %s meet%s (within %d of %s, real stronghold pieces)",
+                     struct2str(c->structType), struct2str(c->structType2),
+                     c->overlapPad > 0 ? "+pad" : "", c->within, c->ofId);
+        else
+            snprintf(buf, n, "%s and %s footprints meet%s (within %d of %s, nominal boxes)",
+                     struct2str(c->structType), struct2str(c->structType2),
+                     c->overlapPad > 0 ? "+pad" : "", c->within, c->ofId);
         return buf;
     }
     if (c->type == CT_SLIME) {
@@ -1652,10 +1925,169 @@ static int tightCluster(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
 // first structure must be within `reach` of `centre`; the second is wherever it
 // falls. Geometry-only when g == NULL (pass 1), viability-checked otherwise.
 // Writes the best (largest-intersection) pair found and returns its area.
-static int overlapFind(const Query *q, int k, uint64_t s48, Pos centre, int reach,
+// A stronghold's footprint is its PIECES, and nothing else here works that way.
+//
+// Every other structure in this file is a point plus a nominal half-extent, so
+// "do these two overlap" is a box test on two positions. A stronghold is up to
+// 112 blocks of corridor in every direction from its start, most of it empty
+// ground: testing it as a 224-block box would report an overlap for virtually
+// any structure in the neighbourhood, which is exactly the kind of
+// confident-but-wrong answer this project keeps having to undo.
+//
+// So the pieces are assembled and the partner is tested against each piece box.
+// That also makes minRoofY meaningful: the piece meeting the partner carries
+// its own Y, so "the stronghold breaks into the mansion" becomes a real
+// question about a real block range instead of an inference from x/z proximity.
+#define SH_MAXPIECE 1024
+static _Thread_local Piece g_shPieces[SH_MAXPIECE];
+
+// Ground level over one stronghold piece, for the overlap's depth test.
+//
+// min_roof_y alone cannot answer "is it EXPOSED", and the difference is not
+// academic: a search for roof >= 55 inside a village returned strongholds at
+// depth 7-13, and the one that was actually walked to in game was under four
+// blocks of dirt. A bare Y is meaningless without the ground over it, which is
+// the same reason the standalone stronghold condition compares against terrain
+// rather than a threshold. This mirrors that code exactly.
+//
+// The SurfaceNoise is thread-local and re-seeded only when the world seed
+// changes, so a seed that never reaches an overlapping piece never pays for it.
+static _Thread_local SurfaceNoise g_shSN;
+static _Thread_local uint64_t g_shSNSeed = 0;
+static _Thread_local int g_shSNValid = 0;
+
+static int shSurfaceY(const Query *q, uint64_t worldSeed, Generator *g, int x, int z)
+{
+    int ok = 0;
+    int y = terrainSurfaceY(q->mc, worldSeed, queryGenFlags(q), x, z, &ok);
+    if (ok) return y;
+    // Below 1.18 there is no block-exact terrain -- and below 1.18 is precisely
+    // where exposed strongholds live, so this fallback carries the feature.
+    // mapApproxHeight is a SMOOTHED 1:4 estimate: it cannot see a sharp dip, so
+    // it reads a few blocks high exactly where a stronghold breaks out.
+    if (!g_shSNValid || g_shSNSeed != worldSeed) {
+        initSurfaceNoise(&g_shSN, DIM_OVERWORLD, worldSeed);
+        g_shSNSeed = worldSeed; g_shSNValid = 1;
+    }
+    float fy = 0;
+    mapApproxHeight(&fy, NULL, g, &g_shSN, x >> 2, z >> 2, 1, 1);
+    return (int)fy;
+}
+
+static int strongholdOverlapFind(const Query *q, int k, uint64_t s48,
+                                 uint64_t worldSeed, Pos centre, int reach,
+                                 Generator *g, Pos *aOut, Pos *bOut)
+{
+    const Cond *c = &q->cond[k];
+    int shFirst = (c->structType == Stronghold);
+    int other = shFirst ? c->structType2 : c->structType;
+    StructureConfig so;
+    if (!getStructureConfig(other, q->mc, &so)) return 0;
+    int hb = structHalfExtent(other) + c->overlapPad;
+    int64_t lim = (int64_t)reach * reach;
+    double spanB = so.regionSize * 16.0;
+
+    // PASS 1 has no biome generator and nextStronghold cannot run without one.
+    // Filter on the partner alone: a mansion is far rarer than a stronghold, so
+    // "is there a mansion in range at all" already discards nearly every seed,
+    // and pass 2 does the real work only on what survives. The nominal 1 is
+    // safe because pass 2 recomputes the area from scratch.
+    if (!g) {
+        int r0x = (int)floor((centre.x - reach) / spanB);
+        int r1x = (int)floor((centre.x + reach) / spanB);
+        int r0z = (int)floor((centre.z - reach) / spanB);
+        int r1z = (int)floor((centre.z + reach) / spanB);
+        for (int rx = r0x; rx <= r1x; rx++)
+        for (int rz = r0z; rz <= r1z; rz++) {
+            Pos b;
+            if (!getStructurePos(other, q->mc, s48, rx, rz, &b)) continue;
+            if (dmet(b, centre, c->metric) > lim) continue;
+            if (!placementAllowed(q->mc, s48, other, b)) continue;
+            if (aOut) *aOut = b;
+            if (bOut) *bOut = b;
+            return 1;
+        }
+        return 0;
+    }
+
+    StrongholdIter sh;
+    initFirstStronghold(&sh, q->mc, worldSeed);
+    int best = 0;
+    while (nextStronghold(&sh, g) > 0) {
+        // sh.pos is the CURRENT stronghold; sh.dist is where the NEXT one will
+        // be (cubiomes' own header says so). Breaking on sh.dist before testing
+        // sh.pos therefore threw away a stronghold that was in range, whenever
+        // the next ring happened to clear the cutoff -- so the test is done
+        // first and the break moved after it. The break is only an
+        // optimisation; there are 128 strongholds in a world, so walking a few
+        // extra costs nothing and missing one is a wrong answer.
+        int pastLast = (sh.dist * 16.0 > (double)reach * 2.0 + 2048.0);
+        if (dmet(sh.pos, centre, c->metric) > lim) { if (pastLast) break; continue; }
+
+        int span = 112 + hb;
+        int b0x = (int)floor((sh.pos.x - span) / spanB);
+        int b1x = (int)floor((sh.pos.x + span) / spanB);
+        int b0z = (int)floor((sh.pos.z - span) / spanB);
+        int b1z = (int)floor((sh.pos.z + span) / spanB);
+        int cnt = -1;
+        for (int qx = b0x; qx <= b1x; qx++)
+        for (int qz = b0z; qz <= b1z; qz++) {
+            Pos b;
+            if (!getStructurePos(other, q->mc, s48, qx, qz, &b)) continue;
+            if (abs(b.x - sh.pos.x) > span || abs(b.z - sh.pos.z) > span) continue;
+            if (!placementAllowed(q->mc, s48, other, b)) continue;
+            if (!isViableStructurePos(other, g, b.x, b.z, 0)) continue;
+
+            // Only now is assembling the stronghold worth it, and the pieces are
+            // the same for every partner, so this runs at most once per site.
+            if (cnt < 0)
+                cnt = getStrongholdPiecesOpt(g_shPieces, SH_MAXPIECE, q->mc,
+                                             worldSeed, sh.pos.x >> 4,
+                                             sh.pos.z >> 4, 1);
+            if (cnt <= 0) continue;
+
+            for (int i = 0; i < cnt; i++) {
+                const Piece *pc = &g_shPieces[i];
+                int lox = pc->bb0.x > b.x - hb ? pc->bb0.x : b.x - hb;
+                int hix = pc->bb1.x < b.x + hb ? pc->bb1.x : b.x + hb;
+                int loz = pc->bb0.z > b.z - hb ? pc->bb0.z : b.z - hb;
+                int hiz = pc->bb1.z < b.z + hb ? pc->bb1.z : b.z + hb;
+                int ox = hix - lox + 1, oz = hiz - loz + 1;
+                if (ox <= 0 || oz <= 0) continue;
+                // The roof test applies to the piece that actually meets the
+                // partner -- "the part of the stronghold inside the mansion
+                // reaches this high" -- not to the stronghold's overall top,
+                // which may be a corridor a hundred blocks away.
+                if (c->hasRoofMin && pc->bb1.y < c->minRoofY) continue;
+                // max_depth: how much ground is over THAT piece. Tested on the
+                // same piece as the roof, and last because it is the only part
+                // of this loop that touches terrain.
+                if (c->hasMaxDepth) {
+                    int px = (pc->bb0.x + pc->bb1.x) >> 1;
+                    int pz = (pc->bb0.z + pc->bb1.z) >> 1;
+                    int psurf = shSurfaceY(q, worldSeed, g, px, pz);
+                    if (c->landOnly && psurf < SEA_LEVEL_Y) continue;
+                    if (psurf - pc->bb1.y > c->maxDepth) continue;
+                }
+                int area = ox * oz;
+                if (area <= best) continue;
+                best = area;
+                if (aOut) *aOut = shFirst ? sh.pos : b;
+                if (bOut) *bOut = shFirst ? b : sh.pos;
+            }
+        }
+    }
+    return best;
+}
+
+static int overlapFind(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
+                       Pos centre, int reach,
                        Generator *g, Pos *aOut, Pos *bOut)
 {
     const Cond *c = &q->cond[k];
+    if (c->structType == Stronghold || c->structType2 == Stronghold)
+        return strongholdOverlapFind(q, k, s48, worldSeed, centre, reach, g,
+                                     aOut, bOut);
     StructureConfig sa, sb;
     if (!getStructureConfig(c->structType,  q->mc, &sa)) return 0;
     if (!getStructureConfig(c->structType2, q->mc, &sb)) return 0;
@@ -1853,7 +2285,7 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
         // work happens. Pass 2 re-runs it with viability checks.
         if (c->type == CT_OVERLAP) {
             Pos a, b;
-            int area = overlapFind(q, k, s48, centre, reach, NULL, &a, &b);
+            int area = overlapFind(q, k, s48, 0, centre, reach, NULL, &a, &b);
             if (area <= 0) return 0;
             m->pos[k] = a; m->partner[k] = b; m->overlapArea[k] = area;
             continue;
@@ -2027,6 +2459,91 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             continue;
         }
 
+        if (c->type == CT_STRONGHOLD) {
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
+            // How far below the surface the stronghold's roof sits.
+            //
+            // A bare Y threshold cannot answer this: a roof at y=60 is a metre
+            // under the grass on a plain and seventy metres inside a mountain,
+            // and only one of those is the find people mean. So the roof is
+            // compared against the terrain height AT the stronghold.
+            //
+            // Block-exact terrain exists only from 1.18, and 1.18 is precisely
+            // where strongholds stopped coming near the surface -- so the
+            // versions this question is about are the ones without it.
+            // mapApproxHeight covers them; checked against real server blocks it
+            // landed within one block at both sites (63 vs 63, 65 vs ~66).
+            if (q->mc < MC_1_18 && !haveSN) {
+                initSurfaceNoise(&sn, dim, worldSeed); haveSN = 1;
+            }
+            int64_t lim = (int64_t)c->within * c->within;
+            StrongholdIter sh;
+            initFirstStronghold(&sh, q->mc, worldSeed);
+            int hit = 0;
+            while (nextStronghold(&sh, g) > 0) {
+                // Same off-by-one-ring as the overlap above: sh.dist describes
+                // the NEXT stronghold, sh.pos the current one. A stronghold 81
+                // blocks from spawn was reported as no match at within=112 and
+                // as a match at within=300, purely because the cutoff moved.
+                int pastLast = (sh.dist * 16.0 > (double)c->within * 2.0 + 2048.0);
+                if (dmet(sh.pos, centre, c->metric) > lim) { if (pastLast) break; continue; }
+
+                int cnt = getStrongholdPiecesOpt(g_shPieces, SH_MAXPIECE, q->mc,
+                                                 worldSeed, sh.pos.x >> 4,
+                                                 sh.pos.z >> 4, 1);
+                if (cnt <= 0) continue;
+
+                // Depth is measured PER PIECE, against the ground over that
+                // piece.
+                //
+                // Comparing the stronghold's highest piece against the surface
+                // at its start chunk is apples to oranges: a stronghold sprawls
+                // 112 blocks, so the two can be a hundred blocks and forty
+                // metres of hillside apart. A seed checked this way predicted a
+                // roof of 66 where the blocks near the start topped out at 63 --
+                // the tall piece was simply somewhere else. The question "does
+                // any part of it break the surface" is per piece, and the answer
+                // has to name WHICH part, or the coordinate sends you to a spot
+                // with nothing at it.
+                int bestDepth = 0x7fffffff, bestRoof = 0, bestSurf = 0;
+                Pos bestAt = sh.pos;
+                for (int i = 0; i < cnt; i++) {
+                    const Piece *pc = &g_shPieces[i];
+                    int px = (pc->bb0.x + pc->bb1.x) >> 1;
+                    int pz = (pc->bb0.z + pc->bb1.z) >> 1;
+                    int ok = 0;
+                    int psurf = terrainSurfaceY(q->mc, worldSeed, queryGenFlags(q),
+                                                px, pz, &ok);
+                    if (!ok) {
+                        float fy = 0;
+                        mapApproxHeight(&fy, NULL, g, &sn, px >> 2, pz >> 2, 1, 1);
+                        psurf = (int)fy;
+                    }
+                    if (c->landOnly && psurf < SEA_LEVEL_Y) continue;
+                    int d = psurf - pc->bb1.y;
+                    if (d < bestDepth) {
+                        bestDepth = d; bestRoof = pc->bb1.y;
+                        bestSurf = psurf; bestAt = (Pos){px, pz};
+                    }
+                }
+                if (bestDepth == 0x7fffffff) continue;   // every piece was at sea
+                if (c->hasRoofMin && bestRoof < c->minRoofY) continue;
+                if (c->hasMaxDepth && bestDepth > c->maxDepth) continue;
+                (void)bestSurf;
+
+                fixed->pos[k] = sh.pos;
+                // The shallowest piece -- where you actually go. Stored in the
+                // pair slot, which a stronghold condition never otherwise uses.
+                fixed->partner[k] = bestAt;
+                fixed->shRoof[k] = bestRoof;
+                fixed->shDepth[k] = bestDepth;
+                hit = 1;
+                break;
+            }
+            if (!hit) return 0;
+            continue;
+        }
+
         if (c->type == CT_OVERLAP) {
             Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
             // Re-run the pair search with the biome generator: pass 1 only knew
@@ -2034,7 +2551,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             // actually generates. A pair where one half fails viability is not
             // an overlap at all.
             Pos a, b;
-            int area = overlapFind(q, k, s48, centre, c->within, g, &a, &b);
+            int area = overlapFind(q, k, s48, worldSeed, centre, c->within, g, &a, &b);
             if (area <= 0) return 0;
             fixed->pos[k] = a;
             fixed->partner[k] = b;
@@ -2065,7 +2582,8 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                            (q->rankIdx == k && rankMetric(q) == RANK_VEIN);
             int cnt = oreScan(g, &sn, q->mc, queryGenFlags(q), &tab[c->oreMat],
                               centre.x, centre.z, c->within,
-                              c->oreExposed, wantVein ? &vein : NULL);
+                              c->oreExposed, wantVein ? &vein : NULL,
+                              c->oreYMin, c->oreYMax);
             if (cnt < c->oreMin) return 0;
             if (c->veinMin > 0 && vein < c->veinMin) return 0;
             fixed->pos[k] = centre;

@@ -43,7 +43,7 @@ int main(int argc, char **argv)
     // the same measure the finder's "vein" threshold and leaderboard use.
     int vein = 0;
     int n = oreScan(&g, &sn, mc, large ? LARGE_BIOMES : 0, mat, x, z, radius,
-                    exposed, &vein);
+                    exposed, &vein, -ORE_Y_ANY, ORE_Y_ANY);
     printf("%lld %s x=%d z=%d r=%d dim=%d count=%d vein=%d%s\n",
            (long long)seed, mat->name, x, z, radius, mat->dim, n, vein,
            exposed ? " (exposed only)" : "");

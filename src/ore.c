@@ -136,12 +136,12 @@ static int keepExposed(Pos3 *a, int n, int mc, uint32_t gflags, uint64_t worldSe
 int oreCountMaterial(const Generator *g, const SurfaceNoise *sn, int mc,
                      const OreMaterial *mat, int cx, int cz, int radius)
 {
-    return oreScan(g, sn, mc, 0, mat, cx, cz, radius, 0, NULL);
+    return oreScan(g, sn, mc, 0, mat, cx, cz, radius, 0, NULL, -ORE_Y_ANY, ORE_Y_ANY);
 }
 
 int oreScan(const Generator *g, const SurfaceNoise *sn, int mc, uint32_t gflags,
             const OreMaterial *mat, int cx, int cz, int radius,
-            int exposed, int *veinMax)
+            int exposed, int *veinMax, int yMin, int yMax)
 {
     int dim = mat->dim;
     int64_t lim = (int64_t)radius * radius;
@@ -166,6 +166,9 @@ int oreScan(const Generator *g, const SurfaceNoise *sn, int mc, uint32_t gflags,
                 Pos3 p = list.pos3s[i];
                 int64_t dx = p.x - cx, dz = p.z - cz;
                 if (dx*dx + dz*dz > lim) continue;
+                // Y band, applied before de-duplication so the vein and
+                // exposure measures downstream see only the banded blocks.
+                if (p.y < yMin || p.y > yMax) continue;
                 if (nhits >= cap) {
                     cap = cap ? cap * 2 : 64;
                     hits = realloc(hits, cap * sizeof(Pos3));
