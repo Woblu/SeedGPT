@@ -3,21 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Seed Finder</title>
+<title>SeedGPT — Minecraft seed finder</title>
 <style>
   /* ---- Minecraft GUI aesthetic -------------------------------------------
-     Beveled stone panels, item-slot cards, pixel-rendered icons. Two themes:
-     "cave" (dark stone, default) and "day" (Overworld). Committed to one
-     cohesive visual world rather than a neutral document look. ---------- */
+     Beveled stone panels, item-slot cards, pixel-rendered icons. One committed
+     visual world -- a dark cave -- rather than a neutral document look, and
+     deliberately no light variant. ---------------------------------------- */
   :root {
-    /* cave (dark) */
-    --bg0:      #17181c;
-    --bg1:      #202127;
+    --bg0:      #15161a;
+    --bg1:      #1d1e24;
     --stone:    #3b3d44;
     --stone-lt: #55575f;
     --stone-dk: #2a2b31;
-    --slot:     #1b1c20;
-    --slot-edge:#101014;
+    --slot:     #191a1e;
+    --slot-edge:#0e0e12;
     --ink:      #ECECEC;
     --ink-soft: #B9BCC4;
     --ink-faint:#7E828C;
@@ -31,29 +30,13 @@
     --redstone: #D64545;
     --emerald:  #17C964;
     --sky:      #7FB4E6;
+    --scan:     rgba(0,0,0,.05);
+    --tint:     rgba(15,16,20,.84);
+    --backdrop-url: none;   /* replaced by loadAssets() when assets/backdrop.png exists */
+    --lift-sm:  0 2px 8px rgba(0,0,0,.30);
+    --lift:     0 10px 34px rgba(0,0,0,.38);
     --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  }
-  :root[data-theme="day"] {
-    --bg0:      #A8C7E8;
-    --bg1:      #cfe0f2;
-    --stone:    #C6B48C;   /* sandstone */
-    --stone-lt: #DECBA0;
-    --stone-dk: #A8946A;
-    --slot:     #efe6cf;
-    --slot-edge:#b8a677;
-    --ink:      #232018;
-    --ink-soft: #4A4636;
-    --ink-faint:#7C755E;
-    --edge-lt:  rgba(255,255,255,.5);
-    --edge-dk:  rgba(0,0,0,.28);
-    --grass:    #4E8F2E;
-    --grass-dk: #3B6E22;
-    --diamond:  #1E88A8;
-    --gold:     #B8860B;
-    --redstone: #B23A3A;
-    --emerald:  #128a45;
-    --sky:      #3A6EA5;
   }
 
   * { box-sizing: border-box; }
@@ -65,12 +48,28 @@
     font-size: 14px;
     line-height: 1.5;
     background:
-      repeating-linear-gradient(0deg,  rgba(0,0,0,.05) 0 2px, transparent 2px 4px),
-      repeating-linear-gradient(90deg, rgba(0,0,0,.05) 0 2px, transparent 2px 4px),
+      repeating-linear-gradient(0deg,  var(--scan) 0 2px, transparent 2px 4px),
+      repeating-linear-gradient(90deg, var(--scan) 0 2px, transparent 2px 4px),
       var(--bg0);
     -webkit-font-smoothing: antialiased;
   }
+  body.has-backdrop {
+    background:
+      linear-gradient(var(--tint), var(--tint)),
+      var(--backdrop-url) repeat;
+    background-size: auto, 512px;
+  }
   b, strong { font-weight: 700; }
+  .hidden { display: none !important; }
+  a { color: var(--diamond); }
+
+  ::-webkit-scrollbar { width: 11px; height: 11px; }
+  ::-webkit-scrollbar-track { background: var(--slot); }
+  ::-webkit-scrollbar-thumb {
+    background: var(--stone); border: 2px solid var(--slot);
+    box-shadow: inset 1px 1px 0 var(--edge-lt), inset -1px -1px 0 var(--edge-dk);
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--stone-lt); }
 
   /* the pressable stone button -- the signature MC element */
   .mcbtn, button {
@@ -81,9 +80,8 @@
     box-shadow: inset 2px 2px 0 var(--edge-lt), inset -2px -2px 0 var(--edge-dk);
     padding: 8px 12px; cursor: pointer;
     text-shadow: 1px 1px 0 rgba(0,0,0,.35);
-    transition: filter .08s;
+    transition: filter .08s, border-color .08s;
   }
-  :root[data-theme="day"] button { text-shadow: none; }
   button:hover:not(:disabled) { filter: brightness(1.12); border-color: var(--grass-dk); }
   button:active:not(:disabled) {
     box-shadow: inset -2px -2px 0 var(--edge-lt), inset 2px 2px 0 var(--edge-dk);
@@ -108,34 +106,8 @@
   textarea { resize: vertical; min-height: 56px; line-height: 1.45; }
   select { cursor: pointer; }
   :focus-visible { outline: 3px solid var(--grass); outline-offset: 1px; }
-
-  /* ---- header ---- */
-  header {
-    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-    padding: 12px 18px;
-    background: linear-gradient(var(--stone-lt), var(--stone));
-    border-bottom: 3px solid var(--slot-edge);
-    box-shadow: inset 0 2px 0 var(--edge-lt);
-  }
-  header .logo { font-size: 22px; line-height: 1; filter: drop-shadow(1px 2px 0 rgba(0,0,0,.4)); }
-  header h1 {
-    font-family: var(--mono); font-size: 15px; font-weight: 700; margin: 0;
-    letter-spacing: .06em; text-transform: uppercase;
-    text-shadow: 2px 2px 0 rgba(0,0,0,.35);
-  }
-  :root[data-theme="day"] header h1 { text-shadow: 1px 1px 0 rgba(255,255,255,.4); }
-  header .sub { font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); }
-  header .spacer { flex: 1; }
-
-  /* ---- layout ---- */
-  .wrap { display: grid; grid-template-columns: 1fr; gap: 0; }
-  @media (min-width: 980px) { .wrap { grid-template-columns: 420px minmax(0,1fr); } }
-  .col { padding: 18px; min-width: 0; }
-  .col.left {
-    background: var(--bg1);
-    border-right: 3px solid var(--slot-edge);
-  }
-  @media (max-width: 979px) { .col.left { border-right: none; border-bottom: 3px solid var(--slot-edge); } }
+  code { font-family: var(--mono); font-size: .92em; background: var(--slot);
+         border: 1px solid var(--slot-edge); padding: 0 4px; }
 
   h2 {
     font-family: var(--mono); font-size: 11px; font-weight: 700;
@@ -143,11 +115,12 @@
     color: var(--grass); margin: 0 0 9px;
     display: flex; align-items: center; gap: 7px;
   }
-  h2::before { content: ""; width: 8px; height: 8px; background: var(--grass);
+  h2::before { content: ""; width: 8px; height: 8px; flex: none; background: var(--grass);
                box-shadow: 2px 2px 0 var(--grass-dk); }
-  section + section { margin-top: 22px; }
+  section + section { margin-top: 26px; }
   label { display: block; font-size: 11px; color: var(--ink-soft); margin-bottom: 4px; }
-  .hint { font-size: 11px; color: var(--ink-faint); margin-top: 6px; }
+  .hint { font-size: 11px; color: var(--ink-faint); margin-top: 6px; line-height: 1.55; }
+  .col { padding: 18px; min-width: 0; }
 
   /* ---- condition cards = item slots ---- */
   .cond {
@@ -200,11 +173,12 @@
     font-family: var(--mono); font-size: 8.5px; letter-spacing: .06em;
     text-transform: uppercase; color: var(--diamond);
     border: 1px solid var(--diamond); padding: 1px 5px; margin-left: 6px;
-    vertical-align: middle;
+    vertical-align: middle; white-space: nowrap;
   }
   .saved { display: flex; gap: 6px; margin-top: 6px; }
-  .saved button:first-child { text-align: left; }
-  .exportbar { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px; }
+  .saved button:first-child { flex: 1; min-width: 0; text-align: left;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .exportbar { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px; flex-wrap: wrap; }
   .exportbar .exl {
     font-family: var(--mono); font-size: 9px; letter-spacing: .09em;
     text-transform: uppercase; color: var(--ink-faint);
@@ -215,7 +189,7 @@
     background: var(--stone);
     border: 2px solid;
     border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
-    box-shadow: inset 1px 1px 0 var(--edge-lt);
+    box-shadow: inset 1px 1px 0 var(--edge-lt), var(--lift-sm);
     padding: 14px 16px; margin-bottom: 14px;
   }
   .card h3 {
@@ -263,7 +237,7 @@
     border: 2px solid;
     border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
   }
-  .seed .n { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+  .seed .n { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; flex-wrap: wrap; }
   .seed .num {
     font-family: var(--mono); font-size: 14px; font-weight: 700;
     cursor: pointer; color: var(--diamond); border-bottom: 1px dashed var(--stone-lt);
@@ -311,38 +285,79 @@
   .legend { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 9px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
   .legend span { display: flex; align-items: center; gap: 5px; }
   .legend i { width: 10px; height: 10px; border: 1px solid rgba(0,0,0,.5); }
-  .mapctl { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  .mapctl { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; flex-wrap: wrap; }
   .mapctl label { margin: 0; font-size: 11px; }
   .mapctl select { width: auto; padding: 4px 7px; font-size: 12px; }
 
+  /* ---- toasts ------------------------------------------------------------
+     They used to be prepended into the results column, which on the landing
+     screen is empty and far below the fold -- so the message meant to explain
+     a refusal was never seen. They float over the page now. ---------------- */
+  .toasts { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center;
+    pointer-events: none; width: min(520px, 92vw); }
+  .toasts .note { margin: 0; width: 100%; background: var(--stone);
+    border: 2px solid var(--slot-edge); border-left: 4px solid var(--gold);
+    box-shadow: var(--lift); animation: toastin .18s ease; }
+  .toasts .note.bad  { border-left-color: var(--redstone); }
+  .toasts .note.good { border-left-color: var(--grass); }
+  @keyframes toastin { from { opacity: 0; transform: translateY(8px); } }
+  @media (prefers-reduced-motion: reduce) { .toasts .note { animation: none; } }
+
   /* ---- app shell: history sidebar + main --------------------------------- */
-  body { margin: 0; }
   .app { display: flex; min-height: 100vh; }
-  /* Off-canvas: collapsed by default, slides in from the left via ☰. */
+  /* Off-canvas: collapsed by default, slides in from the left via the menu. */
   .sidebar { flex: none; width: 264px; background: var(--stone-dk);
     border-right: 2px solid var(--slot-edge); display: flex; flex-direction: column;
     padding: 14px 12px; position: fixed; left: 0; top: 0; height: 100vh; z-index: 65;
     transform: translateX(-100%); transition: transform .2s ease;
     box-shadow: 6px 0 26px rgba(0,0,0,.4); }
   .app.sb-open .sidebar { transform: none; }
-  .side-brand { font-size: 18px; font-weight: 800; display: flex; align-items: center;
+  .side-brand { font-size: 17px; font-weight: 800; display: flex; align-items: center;
     gap: 8px; padding: 4px 6px 12px; }
   .side-brand .logo { font-size: 20px; }
   .newbtn { width: 100%; justify-content: center; margin-bottom: 14px; }
   .side-label { font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
-    text-transform: uppercase; color: var(--ink-faint); padding: 0 6px 6px; }
-  .history { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
-  .hist-item { display: block; width: 100%; text-align: left; font-size: 12.5px;
+    text-transform: uppercase; color: var(--ink-faint); padding: 0 6px 6px;
+    display: flex; align-items: center; gap: 6px; }
+  .side-label .spacer { flex: 1; }
+  .side-label button { font-size: 10px; padding: 2px 6px; background: none;
+    border: 0; box-shadow: none; text-shadow: none; color: var(--ink-faint);
+    font-family: var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+  .side-label button:hover:not(:disabled) { color: var(--redstone); filter: none; }
+  .history { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+  .hist-row { display: flex; align-items: stretch; }
+  .hist-item { display: block; flex: 1; min-width: 0; text-align: left; font-size: 12.5px;
     padding: 8px 10px; background: transparent; border: 1px solid transparent;
-    box-shadow: none; text-shadow: none; color: var(--ink-soft);
+    box-shadow: none; text-shadow: none; color: var(--ink-soft); font-weight: 500;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .hist-item:hover:not(:disabled) { background: var(--slot); border-color: var(--slot-edge); }
+  .hist-row:hover .hist-item { background: var(--slot); border-color: var(--slot-edge); }
+  .hist-del { flex: none; width: 26px; padding: 0; background: transparent;
+    border: 1px solid transparent; box-shadow: none; text-shadow: none;
+    color: var(--ink-faint); font-size: 12px; opacity: 0; }
+  .hist-row:hover .hist-del { opacity: 1; }
+  .hist-del:hover:not(:disabled) { color: var(--redstone); filter: none; border-color: transparent; }
   .hist-empty { font-size: 12px; color: var(--ink-faint); padding: 6px; }
   .side-foot { padding: 10px 6px 2px; border-top: 1px solid var(--slot-edge);
     font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
   .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .topbar { display: flex; align-items: center; padding: 10px 14px; min-height: 18px; }
-  .topbar .menu { display: inline-flex; }
+
+  /* ---- top bar ----------------------------------------------------------
+     Was one lone menu glyph on an empty strip, with everything else in the app
+     hidden behind a gear that reads as "preferences". It now carries the
+     identity and three named doors: build, tools, settings. --------------- */
+  .topbar { position: sticky; top: 0; z-index: 40;
+    display: flex; align-items: center; gap: 8px; padding: 9px 14px;
+    background: linear-gradient(var(--stone-lt), var(--stone));
+    border-bottom: 3px solid var(--slot-edge);
+    box-shadow: inset 0 2px 0 var(--edge-lt), 0 2px 10px rgba(0,0,0,.22); }
+  .topbar .brand { display: flex; align-items: center; gap: 8px; font-weight: 800;
+    font-size: 15px; letter-spacing: .01em; margin-left: 2px; }
+  .topbar .brand img { width: 20px; height: 20px; object-fit: contain; image-rendering: pixelated; }
+  .topbar .spacer { flex: 1; }
+  .topbar button { padding: 6px 10px; font-size: 12px; }
+  .topbar .icon-only { width: 32px; padding: 6px 0; text-align: center; }
+  @media (max-width: 760px) { .topbar .lbl { display: none; } .topbar .brand { font-size: 14px; } }
 
   /* ---- chat-style hero + prompt ---------------------------------------- */
   /* Landing: prompt sits low on the page. After a search the hero collapses
@@ -350,37 +365,60 @@
   .hero { flex: 1 0 auto; min-height: 0; display: flex; flex-direction: column;
     justify-content: center; align-items: center; padding: 0 20px 8vh;
     transition: padding .25s ease; }
-  .main.searched .hero { flex: 0 0 auto; justify-content: flex-start; padding: 3vh 20px 2vh; }
-  .main.searched .hero-sub, .main.searched .hero-logo { display: none; }
+  .main.searched .hero { flex: 0 0 auto; justify-content: flex-start; padding: 18px 20px 12px; }
+  .main.searched .hero-sub, .main.searched .hero-logo,
+  .main.searched .chips, .main.searched .setup { display: none; }
   .hero-inner { width: 100%; max-width: 680px; text-align: center; }
   .hero-logo { margin: 0 auto 14px; line-height: 1; font-size: 52px; }
   .hero-logo img { width: 92px; height: 92px; object-fit: contain;
     image-rendering: pixelated; display: block; margin: 0 auto;
     filter: drop-shadow(0 3px 7px rgba(0,0,0,.45)); }
-  .hero-title { font-size: 30px; font-weight: 800; letter-spacing: .01em; }
-  .hero-sub { margin: 10px auto 22px; max-width: 520px; color: var(--ink-soft); font-size: 14px; }
-  .prompt { display: flex; align-items: center; gap: 7px;
+  .hero-title { font-size: 32px; font-weight: 800; letter-spacing: .01em; }
+  .hero-sub { margin: 10px auto 22px; max-width: 540px; color: var(--ink-soft); font-size: 14.5px; }
+  .prompt { display: flex; align-items: flex-end; gap: 7px;
     background: var(--slot); border: 2px solid var(--slot-edge); border-radius: 22px;
-    padding: 6px 8px; box-shadow: 0 8px 30px rgba(0,0,0,.28); text-align: left; }
-  .prompt:focus-within { border-color: var(--grass-dk); }
+    padding: 6px 8px; box-shadow: var(--lift); text-align: left;
+    transition: border-color .12s, box-shadow .12s; }
+  .prompt:focus-within { border-color: var(--grass); box-shadow: var(--lift), 0 0 0 3px rgba(109,190,69,.18); }
   .prompt textarea { flex: 1; border: 0; background: transparent; resize: none;
     color: var(--ink); font-family: inherit; font-size: 16px; line-height: 1.5;
-    padding: 4px 6px; min-height: 0; height: auto; max-height: 180px;
+    padding: 7px 6px; min-height: 0; height: auto; max-height: 180px;
     overflow-y: hidden; outline: none; display: block; }
+  .prompt textarea::placeholder { color: var(--ink-faint); }
   .iconbtn { flex: none; width: 34px; height: 34px; border-radius: 50%; padding: 0;
     display: flex; align-items: center; justify-content: center; font-size: 16px;
-    box-shadow: none; border-width: 2px; align-self: center; }
+    box-shadow: none; border-width: 2px; }
   .iconbtn.go { background: linear-gradient(#7ed957, var(--grass) 55%, var(--grass-dk)); color: #10240a; }
   .iconbtn:disabled { opacity: .5; }
   .ai-note { margin-top: 14px; font-size: 12.5px; color: var(--ink-soft); min-height: 1em; }
   .ai-note.err { color: #ff7a7a; }
 
+  /* Example prompts. The box used to be blank with a blank placeholder, so the
+     one thing a first-time visitor needed -- what can I even ask? -- was the
+     one thing the screen never said. */
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; margin-top: 18px; }
+  .chips .chl { width: 100%; font-family: var(--mono); font-size: 9.5px;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 2px; }
+  .chip { font-size: 12px; font-weight: 500; padding: 6px 11px; border-radius: 999px;
+    color: var(--ink-soft); background: var(--stone-dk);
+    border: 1px solid var(--stone-lt); box-shadow: none; text-shadow: none; }
+  .chip:hover:not(:disabled) { color: var(--ink); border-color: var(--grass); filter: none; }
+  .chip:active:not(:disabled) { box-shadow: none; }
+
+  /* First run: the prompt needs an AI key, and the old build only said so after
+     you had typed a question and pressed enter. */
+  .setup { margin-top: 18px; display: flex; align-items: center; gap: 10px;
+    text-align: left; font-size: 12.5px; color: var(--ink-soft);
+    background: var(--stone-dk); border: 2px solid var(--slot-edge);
+    border-left: 4px solid var(--gold); padding: 10px 12px; }
+  .setup .t { flex: 1; min-width: 0; }
+  .setup b { color: var(--ink); }
+
   /* ---- live seed scroll ------------------------------------------------- */
   .scroll { max-width: 860px; margin: 0 auto 20px; padding: 0 20px; width: 100%; }
-  .scroll.hidden { display: none; }
   .scroll-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
     font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
-  .scroll-head .dot { width: 9px; height: 9px; border-radius: 50%;
+  .scroll-head .dot { width: 9px; height: 9px; border-radius: 50%; flex: none;
     background: var(--grass); animation: sfpulse 1s infinite; }
   @keyframes sfpulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
   /* Stop sits at the far end of the scan header: always in view while a search
@@ -396,19 +434,63 @@
   .scroll-track .s { flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .scroll-track .s.hit { color: var(--grass); font-weight: 700; }
 
-  .results-wrap { max-width: 860px; margin: 0 auto; padding: 0 20px 70px; }
-  .results-wrap .col { display: block; }
+  .results-wrap { max-width: 860px; margin: 0 auto; padding: 0 20px 70px; width: 100%; }
+  .results-wrap .col { display: block; padding: 0; }
 
-  /* ---- settings / manual-builder drawer -------------------------------- */
-  .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(470px, 94vw);
-    overflow-y: auto; background: var(--stone); border-left: 3px solid var(--slot-edge);
-    box-shadow: -10px 0 40px rgba(0,0,0,.45); z-index: 60; padding: 0 16px 48px;
+  /* ---- drawer: build / tools / settings ---------------------------------
+     One 14-section scroll used to hold the API key, the query builder and ten
+     separate engines in a single undifferentiated column. Tabs split it into
+     three things a person can hold in their head at once. ----------------- */
+  .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(500px, 96vw);
+    display: flex; flex-direction: column;
+    background: var(--stone); border-left: 3px solid var(--slot-edge);
+    box-shadow: -10px 0 40px rgba(0,0,0,.45); z-index: 60;
     transition: transform .2s ease; }
-  .drawer.hidden { transform: translateX(103%); }
-  .drawer-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center;
-    gap: 8px; padding: 14px 2px; background: var(--stone); border-bottom: 1px solid var(--slot-edge); }
-  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 55; }
-  .scrim.hidden { display: none; }
+  /* display stays flex: the drawer leaves by sliding, not by vanishing. */
+  .drawer.hidden { display: flex !important; transform: translateX(103%); }
+  .drawer-head { flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 13px 16px; background: linear-gradient(var(--stone-lt), var(--stone));
+    border-bottom: 2px solid var(--slot-edge); box-shadow: inset 0 2px 0 var(--edge-lt); }
+  .drawer-head b { font-size: 14px; }
+  .drawer-head .spacer { flex: 1; }
+  .tabs { flex: none; display: flex; padding: 0 10px;
+    background: var(--stone-dk); border-bottom: 2px solid var(--slot-edge); }
+  .tab { flex: 1; background: none; border: 0; box-shadow: none; text-shadow: none;
+    color: var(--ink-faint); font-size: 12.5px; font-weight: 700; padding: 10px 6px;
+    border-bottom: 3px solid transparent; }
+  .tab:hover:not(:disabled) { color: var(--ink); filter: none; border-color: var(--stone-lt); }
+  .tab.on { color: var(--grass); border-bottom-color: var(--grass); }
+  .tab .sub { display: block; font-family: var(--mono); font-size: 9px;
+    letter-spacing: .05em; text-transform: uppercase; opacity: .75;
+    font-weight: 400; margin-top: 3px; }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 16px 16px 60px; }
+  .tabpane { display: none; }
+  .tabpane.on { display: block; }
+  .pane-intro { font-size: 12.5px; color: var(--ink-soft); margin: 0 0 18px;
+    padding-left: 10px; border-left: 3px solid var(--stone-lt); line-height: 1.55; }
+
+  /* A specialist engine, folded shut until asked for. Ten of these open at once
+     was the drawer's real problem -- every one of them carries a paragraph. */
+  .tool { margin: 0 0 9px; border: 2px solid;
+    border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
+    background: var(--stone-dk); }
+  .tool > summary { list-style: none; cursor: pointer; padding: 11px 12px;
+    font-family: var(--sans); font-size: 13.5px; font-weight: 700; color: var(--ink);
+    display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; margin: 0; }
+  .tool > summary::-webkit-details-marker { display: none; }
+  .tool > summary::before { content: "\25B8"; flex: none; color: var(--ink-faint);
+    font-size: 11px; }
+  .tool[open] > summary::before { content: "\25BE"; color: var(--grass); }
+  .tool > summary:hover { background: var(--stone); color: var(--ink); }
+  .tool[open] > summary { border-bottom: 1px solid var(--slot-edge); }
+  .tool .what { flex-basis: 100%; font-size: 11.5px; font-weight: 400;
+    color: var(--ink-faint); padding-left: 18px; line-height: 1.45; }
+  .tool .body { padding: 12px; }
+  .tool .body > .hint:first-child { margin-top: 0; }
+  .tool .why { margin-top: 0; margin-bottom: 10px; }
+  .tool .why > summary { font-size: 10.5px; }
+
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 55; }
 </style>
 </head>
 <body>
@@ -417,13 +499,21 @@
   <aside class="sidebar" id="sidebar">
     <div class="side-brand"><span class="logo">🌱</span> SeedGPT</div>
     <button class="newbtn" id="newSearch">＋ New search</button>
-    <div class="side-label">History</div>
+    <div class="side-label">History <span class="spacer"></span>
+      <button id="histClear" type="button" title="forget every search">clear</button></div>
     <div class="history" id="history"></div>
     <div class="side-foot"><span id="engine">cubiomes · loading…</span></div>
   </aside>
 
   <main class="main" id="main">
-    <div class="topbar"><button class="tiny menu" id="menuBtn" title="menu">☰</button></div>
+    <div class="topbar">
+      <button class="icon-only" id="menuBtn" title="History">☰</button>
+      <div class="brand" id="topBrand"><span class="logo">🌱</span> SeedGPT</div>
+      <span class="spacer"></span>
+      <button id="buildBtn" title="Build a search by hand, without the AI">🧱 <span class="lbl">Build</span></button>
+      <button id="toolsBtn" title="Specialist engines: real worldgen, Bedrock, per-seed">🧰 <span class="lbl">Tools</span></button>
+      <button class="icon-only" id="gear" title="Settings">⚙</button>
+    </div>
 
     <div class="hero" id="hero">
       <div class="hero-inner">
@@ -431,11 +521,23 @@
         <div class="hero-title">SeedGPT</div>
         <div class="hero-sub">Describe the Minecraft world you want. It scans millions of seeds and shows the matches.</div>
         <form class="prompt" id="promptForm">
-          <button type="button" id="gear" class="iconbtn" title="Settings &amp; manual builder">⚙</button>
-          <textarea id="nl" rows="1" placeholder=""></textarea>
+          <textarea id="nl" rows="1"
+            placeholder="e.g. a woodland mansion within 300 blocks of spawn, with a village next to it"></textarea>
           <button type="submit" id="go" class="iconbtn go" title="Search">➜</button>
         </form>
         <div id="aiNote" class="ai-note"></div>
+
+        <div class="chips" id="chips">
+          <div class="chl">Try one</div>
+        </div>
+
+        <div class="setup hidden" id="setup">
+          <div class="t"><b>The chat box needs an AI key</b> — it is what turns a
+            sentence into a query. Everything else, including the whole search
+            engine, runs without one.</div>
+          <button class="tiny" id="setupKey">Add a key</button>
+          <button class="tiny" id="setupBuild">Build by hand</button>
+        </div>
       </div>
     </div>
 
@@ -449,41 +551,27 @@
   </main>
 </div>
 
+<div class="toasts" id="toasts"></div>
 <div class="scrim hidden" id="scrim"></div>
+
 <aside class="drawer hidden" id="drawer">
   <div class="drawer-head">
-    <b>Settings &amp; manual builder</b>
+    <b id="drawerTitle">Build a search</b>
     <span class="spacer"></span>
     <button class="tiny" id="drawerClose">✕ close</button>
   </div>
+  <div class="tabs">
+    <button class="tab on" data-pane="build" id="tabBuild">Build<span class="sub">query by hand</span></button>
+    <button class="tab" data-pane="tools" id="tabTools">Tools<span class="sub">special engines</span></button>
+    <button class="tab" data-pane="settings" id="tabSettings">Settings<span class="sub">key · version</span></button>
+  </div>
+
   <div class="drawer-body">
 
-    <section>
-      <h2>Gemini API key</h2>
-      <input type="password" id="geminiKey" placeholder="paste your key (AIza…)" autocomplete="off">
-      <div class="btnrow" style="margin-top:8px">
-        <button id="keySave">Save key</button>
-        <button class="tiny" id="keyClear">clear</button>
-        <span id="keyState" class="hint" style="align-self:center;margin:0"></span>
-      </div>
-      <div class="hint">Stored only in this browser. Get a free key at
-        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> —
-        sign in, “Create API key”, copy it here. (Or set <code>GEMINI_API_KEY</code> before starting the server.)</div>
-    </section>
-
-    <section>
-      <h2>Version</h2>
-      <select id="version">
-        <option>26.2</option><option>26.1</option>
-        <option>1.21</option><option>1.20</option><option>1.19</option>
-        <option>1.18</option><option>1.17</option><option>1.16</option>
-        <option>1.15</option><option>1.14</option><option>1.13</option><option>1.12</option>
-      </select>
-      <div class="hint">A finder generates for the version you pick — it can't infer one. Defaults to the latest (26.2).</div>
-      <label class="chk"><input type="checkbox" id="largeBiomes"> large biomes world</label>
-      <div class="hint">The Large Biomes world preset — same generator at a bigger biome scale.
-        It changes every biome answer, so maps, describes and results all switch with it.</div>
-    </section>
+  <!-- ================= BUILD ================= -->
+  <div class="tabpane on" id="pane-build">
+    <p class="pane-intro">Assemble a query yourself — no AI key needed. This is
+      also where a search the chat box wrote lands, so you can see it and adjust it.</p>
 
     <section>
       <h2>Conditions</h2>
@@ -499,11 +587,12 @@
         <button id="addIsland">+ island spawn</button>
         <button id="addHeight">+ terrain height</button>
         <button id="addOverlap">+ structure overlap</button>
+        <button id="addStronghold">+ exposed stronghold</button>
       </div>
     </section>
 
     <section>
-      <h2>Search</h2>
+      <h2>Run it</h2>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
         <div><label for="range">seeds to scan</label>
           <input type="number" id="range" value="3000000" min="1" step="100000"></div>
@@ -521,10 +610,28 @@
       </div>
       <div id="rankBox" style="margin-top:9px"></div>
       <div class="btnrow">
+        <button class="primary" id="searchBtn">Search</button>
         <button id="planBtn">Plan</button>
         <button id="explainBtn">Estimate</button>
-        <button class="primary" id="searchBtn">Search</button>
       </div>
+      <div class="hint"><b>Plan</b> shows the order the engine will test your
+        conditions in; <b>Estimate</b> says how long it should take and how many
+        seeds are likely to survive — both without scanning anything.</div>
+    </section>
+
+    <section>
+      <h2>World version</h2>
+      <select id="version">
+        <option>26.2</option><option>26.1</option>
+        <option>1.21</option><option>1.20</option><option>1.19</option>
+        <option>1.18</option><option>1.17</option><option>1.16</option>
+        <option>1.15</option><option>1.14</option><option>1.13</option><option>1.12</option>
+      </select>
+      <div class="hint">A finder generates for the version you pick — it can't infer one. Defaults to the latest (26.2).</div>
+      <label class="chk" style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="largeBiomes" style="width:auto;margin:0;accent-color:var(--grass)"> large biomes world</label>
+      <div class="hint">The Large Biomes world preset — same generator at a bigger biome scale.
+        It changes every biome answer, so maps, describes and results all switch with it.</div>
     </section>
 
     <section>
@@ -534,281 +641,354 @@
         <button id="saveBtn">save</button>
       </div>
       <div id="savedList"></div>
-      <div class="hint">Saved in this browser. <b>Share</b> (top right) copies a link that rebuilds the query anywhere.</div>
+      <div class="hint">Saved in this browser. <b>Share</b> on a result copies a
+        link that rebuilds the query anywhere.</div>
+    </section>
+  </div>
+
+  <!-- ================= TOOLS ================= -->
+  <div class="tabpane" id="pane-tools">
+    <p class="pane-intro">The main search runs on <b>cubiomes</b>, which is fast
+      because it never builds the world. These questions need something it cannot
+      see — real decoration, real structure pieces, a real server — so each has
+      its own engine. Open one to use it. The chat box will also route to these
+      on its own when a question needs them.</p>
+
+    <details class="tool" id="tool-village">
+      <summary>Village buildings <span class="tag-exp">real worldgen</span>
+        <span class="what">Seeds whose village holds N smiths — by running Minecraft's own generator (MC 1.16.5). Slow.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why this needs its own engine</summary>
+          <div class="hint">A village is a <b>jigsaw</b> structure: which buildings it
+            gets is decided while the world generates, so nothing short of the real
+            generator can see inside one. Counts tool/weapon/armorer as "any smith".</div>
+        </details>
+        <div style="display:grid;grid-template-columns:1fr 76px;gap:9px">
+          <div><label for="vsBuilding">building</label>
+            <select id="vsBuilding">
+              <option value="smith">any smith (tool/weapon/armorer)</option>
+              <option value="toolsmith">toolsmith</option>
+              <option value="weaponsmith">weaponsmith</option>
+              <option value="armorer">armorer</option>
+              <option value="library">library</option>
+              <option value="cartographer">cartographer</option>
+              <option value="mason">mason</option>
+              <option value="fletcher">fletcher</option>
+              <option value="butcher">butcher</option>
+              <option value="shepherd">shepherd</option>
+              <option value="fisher">fisher</option>
+              <option value="tannery">tannery</option>
+              <option value="temple">temple</option>
+              <option value="farm">farm</option>
+              <option value="animal_pen">animal pen</option>
+              <option value="stable">stable</option>
+            </select></div>
+          <div><label for="vsMin">at least</label>
+            <input type="number" id="vsMin" value="5" min="1" max="12"></div>
+        </div>
+        <div style="margin-top:9px"><label for="vsSeeds">seeds to scan</label>
+          <input type="number" id="vsSeeds" value="200" min="1" max="3000" step="50"></div>
+        <div class="btnrow">
+          <button class="primary" id="vsBtn">Search villages</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-casing">
+      <summary>Treasure casing <span class="tag-exp">real worldgen</span>
+        <span class="what">A buried treasure walled in by magma, copper ore, gravel… Roughly 1 in 6 600 chests for the rare ones.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why this needs its own engine</summary>
+          <div class="hint">A buried treasure writes the block it <b>landed on</b> into every
+            air or water face around it — so it arrives already walled in. The main search
+            cannot ask this: it runs on cubiomes, which has no surface rules and no
+            decoration, so sand columns, ore and magma are <b>absent from that engine</b>
+            rather than slow. Measured over 6&nbsp;646 chests: sand&nbsp;78%, gravel&nbsp;18%,
+            dirt&nbsp;2.7%, stone&nbsp;0.9% — and <b>copper ore and magma ~0.015% each</b>,
+            about 6&nbsp;600 chests scanned per expected hit.</div>
+        </details>
+        <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
+          <div><label for="tcCasing">encased in</label>
+            <select id="tcCasing">
+              <option value="magma_block">magma block (~0.015%)</option>
+              <option value="copper_ore">copper ore (~0.015%)</option>
+              <option value="iron_ore">iron ore (rarer still)</option>
+              <option value="coal_ore">coal ore</option>
+              <option value="mud">mud</option>
+              <option value="stone">stone (deep / cave floor, ~0.9%)</option>
+              <option value="gravel">gravel (~18%)</option>
+              <option value="dirt">dirt (~2.7%)</option>
+            </select></div>
+          <div><label for="tcLimit">want</label>
+            <input type="number" id="tcLimit" value="1" min="1" max="10"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px">
+          <div><label for="tcRange">seeds to scan</label>
+            <input type="number" id="tcRange" value="3000000" min="100000" max="200000000" step="500000"></div>
+          <div><label for="tcRadius">blocks per world</label>
+            <input type="number" id="tcRadius" value="10000" min="1000" max="60000" step="1000"></div>
+        </div>
+        <div class="hint">
+          <b>Blocks per world</b> decides how much of each world is actually examined.
+          The finder reports only the <i>first</i> treasure in a seed, so this expands it
+          to every treasure within that radius — 6 chests at 1&nbsp;500, <b>1&nbsp;431 at
+          20&nbsp;000</b>. For a rare casing that is the difference between searching a
+          world and glancing at it.
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="tcBtn">Find casing</button>
+          <button id="tcKeep">Keep looking</button>
+          <button id="tcStop" disabled>Stop</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-hunt">
+      <summary>Keep looking <span class="tag-exp">open-ended</span>
+        <span class="what">Runs the query in the chat box batch after batch on fresh seeds until it finds one, or you stop it.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why this is not just pressing Search again</summary>
+          <div class="hint">The normal search walks seeds <b>starting from the same place
+            every time</b>, so running it again re-scanned the same ground. This moves on
+            to fresh seeds each batch.</div>
+        </details>
+        <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
+          <div><label for="huBatch">seeds per batch</label>
+            <input type="number" id="huBatch" value="2000000" min="10000" max="50000000" step="500000"></div>
+          <div><label for="huWant">want</label>
+            <input type="number" id="huWant" value="1" min="1" max="50"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="huBtn">Keep looking</button>
+          <button id="huStop" disabled>Stop</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-fortress">
+      <summary>Fortresses inside each other <span class="tag-exp">piece-level</span>
+        <span class="what">Ranks seeds by how many fortress pieces actually intersect — not by how close the starts are.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why "close together" is the wrong measure</summary>
+          <div class="hint">A fortress is up to <b>257 pieces</b> sprawling 112 blocks from
+            its start, and each is generated <b>without knowing the others exist</b> — so
+            two starts 80 blocks apart do not sit near each other, they <b>grow through</b>
+            each other. This counts intersecting piece pairs.</div>
+        </details>
+        <div><label for="foSeeds">seeds to rank</label>
+          <input type="number" id="foSeeds" value="200000" min="1000" max="5000000" step="50000"></div>
+        <div style="margin-top:9px"><label for="foSeed">or inspect one seed</label>
+          <input type="text" id="foSeed" placeholder="e.g. 272750727216669"></div>
+        <div class="btnrow">
+          <button class="primary" id="foBtn">Measure overlap</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-exposed">
+      <summary>Exposed treasure <span class="tag-exp">real worldgen</span>
+        <span class="what">A buried treasure chest sitting in open air — no digging.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why this needs its own engine</summary>
+          <div class="hint">The chest is placed at the bottom of the sand column, so it is
+            almost always covered or underwater; this needs a beach with essentially no sand
+            over the stone. cubiomes cannot see it (no sand, no water), so real worldgen decides.</div>
+        </details>
+        <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
+          <div><label for="etRange">seeds to scan</label>
+            <input type="number" id="etRange" value="3000000" min="100000" max="200000000" step="500000"></div>
+          <div><label for="etLimit">want</label>
+            <input type="number" id="etLimit" value="3" min="1" max="20"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="etBtn">Find exposed</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-cool">
+      <summary>What is cool in my seed? <span class="tag-exp">per-seed</span>
+        <span class="what">The opposite of a search: hand it a world you already have and it reads every lootable chest in range.</span></summary>
+      <div class="body">
+        <details class="why"><summary>what it reads</summary>
+          <div class="hint">Leave the item blank for anything notable, or name one to hunt it
+            specifically. <b>Enchantments and their levels are read</b> — put an enchantment
+            in the box below to find e.g. a <i>Looting III</i> golden sword.</div>
+        </details>
+        <div><label for="csSeed">seed</label>
+          <input type="text" id="csSeed" placeholder="20094"></div>
+        <div style="display:grid;grid-template-columns:1fr 80px;gap:9px;margin-top:9px">
+          <div><label for="csItem">item (optional)</label>
+            <input type="text" id="csItem" placeholder="diamond"></div>
+          <div><label for="csMin">at least</label>
+            <input type="number" id="csMin" value="1"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 80px 90px;gap:9px;margin-top:9px">
+          <div><label for="csEnch">enchantment (optional)</label>
+            <input type="text" id="csEnch" placeholder="looting"></div>
+          <div><label for="csEnchMin">level</label>
+            <input type="number" id="csEnchMin" value="3"></div>
+          <div><label for="csRadius">radius</label>
+            <input type="number" id="csRadius" value="3000"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="csBtn">Find cool stuff</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-spider">
+      <summary>Cave spiders by a village <span class="tag-exp">real pieces</span>
+        <span class="what">Villages with mineshaft spider-spawner corridors next door.</span></summary>
+      <div class="body">
+        <details class="why"><summary>how the spawners are counted</summary>
+          <div class="hint">Cave spider spawners come from mineshaft <b>spider corridors</b>,
+            which are structure pieces — so the real generator can enumerate them and the
+            game's own <code>spiderCorridor</code> flag says which ones get a spawner.
+            Corridors the game would <b>skip</b> (a piece touching liquid is dropped
+            outright) are not counted. Distance is in <b>chunks</b>.<br><br>
+            These are spawners that <b>exist</b>. Whether you can reach one is a terrain
+            question this does not answer — ordinary mineshafts sit near y −30.</div>
+        </details>
+        <div style="display:grid;grid-template-columns:70px 70px 1fr;gap:9px">
+          <div><label for="svMin">spawners</label>
+            <input type="number" id="svMin" value="2"></div>
+          <div><label for="svRadius">chunks</label>
+            <input type="number" id="svRadius" value="3"></div>
+          <div><label for="svSeeds">seeds to scan</label>
+            <input type="number" id="svSeeds" value="20"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="svBtn">Find spider villages</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-bedrock">
+      <summary>Bedrock glitched outpost <span class="tag-exp">Bedrock Edition</span>
+        <span class="what">The outpost on a tall cobblestone pillar. Does not exist in Java. Runs a real Bedrock server — slow.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why Java can never do this</summary>
+          <div class="hint">Java drops a small dirt platform under a structure that lands in
+            air, while <b>Bedrock fills a foundation to the ground</b> out of the structure's
+            own material. This runs a real <b>Bedrock Dedicated Server</b> and measures the
+            column block by block, so the height reported is measured rather than predicted.
+            Bedrock seeds do not transfer to Java, so this never falls back to the Java search.</div>
+        </details>
+        <div><label for="boSeeds">seeds (comma separated)</label>
+          <input type="text" id="boSeeds" value="12345"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px">
+          <div><label for="boDrop">min terrain drop</label>
+            <input type="number" id="boDrop" value="20" min="4" max="120"></div>
+          <div><label for="boVerify">verify top</label>
+            <input type="number" id="boVerify" value="2" min="1" max="10"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="boBtn">Find glitched outpost</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-overlap">
+      <summary>Really overlapping? <span class="tag-exp">piece-exact</span>
+        <span class="what">Checks one pair you already found. Exact for fortress and end_city; answers UNKNOWN otherwise.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why the search's own answer is not enough</summary>
+          <div class="hint">The search compares <b>nominal boxes</b>, and its distance is
+            measured <b>origin to origin</b> — a mansion sprawls far past its origin, so a
+            pair reported 57 blocks apart had buildings ~15–20 apart. This intersects the
+            structures' <b>real piece bounding boxes</b>. <b>UNKNOWN</b> is not the same as
+            “they don't overlap”.</div>
+        </details>
+        <div><label for="soSeed">seed</label>
+          <input type="text" id="soSeed" placeholder="272750727216669"></div>
+        <div style="display:grid;grid-template-columns:1fr 70px 70px;gap:9px;margin-top:9px">
+          <div><label for="soA">structure A</label>
+            <input type="text" id="soA" value="fortress"></div>
+          <div><label for="soAx">x</label><input type="number" id="soAx" value="352"></div>
+          <div><label for="soAz">z</label><input type="number" id="soAz" value="352"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 70px 70px;gap:9px;margin-top:9px">
+          <div><label for="soB">structure B</label>
+            <input type="text" id="soB" value="fortress"></div>
+          <div><label for="soBx">x</label><input type="number" id="soBx" value="352"></div>
+          <div><label for="soBz">z</label><input type="number" id="soBz" value="432"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="soBtn">Check overlap</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-floating">
+      <summary>Actually floating? <span class="tag-exp">no server</span>
+        <span class="what">Confirms one spot: is that structure genuinely in the air, or just on a hillside?</span></summary>
+      <div class="body">
+        <details class="why"><summary>why the search's floating flag was wrong</summary>
+          <div class="hint">The search's floating condition comes from a <b>density
+            function</b>, and two earlier versions of it called <b>18–24% of outposts</b>
+            floating — on a hillside the ground genuinely is missing at those heights. This
+            reads the <b>real terrain column</b> out of Minecraft's own generator and wants
+            three things at once: a solid cap, a real void beneath it, and ground that drops
+            away on nearly every side. It answers <b>UNKNOWN</b> rather than guessing when it
+            cannot see.</div>
+        </details>
+        <div style="display:grid;grid-template-columns:1fr 70px 70px 70px;gap:9px">
+          <div><label for="flSeed">seed</label>
+            <input type="text" id="flSeed" placeholder="-4707106035532250258"></div>
+          <div><label for="flX">x</label><input type="number" id="flX" value="-448"></div>
+          <div><label for="flZ">z</label><input type="number" id="flZ" value="1136"></div>
+          <div><label for="flGap">gap</label><input type="number" id="flGap" value="24"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="flBtn">Check floating</button>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <!-- ================= SETTINGS ================= -->
+  <div class="tabpane" id="pane-settings">
+    <p class="pane-intro">Only the chat box uses an AI key. The query builder,
+      every tool, and the whole search engine run without one.</p>
+
+    <section>
+      <h2>AI provider</h2>
+      <select id="aiProvider">
+        <option value="gemini">Google Gemini</option>
+        <option value="compatible">OpenAI-compatible (Groq, OpenAI, OpenRouter, Ollama…)</option>
+      </select>
+
+      <div id="aiCompatFields" class="hidden" style="margin-top:10px">
+        <input id="aiBase" placeholder="base URL, e.g. https://api.groq.com/openai/v1" autocomplete="off">
+        <div class="hint">Groq <code>https://api.groq.com/openai/v1</code> ·
+          OpenAI <code>https://api.openai.com/v1</code> ·
+          OpenRouter <code>https://openrouter.ai/api/v1</code> ·
+          local Ollama <code>http://localhost:11434/v1</code> (leave the key blank).</div>
+      </div>
+      <input id="aiModel" placeholder="model (blank = default)" autocomplete="off" style="margin-top:6px">
+      <div class="hint" id="aiModelHint"></div>
+
+      <input type="password" id="geminiKey" placeholder="paste your key" autocomplete="off" style="margin-top:10px">
+      <div class="btnrow" style="margin-top:8px">
+        <button class="primary" id="keySave">Save key</button>
+        <button class="tiny" id="keyTest">Test connection</button>
+        <button class="tiny" id="keyClear">clear</button>
+        <span id="keyState" class="hint" style="align-self:center;margin:0"></span>
+      </div>
+      <div id="keyTestOut" class="hint" style="margin-top:6px"></div>
+      <div class="hint">Stored only in this browser. A free Gemini key:
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
+        (Or set <code>GEMINI_API_KEY</code> / <code>AI_API_KEY</code> before starting the server.)</div>
     </section>
 
     <section>
-      <h2>Village buildings <span class="tag-exp">real worldgen</span></h2>
-      <div class="hint" style="margin-top:0;margin-bottom:9px">
-        Finds seeds with a village holding <b>N&nbsp;smiths</b> (tool/weapon/armorer) —
-        by running Minecraft&#39;s <b>actual</b> generator, the only way to see inside a
-        jigsaw village. Separate engine (<b>MC&nbsp;1.16.5</b>), and <b>slow</b>.
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 76px;gap:9px">
-        <div><label for="vsBuilding">building</label>
-          <select id="vsBuilding">
-            <option value="smith">any smith (tool/weapon/armorer)</option>
-            <option value="toolsmith">toolsmith</option>
-            <option value="weaponsmith">weaponsmith</option>
-            <option value="armorer">armorer</option>
-            <option value="library">library</option>
-            <option value="cartographer">cartographer</option>
-            <option value="mason">mason</option>
-            <option value="fletcher">fletcher</option>
-            <option value="butcher">butcher</option>
-            <option value="shepherd">shepherd</option>
-            <option value="fisher">fisher</option>
-            <option value="tannery">tannery</option>
-            <option value="temple">temple</option>
-            <option value="farm">farm</option>
-            <option value="animal_pen">animal pen</option>
-            <option value="stable">stable</option>
-          </select></div>
-        <div><label for="vsMin">at least</label>
-          <input type="number" id="vsMin" value="5" min="1" max="12"></div>
-      </div>
-      <div style="margin-top:9px"><label for="vsSeeds">seeds to scan</label>
-        <input type="number" id="vsSeeds" value="200" min="1" max="3000" step="50"></div>
-      <div class="btnrow">
-        <button class="primary" id="vsBtn">Search villages</button>
-      </div>
+      <h2>Engine</h2>
+      <div class="hint" style="margin-top:0" id="engineInfo">cubiomes · loading…</div>
+      <div class="hint">The world version and large-biomes switch live on the
+        <b>Build</b> tab, next to the conditions they change.</div>
     </section>
-
-    <section>
-      <h2>Treasure casing <span class="tag-exp">real worldgen</span></h2>
-      <div class="hint" style="margin-top:0;margin-bottom:9px">
-        A buried treasure writes the block it <b>landed on</b> into every air or water
-        face around it — so it arrives already walled in. The main search cannot ask
-        this: it runs on cubiomes, which has no surface rules and no decoration, so
-        sand columns, ore and magma are <b>absent from that engine</b> rather than slow.
-        Measured over 6&nbsp;646 chests: sand&nbsp;78%, gravel&nbsp;18%, dirt&nbsp;2.7%,
-        stone&nbsp;0.9% — and <b>copper ore and magma ~0.015% each</b>, about 6&nbsp;600
-        chests scanned per expected hit.
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
-        <div><label for="tcCasing">encased in</label>
-          <select id="tcCasing">
-            <option value="magma_block">magma block (~0.015%)</option>
-            <option value="copper_ore">copper ore (~0.015%)</option>
-            <option value="iron_ore">iron ore (rarer still)</option>
-            <option value="coal_ore">coal ore</option>
-            <option value="mud">mud</option>
-            <option value="stone">stone (deep / cave floor, ~0.9%)</option>
-            <option value="gravel">gravel (~18%)</option>
-            <option value="dirt">dirt (~2.7%)</option>
-          </select></div>
-        <div><label for="tcLimit">want</label>
-          <input type="number" id="tcLimit" value="1" min="1" max="10"></div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px">
-        <div><label for="tcRange">seeds to scan</label>
-          <input type="number" id="tcRange" value="3000000" min="100000" max="200000000" step="500000"></div>
-        <div><label for="tcRadius">blocks per world</label>
-          <input type="number" id="tcRadius" value="10000" min="1000" max="60000" step="1000"></div>
-      </div>
-      <div class="hint" style="margin-top:6px">
-        <b>Blocks per world</b> decides how much of each world is actually examined.
-        The finder reports only the <i>first</i> treasure in a seed, so this expands it
-        to every treasure within that radius — 6 chests at 1&nbsp;500, <b>1&nbsp;431 at
-        20&nbsp;000</b>. For a rare casing that is the difference between searching a
-        world and glancing at it.
-      </div>
-      <div class="btnrow">
-        <button class="primary" id="tcBtn">Find casing</button>
-        <button id="tcKeep">Keep looking</button>
-        <button id="tcStop" disabled>Stop</button>
-      </div>
-    </section>
-
-    <section>
-      <h2>Keep looking <span class="tag-exp">open-ended</span></h2>
-      <div class="hint" style="margin-top:0;margin-bottom:9px">
-        The normal search walks seeds <b>starting from the same place every time</b>, so
-        running it again re-scanned the same ground. This runs batch after batch on
-        <b>fresh</b> seeds until it finds what you asked for, or you stop it. Uses the
-        query currently in the box.
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
-        <div><label for="huBatch">seeds per batch</label>
-          <input type="number" id="huBatch" value="2000000" min="10000" max="50000000" step="500000"></div>
-        <div><label for="huWant">want</label>
-          <input type="number" id="huWant" value="1" min="1" max="50"></div>
-      </div>
-      <div class="btnrow">
-        <button class="primary" id="huBtn">Keep looking</button>
-        <button id="huStop" disabled>Stop</button>
-      </div>
-    </section>
-
-    <section>
-      <h2>Fortresses inside each other <span class="tag-exp">piece-level</span></h2>
-      <div class="hint" style="margin-top:0;margin-bottom:9px">
-        &ldquo;Four fortresses close together&rdquo; is the wrong measure, and it is the one a
-        cluster search gives you. A fortress is up to <b>257 pieces</b> sprawling 112
-        blocks from its start, and each is generated <b>without knowing the others
-        exist</b> — so two starts 80 blocks apart do not sit near each other, they
-        <b>grow through</b> each other. This counts intersecting piece pairs.
-      </div>
-      <div style="margin-top:9px"><label for="foSeeds">seeds to rank</label>
-        <input type="number" id="foSeeds" value="200000" min="1000" max="5000000" step="50000"></div>
-      <div style="margin-top:9px"><label for="foSeed">or inspect one seed</label>
-        <input type="text" id="foSeed" placeholder="e.g. 272750727216669"></div>
-      <div class="btnrow">
-        <button class="primary" id="foBtn">Measure overlap</button>
-      </div>
-    </section>
-
-    <section>
-      <h2>Exposed treasure <span class="tag-exp">real worldgen</span></h2>
-      <div class="hint" style="margin-top:0;margin-bottom:9px">
-        A buried treasure chest sitting in <b>open air</b> — no digging. The chest is
-        placed at the bottom of the sand column, so it is almost always covered or
-        underwater; this needs a beach with essentially no sand over the stone.
-        cubiomes cannot see it (no sand, no water), so real worldgen decides.
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
-        <div><label for="etRange">seeds to scan</label>
-          <input type="number" id="etRange" value="3000000" min="100000" max="200000000" step="500000"></div>
-        <div><label for="etLimit">want</label>
-          <input type="number" id="etLimit" value="3" min="1" max="20"></div>
-      </div>
-      <div class="btnrow">
-        <button class="primary" id="etBtn">Find exposed</button>
-      </div>
-    </section>
-
-    <section>
-      <h2>Bedrock glitched outpost <span class="tag-exp">Bedrock Edition</span></h2>
-      <div class="hint" style="margin-top:0;margin-bottom:9px">
-        The outpost standing on a <b>tall cobblestone pillar</b> from the screenshots.
-        This does <b>not exist in Java</b> — Java drops a small dirt platform under a
-        structure that lands in air, while <b>Bedrock fills a foundation to the ground</b>
-        out of the structure's own material. Runs a real <b>Bedrock Dedicated Server</b>
-        and measures the column block by block, so the height reported is measured
-        rather than predicted. <b>Slow.</b>
-      </div>
-      <div><label for="boSeeds">seeds (comma separated)</label>
-        <input type="text" id="boSeeds" value="12345"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px">
-        <div><label for="boDrop">min terrain drop</label>
-          <input type="number" id="boDrop" value="20" min="4" max="120"></div>
-        <div><label for="boVerify">verify top</label>
-          <input type="number" id="boVerify" value="2" min="1" max="10"></div>
-      </div>
-      <div class="btnrow">
-        <button class="primary" id="boBtn">Find glitched outpost</button>
-      </div>
-    </section>
-
-    <section>
-      <h2>Really overlapping? <span class="tag-exp">piece-exact</span></h2>
-      <div class="hint" style="margin-top:0;margin-bottom:9px">
-        The search compares <b>nominal boxes</b>, and its distance is measured
-        <b>origin to origin</b> — a mansion sprawls far past its origin, so a pair
-        reported 57 blocks apart had buildings ~15–20 apart. This intersects the
-        structures' <b>real piece bounding boxes</b>. Exact for <b>fortress</b> and
-        <b>end_city</b>; for anything else it answers <b>UNKNOWN</b>, which is not
-        the same as “they don't overlap”.
-      </div>
-      <div><label for="soSeed">seed</label>
-        <input type="text" id="soSeed" placeholder="272750727216669"></div>
-      <div style="display:grid;grid-template-columns:1fr 70px 70px;gap:9px;margin-top:9px">
-        <div><label for="soA">structure A</label>
-          <input type="text" id="soA" value="fortress"></div>
-        <div><label for="soAx">x</label><input type="number" id="soAx" value="352"></div>
-        <div><label for="soAz">z</label><input type="number" id="soAz" value="352"></div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 70px 70px;gap:9px;margin-top:9px">
-        <div><label for="soB">structure B</label>
-          <input type="text" id="soB" value="fortress"></div>
-        <div><label for="soBx">x</label><input type="number" id="soBx" value="352"></div>
-        <div><label for="soBz">z</label><input type="number" id="soBz" value="432"></div>
-      </div>
-      <div class="btnrow">
-        <button class="primary" id="soBtn">Check overlap</button>
-      </div>
-    </section>
-
-    <section>
-      <h2>Actually floating? <span class="tag-exp">no server</span></h2>
-      <div class="hint" style="margin-top:0;margin-bottom:9px">
-        The search's floating condition comes from a <b>density function</b>, and
-        two earlier versions of it called <b>18–24% of outposts</b> floating —
-        on a hillside the ground genuinely is missing at those heights. This reads
-        the <b>real terrain column</b> out of Minecraft's own generator and wants
-        three things at once: a solid cap, a real void beneath it, and ground that
-        drops away on nearly every side. It answers <b>UNKNOWN</b> rather than
-        guessing when it cannot see.
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 70px 70px 70px;gap:9px">
-        <div><label for="flSeed">seed</label>
-          <input type="text" id="flSeed" placeholder="-4707106035532250258"></div>
-        <div><label for="flX">x</label><input type="number" id="flX" value="-448"></div>
-        <div><label for="flZ">z</label><input type="number" id="flZ" value="1136"></div>
-        <div><label for="flGap">gap</label><input type="number" id="flGap" value="24"></div>
-      </div>
-      <div class="btnrow">
-        <button class="primary" id="flBtn">Check floating</button>
-      </div>
-    </section>
-
-    <section>
-      <h2>Cave spiders by a village <span class="tag-exp">real pieces</span></h2>
-      <div class="hint" style="margin-top:0;margin-bottom:9px">
-        Cave spider spawners come from mineshaft <b>spider corridors</b>, which
-        are structure pieces — so the real generator can enumerate them and the
-        game's own <code>spiderCorridor</code> flag says which ones get a
-        spawner. Corridors the game would <b>skip</b> (a piece touching liquid is
-        dropped outright) are not counted. Distance is in <b>chunks</b>.
-        <br><br>
-        These are spawners that <b>exist</b>. Whether you can reach one is a
-        terrain question this does not answer — ordinary mineshafts sit near
-        y −30.
-      </div>
-      <div style="display:grid;grid-template-columns:70px 70px 1fr;gap:9px">
-        <div><label for="svMin">spawners</label>
-          <input type="number" id="svMin" value="2"></div>
-        <div><label for="svRadius">chunks</label>
-          <input type="number" id="svRadius" value="3"></div>
-        <div><label for="svSeeds">seeds to scan</label>
-          <input type="number" id="svSeeds" value="20"></div>
-      </div>
-      <div class="btnrow">
-        <button class="primary" id="svBtn">Find spider villages</button>
-      </div>
-    </section>
-
-    <section>
-      <h2>What is cool in my seed? <span class="tag-exp">per-seed</span></h2>
-      <div class="hint" style="margin-top:0;margin-bottom:9px">
-        The opposite of a search: give it a world you already have and it reads
-        every lootable structure in range, reporting the chests worth the trip.
-        Leave the item blank for anything notable, or name one to hunt it
-        specifically.
-        <br><br>
-        <b>Enchantments and their levels are read</b> — put an enchantment in the
-        box below to find e.g. a <i>Looting III</i> golden sword.
-      </div>
-      <div><label for="csSeed">seed</label>
-        <input type="text" id="csSeed" placeholder="20094"></div>
-      <div style="display:grid;grid-template-columns:1fr 80px 90px;gap:9px;margin-top:9px">
-        <div><label for="csItem">item (optional)</label>
-          <input type="text" id="csItem" placeholder="diamond"></div>
-        <div><label for="csMin">at least</label>
-          <input type="number" id="csMin" value="1"></div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 80px;gap:9px;margin-top:9px">
-        <div><label for="csEnch">enchantment (optional)</label>
-          <input type="text" id="csEnch" placeholder="looting"></div>
-        <div><label for="csEnchMin">level</label>
-          <input type="number" id="csEnchMin" value="3"></div>
-        <div><label for="csRadius">radius</label>
-          <input type="number" id="csRadius" value="3000"></div>
-      </div>
-      <div class="btnrow">
-        <button class="primary" id="csBtn">Find cool stuff</button>
-      </div>
-    </section>
+  </div>
 
   </div>
 </aside>
@@ -816,6 +996,7 @@
 <script>
 (() => {
   const $ = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
   const el = (t, c, x) => { const n = document.createElement(t);
     if (c) n.className = c; if (x !== undefined) n.textContent = x; return n; };
   const esc = s => String(s).replace(/[&<>"]/g, c =>
@@ -913,17 +1094,28 @@
     localStorage.setItem(HIST_LS, JSON.stringify(h.slice(0, 60)));
     renderHistory();
   }
+  const setHistory = h => { localStorage.setItem(HIST_LS, JSON.stringify(h)); renderHistory(); };
   function renderHistory() {
     const box = $('#history'); box.innerHTML = '';
     const h = getHistory();
+    $('#histClear').disabled = !h.length;
     if (!h.length) { box.append(el('div', 'hist-empty', 'Your searches show up here.')); return; }
-    h.forEach(item => {
+    h.forEach((item, i) => {
+      const row = el('div', 'hist-row');
       const b = el('button', 'hist-item', item.text);
       b.title = item.text;
       b.onclick = () => { $('#nl').value = item.text; closeSidebar(); submitPrompt(); };
-      box.append(b);
+      // A history you cannot prune is a history you stop reading.
+      const x = el('button', 'hist-del', '✕');
+      x.title = 'forget this one';
+      x.onclick = () => { const cur = getHistory(); cur.splice(i, 1); setHistory(cur); };
+      row.append(b, x);
+      box.append(row);
     });
   }
+  $('#histClear').onclick = () => {
+    if (getHistory().length && confirm('Forget every past search?')) setHistory([]);
+  };
   renderHistory();
 
   $('#newSearch').onclick = () => {
@@ -952,8 +1144,9 @@
         const lr = await fetch('/api/lootitems?v=' + encodeURIComponent(v));
         lootVocab = await lr.json();
       } catch (e) { lootVocab = { structures:{} }; }
-      $('#engine').textContent =
-        `cubiomes · MC ${d.version} · ${Object.keys(d.structures).length} structures · ${Object.keys(d.biomes).length} biomes`;
+      const line = `cubiomes · MC ${d.version} · ${Object.keys(d.structures).length} structures · ${Object.keys(d.biomes).length} biomes`;
+      $('#engine').textContent = line;
+      $('#engineInfo').textContent = line;
       // Drop conditions this version can't express, rather than failing later.
       // Only structure/biome names are version-scoped; ore, eyes, loot and slime
       // (slime placement is version-independent) carry across any version.
@@ -963,14 +1156,20 @@
         c.kind === 'biome' || c.kind === 'area' ? c.name in vocab.biomes : true);
       render();
       if (conds.length !== before) toast(`${before - conds.length} condition(s) not in MC ${d.version} — removed`);
-    } catch (e) { $('#engine').textContent = 'vocab failed: ' + e.message; }
+    } catch (e) {
+      $('#engine').textContent = 'vocab failed: ' + e.message;
+      $('#engineInfo').textContent = 'vocab failed: ' + e.message;
+    }
   }
   $('#version').onchange = loadVocab;
 
-  function toast(msg) {
-    const n = el('div', 'note warn', msg);
-    $('#out').prepend(n);
-    setTimeout(() => n.remove(), 5000);
+  // Toasts float over the page. They used to be prepended into the results
+  // column, which on the landing screen is empty and well below the fold --
+  // so the sentence explaining why nothing happened was never read.
+  function toast(msg, kind) {
+    const n = el('div', 'note ' + (kind || 'warn'), msg);
+    $('#toasts').append(n);
+    setTimeout(() => n.remove(), 5200);
   }
 
   // ---- conditions --------------------------------------------------------
@@ -1033,6 +1232,12 @@
   $('#addHeight').onclick = () => {
     conds.push({ id: 'h' + (nextId++), kind: 'height', height: 150, relief: 0,
                  within: 300, of: 'origin', precision: 'fine' });
+    render();
+  };
+
+  $('#addStronghold').onclick = () => {
+    conds.push({ id: 'x' + (nextId++), kind: 'stronghold', depth: 0,
+                 land: true, within: 3000, of: 'origin' });
     render();
   };
 
@@ -1147,6 +1352,15 @@
         vn.onchange = e => { c.vein = Math.max(0, Math.min(64, +e.target.value||0)); render(); };
         g3.append(vl, vn); d.append(g3);
 
+        // Deepslate is not a separate ore -- it is the same ore wearing
+        // whatever stone it replaced, so "deepslate emerald" is just emerald
+        // below y=0. A Y band gets every material the distinction at once.
+        const dp = el('label','chk');
+        const dpc = el('input'); dpc.type='checkbox'; dpc.checked = !!c.deepslate;
+        dpc.onchange = e => { c.deepslate = e.target.checked; render(); };
+        dp.append(dpc, document.createTextNode(' deepslate only (below y=0, 1.18+)'));
+        d.append(dp);
+
         const xp = el('label','chk');
         const xpc = el('input'); xpc.type='checkbox'; xpc.checked = !!c.exposed;
         xpc.onchange = e => { c.exposed = e.target.checked; render(); };
@@ -1163,6 +1377,58 @@
         box.append(d);
         return;
       }
+      if (c.kind === 'stronghold') {
+        const top = el('div','top');
+        top.append(el('span','ic','🏛'), el('span','cid', c.id), el('span','dim','EXPOSED STRONGHOLD'));
+        const x = el('button','tiny x','×');
+        x.onclick = () => { conds.splice(i,1); render(); };
+        top.append(x); d.append(top);
+
+        const g = el('div','grid');
+        const dl = el('div');
+        dl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+        dl.textContent = 'ground over the roof (blocks)';
+        const dp = el('input'); dp.type='number'; dp.value = c.depth; dp.min=0; dp.max=32; dp.step=1;
+        dp.title = '0 = the stronghold breaks the surface. 4 = a few blocks of dirt over it.';
+        dp.onchange = e => { c.depth = Math.max(0, Math.min(32, +e.target.value||0)); render(); };
+        g.append(dl, dp); d.append(g);
+
+        const g2 = el('div','grid');
+        const wl = el('div');
+        wl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+        wl.textContent = 'search within (blocks)';
+        const w = el('input'); w.type='number'; w.value=c.within; w.min=64; w.max=30000; w.step=500;
+        w.onchange = e => c.within = Math.max(64, Math.min(30000, +e.target.value||3000));
+        g2.append(wl, w); d.append(g2);
+
+        const lb = el('label'); lb.style.cssText='display:flex;gap:8px;align-items:center;font-size:12.5px';
+        const cb = el('input'); cb.type='checkbox'; cb.checked = c.land !== false;
+        cb.onchange = e => { c.land = e.target.checked; render(); };
+        lb.append(cb, document.createTextNode('on dry land (uncheck to allow the sea floor)'));
+        d.append(lb);
+
+        // Read the picker, not a `version` binding -- there isn't one, and a
+        // ReferenceError in here takes the whole condition list down with it.
+        const ver = ($('#version') && $('#version').value) || '1.21';
+        const old = /^1\.(1[0-7]|[0-9])(\D|$)/.test(ver);
+        const note = el('div','note' + (old ? '' : ' warn'));
+        note.textContent = old
+          ? 'A stronghold whose roof reaches the surface. Depth is the roof against the ground above it — a bare Y is meaningless, since y=60 is a metre down on a plain and buried inside a mountain. Heights above y=52 came out right about 2 times in 3 when checked against a real server, and an exposed one is always up there, so treat a hit as a candidate to verify rather than a certainty. Most hits are on an ocean floor; "dry land" is on by default for that reason.'
+          : `⚠ ${ver}: from 1.18 a stronghold's roof can never rise above y=52 while the ground sits near y=63, so an exposed one does not exist in this version. These are a pre-1.18 phenomenon.`;
+        d.append(note);
+        if (!old) {
+          // The search would be refused anyway, so make the fix one click rather
+          // than an instruction the reader has to carry back to another control.
+          const fix = el('button','tiny','switch to 1.17');
+          fix.onclick = () => {
+            const sel = $('#version');
+            if (sel) { sel.value = '1.17'; sel.dispatchEvent(new Event('change')); }
+          };
+          d.append(fix);
+        }
+        box.append(d);
+        return;
+      }
       if (c.kind === 'overlap') {
         const top = el('div','top');
         top.append(el('span','ic','💥'), el('span','cid', c.id), el('span','dim','STRUCTURE OVERLAP'));
@@ -1170,7 +1436,11 @@
         x.onclick = () => { conds.splice(i,1); render(); };
         top.append(x); d.append(top);
 
-        const names = Object.keys(vocab.structures || {});
+        // "stronghold" is offered HERE ONLY. It has no region position, so it
+        // cannot be a plain structure condition, and the vocabulary the rest of
+        // the builder reads deliberately leaves it out. Overlap is the one place
+        // the engine can answer for it.
+        const names = Object.keys(vocab.structures || {}).concat(['stronghold']);
         const mk = (val, set) => {
           const s = el('select');
           names.forEach(n => { const o = el('option', null, pretty(n)); o.value = n;
@@ -1200,12 +1470,83 @@
         pd.onchange = e => c.pad = Math.max(0, Math.min(128, +e.target.value||0));
         g3.append(pl, pd); d.append(g3);
 
+        const isSh = (c.a === 'stronghold' || c.b === 'stronghold');
+        if (isSh) {
+          const g4 = el('div','grid');
+          const rl = el('div');
+          rl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+          rl.textContent = 'stronghold roof at least y';
+          const rf = el('input'); rf.type='number'; rf.value = (c.minRoofY ?? '');
+          rf.min=-64; rf.max=200; rf.step=1; rf.placeholder='any';
+          rf.title='Blank = a stronghold anywhere under the partner. 55-62 = the '
+                 + 'part that meets it reaches the surface, which is the rare "exposed" case.';
+          rf.onchange = e => {
+            const v = e.target.value.trim();
+            c.minRoofY = (v === '') ? null : Math.max(-64, Math.min(200, +v || 0));
+            render();
+          };
+          g4.append(rl, rf); d.append(g4);
+
+          // Ground over the piece that meets the partner. This is the question
+          // "is it EXPOSED"; the roof height above is only a proxy for it, and
+          // the two disagree in exactly the case that matters -- a roof at y=60
+          // under a hill is five blocks down, not out.
+          const g5 = el('div','grid');
+          const dl = el('div');
+          dl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
+          dl.textContent = 'ground above it, at most';
+          const df = el('input'); df.type='number'; df.value = (c.maxDepth ?? '');
+          df.min=0; df.max=64; df.step=1; df.placeholder='any';
+          df.title='0 = the stronghold BREAKS THE SURFACE where it meets the partner '
+                 + '(the real "exposed"). 4 = a few blocks of dirt over it. Blank = do not '
+                 + 'test the ground at all, only the roof height above.';
+          df.onchange = e => {
+            const v = e.target.value.trim();
+            c.maxDepth = (v === '') ? null : Math.max(0, Math.min(64, +v || 0));
+            render();
+          };
+          g5.append(dl, df); d.append(g5);
+        }
+
         const dimA = vocab.structures[c.a] || '', dimB = vocab.structures[c.b] || '';
         const note = el('div','note' + (dimA && dimB && dimA !== dimB ? ' warn' : ''));
         note.textContent = (dimA && dimB && dimA !== dimB)
           ? `⚠ ${pretty(c.a)} is in the ${dimA} and ${pretty(c.b)} is in the ${dimB} — they can never overlap.`
+          : isSh
+          ? 'A stronghold is tested against its REAL piece boxes, not a nominal square — it sprawls 112 blocks in every direction, so a square that size would match almost anything nearby. For "exposed" use “ground above it, at most” = 0: that measures the terrain over the piece that meets the partner. The roof height is only a Y number with no ground in it — asking for roof ≥ 55 returns strongholds under 7–13 blocks of dirt, which is not the find you meant. Leave both blank for "a stronghold somewhere underneath". This walks the stronghold rings with the biome generator (~1 ms per seed), so it is far slower than any other condition here.'
           : 'Two structures generating into the same ground: a ruined portal inside a village, a shipwreck through a monument. Footprints are NOMINAL boxes (a village’s reach is approximated), so a hit is a strong candidate worth loading, not a proof.';
         d.append(note);
+
+        // A stronghold ROOF HEIGHT is version-locked in exactly the way the
+        // standalone condition is, and this panel used to say nothing about it
+        // -- so "exposed stronghold inside a village", built here on the
+        // default version, was refused outright by the engine with the reason
+        // living only in an error the builder never showed. Measured over 180
+        // strongholds at 26.2: the roof tops out at y=52 (1 in 180 reaches it)
+        // while the ground sits near y=63, so nothing is ever exposed.
+        if (isSh && c.minRoofY != null) {
+          const shVer = ($('#version') && $('#version').value) || '1.21';
+          const shOld = /^1\.(1[0-7]|[0-9])(\D|$)/.test(shVer);
+          if (!shOld && c.minRoofY > 52) {
+            const w = el('div','note bad',
+              `⚠ ${shVer}: a stronghold roof can never rise above y=52 from 1.18 on, so `
+              + `roof ≥ ${c.minRoofY} has no solutions and the engine will refuse this `
+              + `query outright. Exposed strongholds are a pre-1.18 phenomenon.`);
+            d.append(w);
+            const fix = el('button','tiny','switch to 1.17');
+            fix.onclick = () => {
+              const sel = $('#version');
+              if (sel) { sel.value = '1.17'; sel.dispatchEvent(new Event('change')); }
+            };
+            d.append(fix);
+          } else if (!shOld && c.minRoofY >= 45) {
+            d.append(el('div','note warn',
+              `⚠ ${shVer}: y=52 is the ceiling from 1.18 on, and only about 1 stronghold `
+              + `in 180 reaches it — so roof ≥ ${c.minRoofY} is the extreme tail and will `
+              + `search for a very long time. It is also still ~11 blocks underground, `
+              + `not exposed. Use 1.17 for a stronghold that actually breaks the surface.`));
+          }
+        }
         box.append(d);
         return;
       }
@@ -1542,11 +1883,24 @@
                       within: c.within, of: c.of };
           if ((c.vein || 0) > 0) o.vein = c.vein;
           if (c.exposed) o.exposed = true;
+          if (c.deepslate) o.deepslate = true;
+          return o;
+        }
+        if (c.kind === 'stronghold') {
+          const o = { id: c.id, stronghold: true, max_depth: c.depth,
+                      within: c.within, of: c.of };
+          if (c.land === false) o.land = false;
           return o;
         }
         if (c.kind === 'overlap') {
           const o = { id: c.id, overlap: [c.a, c.b], within: c.within, of: c.of };
           if ((c.pad || 0) > 0) o.pad = c.pad;
+          // null and 0 mean different things: 0 is a real threshold on 1.18+,
+          // where a stronghold roof can sit below y=0.
+          if (c.minRoofY !== null && c.minRoofY !== undefined) o.min_roof_y = c.minRoofY;
+          // Likewise here, and more sharply: max_depth 0 IS the exposed case,
+          // so an absent value and a zero must not collapse together.
+          if (c.maxDepth !== null && c.maxDepth !== undefined) o.max_depth = c.maxDepth;
           return o;
         }
         if (c.kind === 'slime') return { id: c.id, slime: c.count,
@@ -2308,25 +2662,195 @@
   }
 
   // ---- AI prompt (Gemini) + settings drawer ------------------------------
-  const KEY_LS = 'sf-gemini-key';
-  const getKey = () => localStorage.getItem(KEY_LS) || '';
+  // The key is stored PER PROVIDER, like the model.
+  //
+  // It used to be one slot shared by both, so saving an OpenRouter key and then
+  // switching to Gemini sent "sk-or-v1-..." to Google, which answers "API key
+  // not valid" -- the exact message you get from a revoked key. The advice that
+  // follows ("make a new one") cannot work, because the new key is never the
+  // one being sent.
+  const LEGACY_KEY_LS = 'sf-gemini-key';
+  const keyKey = p => 'sf-ai-key-' + p;
+  const getKey = () => localStorage.getItem(keyKey(getProvider())) || '';
+  function migrateLegacyKey() {
+    const old = localStorage.getItem(LEGACY_KEY_LS);
+    if (!old) return;
+    // Hand it to whichever provider it plainly belongs to, rather than guessing
+    // from whatever happens to be selected right now.
+    const dest = /^AIza/.test(old) ? 'gemini' : 'compatible';
+    if (!localStorage.getItem(keyKey(dest))) localStorage.setItem(keyKey(dest), old);
+    localStorage.removeItem(LEGACY_KEY_LS);
+  }
+  migrateLegacyKey();
   function refreshKeyState() {
-    $('#keyState').textContent = getKey() ? '✓ saved in this browser' : 'no key yet';
+    const k = getKey();
+    $('#keyState').textContent = k
+      ? '✓ saved for ' + getProvider() + ' (…' + k.slice(-4) + ')'
+      : 'no key for ' + getProvider() + ' yet';
+    // The landing screen says the same thing in plain sight, so it has to
+    // follow every save, clear and provider switch.
+    refreshSetup();
   }
   $('#keySave').onclick = () => {
     const v = $('#geminiKey').value.trim();
     if (!v) { toast('paste a key first'); return; }
-    localStorage.setItem(KEY_LS, v); $('#geminiKey').value = ''; refreshKeyState();
-    toast('Gemini key saved (this browser only)');
+    const p = getProvider();
+    // A Gemini key is AIza...; an OpenAI-style one is sk-.... Saying so at the
+    // moment of the mistake beats a 400 from Google ten minutes later.
+    if (p === 'gemini' && /^sk-/.test(v)) {
+      toast('that looks like an OpenAI/OpenRouter key — switch the provider to OpenAI-compatible first');
+      return;
+    }
+    // Only the sk- case is checked. Google issues both "AIza..." and "AQ..."
+    // keys, so treating one of those as THE Google format rejected real keys.
+    if (p === 'compatible' && /^(AIza|AQ\.)/.test(v)) {
+      toast('that looks like a Google key — switch the provider to Google Gemini first');
+      return;
+    }
+    localStorage.setItem(keyKey(p), v); $('#geminiKey').value = ''; refreshKeyState();
+    toast('key saved for ' + p + ' (this browser only)');
   };
-  $('#keyClear').onclick = () => { localStorage.removeItem(KEY_LS); refreshKeyState(); toast('key cleared'); };
-  refreshKeyState();
+  $('#keyClear').onclick = () => {
+    localStorage.removeItem(keyKey(getProvider())); refreshKeyState();
+    toast('key cleared for ' + getProvider());
+  };
 
-  function openDrawer() { $('#drawer').classList.remove('hidden'); $('#scrim').classList.remove('hidden'); }
+  // Provider settings live beside the key, in the same browser-only storage.
+  // The base URL and model are remembered because retyping a base URL every
+  // session is exactly the friction that sends people back to a dead key.
+  const PROV_LS = 'sf-ai-provider', BASE_LS = 'sf-ai-base';
+  // The model is stored PER PROVIDER. One shared slot meant switching back to
+  // Gemini carried a Groq model name with it, and Gemini's 404 for a model it
+  // has never heard of is indistinguishable from a dead key.
+  const modelKey = p => 'sf-ai-model-' + p;
+  const getProvider = () => localStorage.getItem(PROV_LS) || 'gemini';
+  const getModel = () => localStorage.getItem(modelKey(getProvider())) || '';
+  function refreshProvider() {
+    const p = getProvider();
+    $('#aiProvider').value = p;
+    $('#aiCompatFields').classList.toggle('hidden', p !== 'compatible');
+    $('#aiBase').value = localStorage.getItem(BASE_LS) || '';
+    $('#aiModel').value = getModel();
+    $('#aiModel').placeholder = p === 'gemini'
+      ? 'model (blank = server default)' : 'model, e.g. llama-3.3-70b-versatile';
+    $('#aiModelHint').textContent = p === 'gemini'
+      ? 'Leave blank unless "Test connection" says the default model is missing — that is a model fault, not a key fault.'
+      : 'Required. Test connection lists what this key can actually use.';
+    $('#geminiKey').placeholder = p === 'gemini'
+      ? 'paste your key (AIza…)' : 'paste your key (blank for local Ollama)';
+    // Keys are per provider now, so the saved-state line has to follow the
+    // switch -- otherwise it reports the other provider's key as this one's.
+    refreshKeyState();
+  }
+  $('#aiProvider').onchange = e => {
+    localStorage.setItem(PROV_LS, e.target.value); refreshProvider();
+    $('#keyTestOut').textContent = '';
+  };
+  $('#aiBase').onchange  = e => {
+    localStorage.setItem(BASE_LS, e.target.value.trim());
+    refreshSetup();   // a local Ollama base needs no key, so the nudge clears
+  };
+  $('#aiModel').onchange = e =>
+    localStorage.setItem(modelKey(getProvider()), e.target.value.trim());
+  refreshProvider();
+
+  $('#keyTest').onclick = async () => {
+    const box = $('#keyTestOut');
+    box.textContent = 'testing…';
+    try {
+      // Prefer what is TYPED over what is saved. Testing the stored key while a
+      // freshly pasted one sits in the box unsaved is how "I made a new key and
+      // it still fails" happens -- the new key was never the one under test.
+      const typed = $('#geminiKey').value.trim();
+      const d = await post('/api/aitest', {
+        provider: getProvider(), key: typed || getKey(),
+        base: localStorage.getItem(BASE_LS) || '', model: getModel(),
+      });
+      if (typed) box.textContent = '(testing the key in the box, not the saved one) ';
+      let msg = (d.ok ? '✓ ' : '✗ ') + (d.verdict || '');
+      if (d.suggest && d.suggest.length) msg += '  Try: ' + d.suggest.join(', ');
+      if (d.detail) msg += '  [' + d.detail + ']';
+      box.textContent = msg;
+    } catch (e) {
+      box.textContent = '✗ ' + (e.message || e);
+    }
+  };
+
+  // ---- drawer: three tabs instead of one 14-section scroll ---------------
+  // The API key, the query builder and ten separate engines used to share a
+  // single column, so the one panel you wanted was always somewhere in a
+  // thousand pixels of something else.
+  const PANE_TITLE = { build: 'Build a search', tools: 'Specialist tools', settings: 'Settings' };
+  function showPane(name) {
+    if (!PANE_TITLE[name]) name = 'build';
+    $$('.tabpane').forEach(p => p.classList.toggle('on', p.id === 'pane-' + name));
+    $$('.tab').forEach(t => t.classList.toggle('on', t.dataset.pane === name));
+    $('#drawerTitle').textContent = PANE_TITLE[name];
+    const body = $('.drawer-body'); if (body) body.scrollTop = 0;
+  }
+  $$('.tab').forEach(t => { t.onclick = () => showPane(t.dataset.pane); });
+
+  function openDrawer(pane) {
+    if (pane) showPane(pane);
+    $('#drawer').classList.remove('hidden'); $('#scrim').classList.remove('hidden');
+  }
   function closeDrawer() { $('#drawer').classList.add('hidden'); $('#scrim').classList.add('hidden'); }
-  $('#gear').onclick = openDrawer;
+  // Open the Tools tab with one engine already unfolded and scrolled to. Used
+  // both by the toolbar and by a routed prompt that needs input we don't have.
+  function openTool(id, focusSel) {
+    openDrawer('tools');
+    const d = $('#tool-' + id); if (!d) return;
+    $$('.tool').forEach(t => { if (t !== d) t.open = false; });
+    d.open = true;
+    d.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    if (focusSel) { const f = $(focusSel); if (f) setTimeout(() => f.focus(), 220); }
+  }
+  $('#gear').onclick      = () => openDrawer('settings');
+  $('#buildBtn').onclick  = () => openDrawer('build');
+  $('#toolsBtn').onclick  = () => openDrawer('tools');
   $('#drawerClose').onclick = closeDrawer;
   $('#scrim').onclick = () => { closeDrawer(); closeSidebar(); };
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { closeDrawer(); closeSidebar(); }
+  });
+
+  // ---- first run: say the key is needed BEFORE the question is typed -------
+  // The gate used to fire only on submit, so the first thing a new visitor got
+  // back from their first question was a refusal.
+  function refreshSetup() {
+    const local = /localhost|127\.0\.0\.1/.test(localStorage.getItem(BASE_LS) || '');
+    const ready = !!getKey() || (getProvider() === 'compatible' && local);
+    $('#setup').classList.toggle('hidden', ready);
+    // The examples stay up even without a key: they are what tells a visitor
+    // what this thing can be asked. Clicking one leaves the sentence in the box
+    // and opens settings, so the key gets added to a question already written.
+    $('#nl').placeholder = ready
+      ? 'e.g. a woodland mansion within 300 blocks of spawn, with a village next to it'
+      : 'Add an AI key to ask in words — or build the search by hand →';
+  }
+  $('#setupKey').onclick   = () => { openDrawer('settings'); $('#geminiKey').focus(); };
+  $('#setupBuild').onclick = () => openDrawer('build');
+
+  // ---- example prompts ----------------------------------------------------
+  // A blank box with a blank placeholder answered none of "what can I ask?",
+  // "how specific may I be?", or "does it know about loot?".
+  const EXAMPLES = [
+    'a woodland mansion within 300 blocks of spawn',
+    'village right next to a mansion',
+    'stronghold with 12 eyes already in the portal',
+    'a village with at least 5 smiths',
+    'buried treasure encased in magma',
+    'diamonds within 64 blocks of spawn',
+  ];
+  (function buildChips() {
+    const box = $('#chips');
+    EXAMPLES.forEach(t => {
+      const b = el('button', 'chip', t);
+      b.type = 'button';
+      b.onclick = () => { $('#nl').value = t; submitPrompt(); };
+      box.append(b);
+    });
+  })();
 
   function aiNote(msg, isErr) {
     const n = $('#aiNote'); n.textContent = msg || ''; n.classList.toggle('err', !!isErr);
@@ -2371,9 +2895,19 @@
     const text = $('#nl').value.trim();
     if (!text) return;
     const key = getKey();
-    if (!key) {
-      aiNote('Add a free Gemini key to search by description — opening settings…', true);
-      openDrawer(); $('#geminiKey').focus(); return;
+    const prov = getProvider();
+    // A local Ollama has no key and never will, so the gate asks for one only
+    // where one is actually required. It still catches the common case: a
+    // remote provider selected with nothing filled in.
+    if (!key && !(prov === 'compatible' && /localhost|127\.0\.0\.1/.test(localStorage.getItem(BASE_LS) || ''))) {
+      aiNote(prov === 'gemini'
+        ? 'Add a free Gemini key to search by description — opening settings…'
+        : 'Add a key for your provider, or point the base URL at a local model — opening settings…', true);
+      openDrawer('settings'); $('#geminiKey').focus(); return;
+    }
+    if (prov === 'compatible' && !(localStorage.getItem(BASE_LS) || '').trim()) {
+      aiNote('Set the API base URL for your provider — opening settings…', true);
+      openDrawer('settings'); $('#aiBase').focus(); return;
     }
     // Asking something new replaces what came before, the way a chat does:
     // stop whatever is still running, empty the results, and clear the box so
@@ -2384,7 +2918,16 @@
     out.innerHTML = ''; stopScroll();
     aiNote('thinking…'); setBusyUI(true);
     try {
-      const d = await post('/api/gemini', { text, version: $('#version').value, key },
+      const d = await post('/api/gemini',
+                           // The model is per-provider, so it is always safe to
+                           // send: Gemini can never receive a Groq model name.
+                           // Blank means "server default".
+                           Object.assign(
+                             { text, version: $('#version').value, key,
+                               provider: prov, model: getModel() },
+                             prov === 'compatible'
+                               ? { base: localStorage.getItem(BASE_LS) || '' }
+                               : {}),
                            runCtl && runCtl.signal);
       if (token !== runToken) return;
       aiNote(d.notes ? d.notes : '');
@@ -2663,8 +3206,19 @@
   // The prompt box drives one engine by default (cubiomes). Some questions need
   // another, and being told to go click a panel is not an answer -- so a routed
   // prompt fills in that panel's controls and presses its button.
+  const TOOL_PANEL = {
+    casing: 'casing', village_building: 'village', exposed_treasure: 'exposed',
+    fortress_overlap: 'fortress', bedrock_outpost: 'bedrock', cool_stuff: 'cool',
+    spider_village: 'spider', floating: 'floating', struct_overlap: 'overlap',
+    hunt: 'hunt',
+  };
   async function routeTool(t, token) {
     const set = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
+    // Unfold the matching panel in the drawer without opening the drawer over
+    // the results: whoever wants to see or adjust what ran finds it already
+    // expanded rather than having to work out which of ten it was.
+    const panel = TOOL_PANEL[t.name];
+    if (panel) { const d = $('#tool-' + panel); if (d) d.open = true; }
     switch (t.name) {
       case 'casing':
         set('#tcCasing', String(t.casing || 'magma_block').replace(/^minecraft:/, ''));
@@ -2703,8 +3257,11 @@
         if (t.ench) set('#csEnch', t.ench);
         if (t.ench_min) set('#csEnchMin', t.ench_min);
         if (t.seed) { $('#csBtn').click(); return; }
-        aiNote('This reads a seed you already have — put it on the "What is cool in '
-             + 'my seed?" panel and press Find cool stuff.', true);
+        // Missing one field is not a reason to hand back directions. Open the
+        // tool, fill in what the model did give, and put the cursor in the gap.
+        aiNote('This reads a seed you already have — which seed? I have opened the '
+             + 'panel with everything else filled in.', true);
+        openTool('cool', '#csSeed');
         return;
       case 'spider_village':
         if (t.min) set('#svMin', t.min);
@@ -2712,14 +3269,20 @@
         $('#svBtn').click();
         return;
       case 'floating':
-        aiNote('This confirms one spot rather than searching — put the seed and the '
-             + 'position on the "Actually floating?" panel and press Check floating.', true);
+        if (t.seed) set('#flSeed', t.seed);
+        if (t.x != null) set('#flX', t.x);
+        if (t.z != null) set('#flZ', t.z);
+        aiNote('This confirms one spot rather than searching — give it the seed and '
+             + 'the position, then press Check floating.', true);
+        openTool('floating', t.seed ? '#flX' : '#flSeed');
         return;
       case 'struct_overlap':
         if (t.a) set('#soA', t.a);
         if (t.b) set('#soB', t.b);
-        aiNote('This needs a seed and both structure positions — fill them in on '
-             + 'the "Really overlapping?" panel and press Check overlap.', true);
+        if (t.seed) set('#soSeed', t.seed);
+        aiNote('This needs a seed and both structure positions — the rest is filled '
+             + 'in, then press Check overlap.', true);
+        openTool('overlap', '#soSeed');
         return;
       case 'hunt':
         set('#huWant', t.want || 1);
@@ -3084,12 +3647,21 @@
       const r = await fetch('/api/assets');
       if (r.ok) assets = await r.json();
       if (assets.backdrop) {
-        document.body.style.backgroundImage =
-          "linear-gradient(rgba(15,16,20,.82),rgba(15,16,20,.82)), url('/assets/backdrop.png')";
-        document.body.style.backgroundSize = '64px, 512px';
+        // The wash over the backdrop comes from --tint alongside the rest of
+        // the palette, rather than being a second hard-coded near-black here.
+        document.documentElement.style.setProperty('--backdrop-url', "url('/assets/backdrop.png')");
+        document.body.classList.add('has-backdrop');
       }
       if (assets.logo) {
         const src = '/assets/' + assets.logo;
+        // Small logo in the top bar, which is on screen the whole time.
+        const tb = $('#topBrand .logo');
+        if (tb) {
+          tb.textContent = '';
+          const im = el('img'); im.src = src; im.alt = '';
+          im.onerror = () => { tb.textContent = '🌱'; };
+          tb.append(im);
+        }
         // Big logo in the centre of the landing screen; fall back to the seed
         // emoji if the image is missing or broken.
         const hl = $('#heroLogo');
