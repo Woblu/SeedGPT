@@ -359,6 +359,9 @@
     border: 1px solid transparent; box-shadow: none; text-shadow: none;
     color: var(--ink-faint); font-size: 12px; opacity: 0; }
   .hist-row:hover .hist-del { opacity: 1; }
+  /* Hidden-until-hover meant touch and keyboard users never saw it. */
+  .hist-row:focus-within .hist-del { opacity: 1; }
+  @media (hover: none) { .hist-del { opacity: .7; } }
   .hist-del:hover:not(:disabled) { color: var(--redstone); filter: none; border-color: transparent; }
   .hist-empty { font-size: 12px; color: var(--ink-faint); padding: 6px; }
   .side-foot { padding: 10px 6px 2px; border-top: 1px solid var(--slot-edge);
@@ -1139,6 +1142,14 @@
     renderHistory();
   }
   const setHistory = h => { localStorage.setItem(HIST_LS, JSON.stringify(h)); renderHistory(); };
+  // Attach the query a prompt resolved to, so the entry can be replayed.
+  function rememberQuery(text, query, notes) {
+    const h = getHistory(), it = h.find(x => x.text === text);
+    if (!it) return;
+    it.query = JSON.parse(JSON.stringify(query)); delete it.query.budget; delete it.query.tool;
+    it.notes = notes || '';
+    try { setHistory(h); } catch (_) {}      // storage full: keep working without it
+  }
   function renderHistory() {
     const box = $('#history'); box.innerHTML = '';
     const h = getHistory();
@@ -1147,8 +1158,17 @@
     h.forEach((item, i) => {
       const row = el('div', 'hist-row');
       const b = el('button', 'hist-item', item.text);
-      b.title = item.text;
-      b.onclick = () => { $('#nl').value = item.text; closeSidebar(); submitPrompt(); };
+      // A remembered entry re-runs the query the AI produced last time --
+      // exactly, instantly and without another AI call. Re-asking cost a
+      // request and could come back as a DIFFERENT query.
+      b.title = item.query ? item.text + ' — re-runs the same query, no AI call' : item.text;
+      b.onclick = () => {
+        closeSidebar();
+        if (item.query) {
+          $('#nl').value = ''; aiNote(item.notes || '');
+          runSearch(JSON.parse(JSON.stringify(item.query)));
+        } else { $('#nl').value = item.text; submitPrompt(); }
+      };
       // A history you cannot prune is a history you stop reading.
       const x = el('button', 'hist-del', '✕');
       x.title = 'forget this one';
@@ -3333,6 +3353,7 @@
       // Defensive: a malformed tool field must not reach the C engine, which
       // would reject the query outright over a key it never asked for.
       if (d.query) delete d.query.tool;
+      if (d.query) rememberQuery(text, d.query, d.notes);
       // The failure this guards against actually happened: a coal-ore casing
       // request returned a note saying it had been routed to the casing tool,
       // and then ran a plain buried-treasure search. Prose claiming a route
