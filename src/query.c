@@ -2491,16 +2491,32 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
 static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                      const Match *m, Match *fixed, int *haveSpawn, Pos *spawn, LootCache *lc);
 
+// Does anything evaluated in this dimension need the biome generator? A slime
+// chunk is a Java-RNG test on the seed alone, so a slime-only query paid ~25 us
+// of applySeed per seed for a ~2 us check -- a tenfold tax on exactly the
+// queries (slime leaderboards) that scan the most seeds. Measuring from spawn
+// does need the generator, so that case still pays.
+static int dimNeedsGenerator(const Query *q, int dim)
+{
+    for (int i = 0; i < q->n; i++) {
+        const Cond *c = &q->cond[i];
+        if (c->dim != dim) continue;
+        if (c->type != CT_SLIME || c->parent == PARENT_SPAWN) return 1;
+    }
+    return 0;
+}
+
 int queryStage2(const Query *q, Generator *g, uint64_t worldSeed, Match *m, LootCache *lc)
 {
     // Outer loop over dimensions: applySeed (~25 us) is the dominant per-seed
     // cost, so pay it once per dimension rather than once per condition. A
-    // single-dimension query -- the common case -- pays exactly one.
+    // single-dimension query -- the common case -- pays exactly one, and a
+    // dimension with nothing that reads biomes pays none.
     Match fixed = *m;
     int haveSpawn = 0; Pos spawn = {0,0};
     for (int d = 0; d < q->ndims; d++) {
         int dim = q->dims[d];
-        applySeed(g, dim, worldSeed);
+        if (dimNeedsGenerator(q, dim)) applySeed(g, dim, worldSeed);
         if (!stage2Dim(q, g, dim, worldSeed, m, &fixed, &haveSpawn, &spawn, lc)) return 0;
     }
     fixed.spawn = spawn; fixed.haveSpawn = haveSpawn;
