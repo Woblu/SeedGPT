@@ -9,12 +9,19 @@
 #define MAX_TABLES 24
 
 // cubiomes' loot contexts are SINGLETONS: init_*() returns &staticContext, so
-// every thread (and every LootCache) shares one context per table. generate_loot
-// mutates that context's prng_state and generated_items, so concurrent rolls
-// race and produce nondeterministic counts. The table data itself is read-only
-// once built, so a single lock around the roll+read (and the lazy first init)
-// makes loot generation correct under threads. A roll is ~5 us and the biome/
-// structure work stays parallel, so the serialised section is a small fraction.
+// every thread (and every LootCache) shares one context per table, and
+// generate_loot mutates that context. Concurrent rolls raced and produced
+// nondeterministic counts, which a global lock around every roll fixed -- at
+// the price of serialising every roll in the program, which capped a loot
+// search at about twice single-thread speed however many threads ran.
+//
+// What a roll writes is small and all INSIDE the struct: prng_state,
+// generated_item_count and generated_items[27]. The pools, names and
+// functions it points to are read-only once built (generate_loot_pool reads
+// pool->... and lf->params, and writes only through the context's own fields).
+// So each thread takes a PRIVATE COPY of the struct (getCtx) and rolls it with
+// no lock at all. The lock remains only around init_*, whose first call builds
+// the shared tables and is not thread-safe.
 static volatile int g_loot_lock = 0;
 static inline void loot_lock(void)   { while (__atomic_exchange_n(&g_loot_lock, 1, __ATOMIC_ACQUIRE)) {} }
 static inline void loot_unlock(void) { __atomic_store_n(&g_loot_lock, 0, __ATOMIC_RELEASE); }
@@ -50,27 +57,32 @@ void lootCacheFree(LootCache *lc)
 {
     if (!lc) return;
     free(lc->pieces);
-    for (int i = 0; i < lc->n; i++) free(lc->names[i]);
-    // cubiomes loot contexts are heap-allocated by init_*; free_loot_table
-    // exists but freeing a context that init_* built from static tables can
-    // double-free shared arrays and crash. A worker holds one cache for the
-    // whole run (<=24 contexts), so leaking them is bounded and safe.
+    // Our private copies are plain structs we allocated; free those. Never
+    // free_loot_table: the arrays they point to belong to the shared context
+    // init_* built, and freeing those double-frees and crashes.
+    for (int i = 0; i < lc->n; i++) { free(lc->names[i]); free(lc->ctx[i]); }
     free(lc);
 }
 
 static LootTableContext *getCtx(LootCache *lc, int mc, const char *table)
 {
     if (lc->mc != mc) {          // version changed: cached tables no longer valid
-        for (int i = 0; i < lc->n; i++) free(lc->names[i]);
-        lc->n = 0;   // leak the old contexts (see lootCacheFree); bounded + safe
+        for (int i = 0; i < lc->n; i++) { free(lc->names[i]); free(lc->ctx[i]); }
+        lc->n = 0;
         lc->mc = mc;
     }
     for (int i = 0; i < lc->n; i++)
         if (!strcmp(lc->names[i], table)) return lc->ctx[i];
     if (lc->n >= MAX_TABLES) return NULL;
 
-    LootTableContext *ctx = NULL;
-    if (!init_loot_table_name(&ctx, table, mc) || !ctx) return NULL;
+    LootTableContext *shared = NULL;
+    loot_lock();                 // init_* builds shared static tables: not thread-safe
+    int ok = init_loot_table_name(&shared, table, mc) && shared;
+    loot_unlock();
+    if (!ok) return NULL;
+    LootTableContext *ctx = malloc(sizeof *ctx);
+    if (!ctx) return NULL;
+    *ctx = *shared;              // private mutable state; read-only tables shared
     lc->names[lc->n] = strdup(table);
     lc->ctx[lc->n] = ctx;
     lc->n++;
@@ -179,7 +191,7 @@ static int rpCountItem(LootCache *lc, int mc, uint64_t seed, int blockX, int blo
     int cx, cz;
     rpChestXZ(sv, blockX & ~15, blockZ & ~15, &cx, &cz);
     uint64_t lootSeed = rpLootSeed(mc, seed, sv, cx, cz);
-    loot_lock();
+    // getCtx returns this thread's private copy, so the roll needs no lock.
     LootTableContext *ctx = getCtx(lc, mc, "ruined_portal");
     int total = -1;
     if (ctx) {
@@ -194,7 +206,6 @@ static int rpCountItem(LootCache *lc, int mc, uint64_t seed, int blockX, int blo
                     total += ctx->generated_items[k].count;
         }
     }
-    loot_unlock();
     return total;
 }
 
@@ -223,7 +234,7 @@ int lootCountItem(LootCache *lc, int mc, uint64_t seed, int structType,
     if (n >= PIECE_CAP) return -1;
 
     int total = 0;
-    loot_lock();   // the loot contexts are shared singletons -- serialise rolls
+    // No lock: getCtx hands back this thread's private copy of each context.
     for (int i = 0; i < n; i++) {
         for (int c = 0; c < pieces[i].chestCount; c++) {
             const char *table = pieces[i].lootTables[c];
@@ -241,6 +252,5 @@ int lootCountItem(LootCache *lc, int mc, uint64_t seed, int structType,
                     total += ctx->generated_items[k].count;
         }
     }
-    loot_unlock();
     return total;
 }
