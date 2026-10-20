@@ -955,6 +955,17 @@ Condition types (use EXACTLY these keys):
     N of 20-30 is a big cave, 40+ is dramatic. NOTE a village is never INSIDE a
     cave -- villages generate on the surface -- so this is the honest reading of
     that request, and worth saying in notes.
+- On a floating island: {"id","structure":<name>,"floating":N,"within","of"}
+    SEARCHES for a structure standing on land with an air gap of at least N
+    blocks under it ("gap": how far out the gap is checked, default 24;
+    "sides": how many of 8 directions must be open, default 6). 1.18+
+    overworld, SLOW. Use this to FIND such seeds; the "floating" TOOL instead
+    confirms one spot the user already has.
+- Biome scan precision: "precision":"fast"|"fine"|"exact" on a biome or
+    biome_area condition. "fine" (default) samples every chunk; "exact" every
+    4-block cell -- use it for adjacency within ~32 blocks or very small
+    radii, where coarser sampling misses; "fast" for big radii when speed
+    matters more than recall.
 - Geode shape:    {"id","structure":"geode","size":N,"cracked":false,"within","of"}
     size is 3 or 4 (4 = the big one); "cracked":false = the RARE SEALED geode
     (1 in 20), "cracked":true = broken open (19 in 20, barely a filter).
