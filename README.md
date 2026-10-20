@@ -7,12 +7,35 @@ A Minecraft Java Edition **seed finder**: describe the world features you want, 
 ## Build
 
 ```sh
-./setup.sh                 # clone + pin the engine (first time only)
-./build.sh tools/find.c    # library + build/find.exe
-./test.sh                  # 105-check regression suite
+./setup.sh                 # clone + pin the engine, apply patches/ (first time only)
+./build.sh all             # library + every tool in tools/ -> build/*.exe
+./test.sh --quick          # regression suite without the slow MITM section (~3 min)
+./test.sh                  # everything (~8 min on 16 threads)
 ```
 
-Requires `clang`, `git`, and a JDK (for the verifiers). No `make`/`ninja` needed.
+Requirements:
+
+| | needed for |
+|---|---|
+| `clang`, `git`, `bash` | the engine and every tool. No `make`/`ninja`. On Windows, Git Bash. |
+| Python 3 | the web UI (`serve.py`, stdlib only) and the tier-2/3 scripts |
+| JDK 17+ | the cross-validation in `test.sh` (`tools/XVal.java`) |
+| JDK 21 | the 1.21.1 real-worldgen backend (`tier2-outpost/`) |
+| JDK 17 | the 1.16.5 backend and server (`tier2/`, `tier3-java/`) |
+
+**Platforms.** Developed and tested on Windows (clang targeting MSVC). The C code
+is portable through `src/platform.h` (Win32 threads/atomics/clocks there,
+pthreads and `clock_gettime` elsewhere) and `build.sh` links `-lm -pthread` off
+Windows, but **Linux and macOS builds have not been run yet** — the GitHub
+workflow in `.github/workflows/ci.yml` builds on `ubuntu-latest` the first time
+it is triggered. Binaries are named `*.exe` on every platform so every script
+finds them by one name.
+
+`./build.sh` records its compiler flags and rebuilds everything when they
+change. It compiles with `-ffp-contract=off`: Java never fuses `a*b+c` into one
+rounding, and with `-march=native` clang did, in 393 places in the noise code —
+enough to flip a biome or a block that sits on a threshold. `MARCH=x86-64-v2
+./build.sh all` builds binaries for a different machine.
 
 `setup.sh` pins cubiomes at a specific commit (`b12a532`, MC 26.2) rather than
 tracking `main`. Engine currency is the whole reason this project uses
@@ -56,7 +79,25 @@ Getting one is free:
 Prefer not to keep it in the browser? Set it in the environment before starting
 the server instead — `export GEMINI_API_KEY=AIza…` (or `$env:GEMINI_API_KEY` in
 PowerShell) — and the prompt box uses that. The manual builder needs no key at
-all. (The older `ask.py` path still uses Anthropic; the web prompt uses Gemini.)
+all.
+
+Any OpenAI-compatible provider works too (Groq, OpenAI, OpenRouter, DeepSeek, a
+local Ollama): choose it in settings and give a base URL and model. From the
+environment that is `AI_API_KEY` **together with** `AI_API_BASE` — an
+environment key is only ever sent to the environment's base URL, never to a URL
+a request names, because any web page can send requests to a local server.
+
+`ask.py` is the older command-line path (Anthropic API). Its grammar predates
+most condition types here; the web prompt is the maintained one.
+
+#### The local server only answers this page
+
+`serve.py` binds to 127.0.0.1, which keeps other machines out — but not other
+*web pages*: any site open in your browser can send requests to 127.0.0.1. So
+the API refuses requests whose `Host` is not this server, whose `Origin` or
+`Sec-Fetch-Site` is another site, or whose body is not JSON. curl and the UI
+pass untouched. `SEED_UI_PORT` changes the port; `SEED_UI_NO_BROWSER=1` stops it
+opening a tab.
 
 The interface is styled as a Minecraft GUI — beveled stone panels, item-slot
 condition cards, and a `☀ / ☾` toggle between a dark **Cave** theme and a
@@ -65,11 +106,27 @@ drop your own PNGs into [`assets/`](assets/README.md) to replace them (the tool
 bundles no Mojang textures). Nothing is required — the built-in look stands
 alone.
 
-Three conveniences for real use:
+While a search runs, a progress line shows seeds scanned, elapsed time, rate,
+time left and how many were found, and **each seed appears the moment it is
+found**. **Stop keeps them.** A search with no time budget of its own stops
+after about 2½ minutes and says so, with a **continue with the next seeds**
+button that resumes exactly where it stopped (nothing scanned twice, nothing
+skipped). Every result starts with what was understood — "Java 26.2 · looking
+for: Mansion ≤300 from origin · Village ≤400 from mansion" — with edit,
+estimate and share buttons, and the edition and version are always shown under
+the prompt. Coordinates are buttons: they open the map there, nether and end
+rows are tagged (a nether row also gives the overworld spot), and **/tp**
+copies a teleport that works from any dimension (`/execute in …`).
 
-- **Share** (top right) copies a link with the whole query encoded in the URL
-  hash. Opening it on any local instance rebuilds the builder exactly — the
-  server is loopback-only, so you share the *query*, not a hosted page.
+Conveniences for real use:
+
+- **Share** (on every result) copies a link with the query encoded in the URL
+  hash — the *exact* query, including fields the builder cannot show. Opening it
+  on any local instance rebuilds it — the server is loopback-only, so you share
+  the *query*, not a hosted page.
+- **Copy as record** writes a find up the way seedfinding records are listed:
+  seed, edition, the version searched (and that others were not checked), the
+  value for ranked runs, every coordinate with its /tp, and a Finder line.
 - **Saved searches** keeps named queries in your browser's local storage;
   click one to reload it.
 - **Export** on a result set writes the seeds and every coordinate to **CSV**
@@ -99,7 +156,22 @@ Or write the query yourself:
 
 ./build/find.exe queries/mansion-village.json --explain    # will this ever finish?
 ./build/find.exe queries/mansion-village.json --bias       # is scanning from 0 representative?
+./build/find.exe queries/mansion-village.json --seed glacier   # does THIS seed have it?
 ```
+
+Environment knobs: `FIND_SECONDS` (time budget), `FIND_OFFSET` (where to start —
+every run prints `covered : indices a..b -- resume with FIND_OFFSET=b`, a
+gap-free resume point, because threads take interleaved indices),
+`FIND_UPPERS` (sister seeds tried per structure seed, default 64, visited as a
+permutation so N tries are N different worlds), `FIND_STREAM` (print each hit
+as it is found), `FIND_TSV` (machine-readable hits). Several machines can split
+one range by giving each its own `FIND_OFFSET` block.
+
+**Seeds are read the way Minecraft reads them.** If the text is a valid signed
+64-bit number it is that seed; otherwise the seed is the text's Java
+`String.hashCode()` — so `glacier` is 108181935, and `18446744073709551615`,
+which overflows a long, is *hashed* (1823116549), not clamped. `--seed`, the
+UI's describe/map/check and `/api/check` all follow this rule.
 
 Query format:
 
@@ -136,7 +208,36 @@ spawn exactly. That turns a 2%-survival query into ~96%, so `origin` is the
 default and `spawn` is an informed choice. The End and Nether have no world
 spawn — using `"spawn"` there is rejected rather than silently misinterpreted.
 
-Forward references are fine — the planner resolves and orders them.
+Forward references are fine — the planner resolves and orders them. A
+condition measured from a parent whose position is only settled in pass 2 (a
+spawn-relative structure, a cluster, a biome, any scan) runs after it and is
+measured from where it finally landed.
+
+### Absence: `"not": true`
+
+```json
+{ "id": "o",  "biome": "ocean", "family": true, "within": 300, "of": "spawn", "not": true }
+{ "id": "nv", "structure": "village", "within": 600, "of": "mansion", "not": true }
+```
+
+The condition holds when there is **none** in range. It keeps the rule that a
+reported seed is never wrong:
+
+- a negated structure is checked against **every** placement attempt in range,
+  through the same gate as a positive match (exclusion zones, biome, 1.18
+  terrain floor) — so an attempt the game would not build does not count
+  against the seed, and pass 1 cannot reject on absence;
+- a negated biome scans **every 4-block cell**, because a coarse lattice can step
+  over a small patch and "none found" would then be a false positive. Keep its
+  radius to a few hundred blocks;
+- nothing can be measured from it, and it takes no count or variant flags.
+
+### Strict input
+
+A key the parser does not know is reported (`NOTE: condition "p": unknown key
+"radius" was ignored`) rather than silently skipped. A structure `within` above
+100,000 or a biome `within` above 10,000 is an error rather than a search that
+never returns — for a far-away search, put the radius on `"of": "<x>,<z>"`.
 
 ## Why the planner exists
 
@@ -318,16 +419,31 @@ done < /tmp/hits.tsv
 
 `tools/biomecheck.c` shows what "viable" actually resolved to for a seed.
 
-`./test.sh` runs the whole thing as a regression suite (105 checks, ~3 min): the
-cross-validation above, planner reordering *and* cost-based ordering, six error
-paths, same-type distinctness, nether/end queries including the end-city
-exclusion zone, biome-precision plumbing, a real search whose every seed is
-re-verified under the JDK reference, the loose-query warning, estimator
-calibration, `describe` round-tripping a found seed, the UI server's endpoints,
-and the hand-rolled PNG encoder (signature, chunk CRCs, zlib length). Each
-assertion has been
-confirmed to fail when the behaviour it checks is broken — a green run means
-something.
+`./test.sh` runs the whole thing as a regression suite (~8 min; `--quick` skips
+the MITM solver section, ~3 min): the cross-validation above, planner reordering
+*and* cost-based ordering, error paths, same-type distinctness, nether/end
+queries including the end-city exclusion zone, biome-precision plumbing, a real
+search whose every seed is re-verified under the JDK reference, the
+loose-query warning, estimator calibration, `describe` round-tripping a found
+seed, the UI server's endpoints and its request gate, the hand-rolled PNG
+encoder, and a section of regressions for every wrong answer found in review.
+It builds every tool and fails on compiler warnings. Skipped checks are counted
+as skipped, never as passed. Each assertion has been confirmed to fail when the
+behaviour it checks is broken — a green run means something.
+
+**How independent is each check?** Be precise about this, because it is easy to
+overclaim:
+
+- **Independent:** `XVal.java`/`Verify.java` (the JDK and the Minecraft Wiki, not
+  cubiomes) and the tier-2/tier-3 checks against Minecraft's own generator and
+  real servers.
+- **Same engine, separate path:** `checkloot`, `checkeyes`, `checkore`,
+  `checkportal`, `checkvariant`, `checkrpchest`, `checkbiome` re-derive a result
+  through a different code path than the search, which catches planner and
+  plumbing bugs — but they call the same cubiomes functions (and `checkore` the
+  same `oreScan`), so an engine bug passes both. That is exactly how 1.18+ loot
+  was computed for the wrong world for months while `checkloot` agreed with it:
+  both truncated the seed. Treat these as consistency checks.
 
 ### The last resort: a real world (tier 3)
 
@@ -375,7 +491,17 @@ Supported structures: `desert_pyramid`, `jungle_temple`, `igloo`, `outpost`,
 `/api/lootitems` and in the UI dropdown, so you can only ask for something that
 can actually appear there. `count` aggregates across every chest in an instance,
 and the search scans **all** instances within the radius — a farther pyramid
-with the diamond still counts.
+with the diamond still counts. Only instances the game really builds are
+rolled (biome, outpost exclusion and the 1.18 terrain floor all apply), and a
+leaderboard ranked on loot takes the best chest in range, not the first.
+
+**From 1.18 a chest depends on all 64 bits of the seed.** The population seed
+that seeds each chest is built with Xoroshiro from the whole world seed, so two
+sister seeds with identical structures roll different chests. Until 2026-10-20
+the search (and `checkloot`, which agreed with it) rolled 1.18+ chests from the
+48-bit structure seed — the chests of a different world. Pre-1.18 is unaffected:
+Java's LCG drops the upper bits anyway. The fixed path has not yet been checked
+against a real 1.18+ server; confirm a find in game before relying on it.
 
 Rolling a chest is ~5 us, cheap next to the ~42 us structure viability check,
 so a loot search costs about the same as a plain structure search. What makes a
@@ -1158,6 +1284,55 @@ unlikely but possible, and `--explain` estimates that honestly. Only genuinely
 impossible things are refused, or the tool would be lying about what it cannot
 do.
 
+## Strongholds: how close to the surface
+
+```json
+{ "id": "s", "stronghold": "exposed", "within": 3000, "of": "origin" }
+{ "id": "s", "stronghold": true, "max_depth": 12, "land": false, "within": 3000 }
+```
+
+`"stronghold"` takes `"exposed"` (no ground over it), `"shallow"` (≤ 4 blocks),
+`true`/`"any"`, or a number of blocks; `max_depth` and `min_roof_y` set the
+bounds directly. Depth is measured **per piece**, against the ground over that
+piece — a stronghold sprawls 100+ blocks, and the part that breaks the surface
+is rarely the start chunk — and the reported `/tp` goes to that shallowest
+piece. Dry land is the default (`"land": false` admits strongholds open to the
+sea floor), because most strongholds that reach the surface do so under water.
+
+The rules that bound it, refused up front rather than searched forever:
+
+- **From 1.18 no stronghold roof is above y=52** (`moveBelowSeaLevel` starts it
+  64 blocks lower than it used to). Dry land starts at y=62, so on land there are
+  always ≥ 10 blocks over one: "shallow" and "exposed" on land are impossible
+  from 1.18, and the planner says so. On the sea floor they are possible.
+- Pre-1.18 heights come from `patches/stronghold-accurate-y.patch` (cubiomes
+  pins the start piece at Y=64). Against a real 1.16.5 server: 15/15 exact below
+  y=52, 2 of 3 above it — tall strongholds are flagged "verify".
+- `patches/stronghold-1-17-filler-corridor.patch` moves one corridor rule from
+  1.17 to 1.18, which turns 3/12 into 8/12 of DylanDC14's published 1.17.1
+  exposed strongholds into confirmed hits. **Not yet checked on a real 1.17
+  server**, and it changes 1.17 stronghold pieces (and so 1.17 eye counts and
+  stronghold loot) too.
+
+## What has been checked, and against what
+
+"Engine" means cubiomes' model (cross-checked internally); "real" means checked
+against Minecraft's own generator or a running server. Versions are where the
+check was made; others are expected to follow the same code but were not run.
+
+| feature | checked against | versions |
+|---|---|---|
+| structure positions (9 types, linear + triangular) | JDK reference from Minecraft Wiki constants (`XVal.java`), 3,881/3,881 | 1.18 settings through 26.2 |
+| 1.18 pyramid / jungle temple / mansion terrain rules | real 1.21.1 generator, 110 positions: 0 false positives | 1.21.1 |
+| outpost–village exclusion zone | Minecraft's own structure_set data | 1.14+ |
+| village buildings (smiths etc.) | real 1.16.5 jigsaw generation (tier 2) | 1.16.5 |
+| buried treasure exposure / casing | real 1.21.1 generator; bedrock casing on a real 1.16.5 server | 1.16.5, 1.21.1 |
+| stronghold heights | real 1.16.5 server (15/15 below y=52) | 1.16.5 (1.17 patch: published finds only) |
+| ruined portal chest seed + chest offset | MCUtils / FeatureUtils | 1.17.1 |
+| chest loot, 1.18+ | engine only. Rolled from the full 64-bit seed since 2026-10-20 (it was the 48-bit structure seed before, i.e. another world). **Confirm one on a real 1.18+ server before relying on it** | — |
+| biome conditions, 1.17 and earlier | engine only. Before 2026-10-20 they matched nothing (a NULL layer lookup); fixed and covered by tests | — |
+| Bedrock | biomes match Java (13/15 points); structures do NOT (0/14) | BDS 1.26 |
+
 ## Known limitations
 
 - **Structure overlap uses nominal footprints.** The per-structure boxes are
@@ -1167,32 +1342,34 @@ do.
   [Structure overlap](#structure-overlap).
 - **A leaderboard is only as good as its range.** "Best in 2 million seeds" is
   the honest claim; nothing here searches the whole 2⁶⁴ space, and the ranked
-  header prints the range for exactly that reason.
-- **Biome conditions sample a lattice, so recall is below 100%.** Measured
-  against an exhaustive quart-resolution scan (`tools/biomerecall.c`): at radius
-  400, `fast` (64-block) recovers 90.4% of matching seeds and `fine` (16-block,
-  the default) 96.2%; both fall at smaller radii. `exact` is 100% but costs
-  200×. Set `"precision": "fast"|"fine"|"exact"` per biome condition. Run
-  `biomerecall` for the radius and biome you care about rather than trusting a
-  single number.
+  header prints the range for exactly that reason. A ranked run scores every
+  sister seed it tries for a structure seed and keeps the best of them, so a
+  64-bit metric (ore, height, loot, area) is a real maximum over what was tried.
+- **Biome presence samples a lattice, so recall is below 100%.** `fast` samples
+  every 4th chunk centre, `fine` (the default) every chunk centre, `exact` every
+  4-block quart — the same grid an exhaustive check uses. Measured at radius 400
+  before quart sampling was exact: fast 90.4%, fine 96.2% (`tools/biomerecall.c`);
+  both fall at smaller radii. Absence (`"not"`) always uses every quart.
 - **Same-type matching is greedy, nearest-first.** Two conditions of the same
   structure type are guaranteed to match distinct instances, but the assignment
   is greedy: if an earlier condition claims the instance a later one needed, the
   seed is rejected even though some other assignment would have worked. Another
   false negative, never a false positive.
-- **`UPPER_SAMPLES = 64`** — only 64 of the 65,536 upper-bit variants are tried
-  per surviving structure seed, so most valid world seeds are never enumerated.
-  Fine for finding *a* seed; wrong for exhaustive search.
+- **Sister seeds: 64 of 65,536 by default.** Each surviving structure seed tries
+  `FIND_UPPERS` (default 64) of its sister world seeds, visited as a permutation.
+  Right for finding *a* seed; wrong when the biome half of a query is rare — raise
+  `FIND_UPPERS` (or the UI's `uppers`) for that.
+- **World spawn is an estimate** (cubiomes' `getSpawn` does not simulate grass
+  placement). Structure positions are exact; distances from spawn are not.
+- **Ruined portals are not placement-checked by the engine**; ~50% of
+  plains/mountain portals are buried (`"surface": true` filters those exactly).
 - **cubiomes omits `nextInt`'s rejection loop** (vanilla has it). Divergence
   ~3.7e-9 per call. Real, negligible.
-- **1.18+ false positives**: per cubiomes' README, desert pyramids, jungle
-  temples and mansions can fail to generate based on surface height, which
-  `isViableStructurePos` does not model.
-- **No GPU acceleration, deliberately.** Pass 1 is pure integer math and would
-  port to CUDA cleanly — but `--explain` reports the pass-1/pass-2 time split,
-  and pass 1 is **0.0–0.2%** of runtime on every query that actually returns
-  results. Pass 2 (biome generation) is the real cost and does not port. Amdahl
-  caps the whole exercise at a fraction of a percent.
+- **No GPU acceleration, deliberately — for now.** Pass 1 is pure integer math
+  and would port to CUDA cleanly, but on every query here pass 1 is **0.0–0.2%**
+  of runtime: pass 2 (biome generation) dominates and does not port. That changes
+  for targets solved by reversing the RNG (dungeons, chest stacks), where the
+  whole filter is integer math — see `docs/reversal-roadmap.md`.
 
 ## Engine
 
@@ -1201,8 +1378,18 @@ supports through MC 26.2. **Not** `Cubitect/cubiomes` (dormant since 2024-11-10,
 caps at 1.21 — it cannot generate current worlds), and **not** `cubiomes-viewer`
 (GPL-3.0; linking it would force this project GPL).
 
-`cubiomes/compat/sys/time.h` is a local shim — clang here targets
-`x86_64-pc-windows-msvc`, which has no POSIX headers.
+`setup.sh` pins it at `b12a532` and applies `patches/`:
+
+| patch | why |
+|---|---|
+| `fortress-piece-bound` | `getFortressPieces` ignored its buffer bound; 84% of fortresses overran it |
+| `stronghold-accurate-y` | real stronghold piece heights (upstream pins Y=64) |
+| `stronghold-1-17-filler-corridor` | the 1.17 corridor rule (see Strongholds) |
+| `terrainnoise-region-stride` | `generateRegion` indexed its noise cache by width instead of height: rectangular regions overflowed or returned wrong heights. `tools/checkregion` is the check. Upstream bug |
+
+On Windows `setup.sh` also writes `cubiomes/compat/sys/time.h` (clang there
+targets `x86_64-pc-windows-msvc`, which has no POSIX headers); elsewhere it does
+not, because it would shadow the real header.
 
 > Note: `cubiomes/tests.c` is **not** a test suite. Its `main()` is entirely
 > commented out and it exits 0 with no output. Don't mistake it for verification.
@@ -1210,41 +1397,48 @@ caps at 1.21 — it cannot generate current worlds), and **not** `cubiomes-viewe
 ## Layout
 
 ```
-serve.py            local web UI server (loopback only) + /assets static route
-ui/index.html       the UI (Minecraft GUI theme, emoji/PNG icon system)
-assets/             optional user-provided structure/item PNGs (see its README)
-ask.py              English -> Claude -> condition JSON -> find
-test.sh             regression suite (16 checks; ./test.sh -v to see commands)
-build.sh            build everything
-src/query.{h,c}     condition tree, cost model, planner, evaluator
-src/explain.{h,c}   selectivity sampling; predicts the funnel before searching
-tools/find.c        CLI: parse -> plan -> search | --explain | --bias
-tools/describe.c    given a seed, print spawn + nearby structures & their biomes
-tools/map.c         render a seed's biome map as a PNG (no image library)
-tools/checkpng.py   validates that PNG is spec-correct, not just non-empty
-tools/checkspawn.py re-verifies spawn-relative hits against describe.exe
-tools/confidence.c  measures how much the engine actually verifies each structure
-tools/checkeyes.c   recomputes an end portal's eye count independently
-tools/checkloot.c   recomputes a structure's chest loot independently
-tools/checkportal.c recomputes a ruined portal's buried/surface variant independently
-tools/checkore.c    recounts a material's ore blocks around a point independently
-tools/checkvariant.c re-reads a structure's variant flags (zombie/basement/giant)
-tools/checkrpchest.c re-derives a ruined portal's chest position + loot independently
-src/invert.{h,c}    structure placement run backwards: which seeds put it HERE
-src/mitm.{h,c}      meet-in-the-middle: all of a cluster's constraints at once
-tools/invert.c      CLI + two-sided soundness/completeness proof for the inverter
-tools/quad.c        quad-hut hunt by solving the first structure, testing the rest
-tools/mitm.c        quad-hut hunt by solving all eight constraints | --verify
-patches/            the one upstream fix this needs (applied by setup.sh)
-src/ore.{h,c}       ore-density counting (generateOres), material-by-block matching
-tools/lootitems.c   dumps the items each structure's loot tables can produce
-src/loot.{h,c}      per-thread loot-table cache + item counting
-tools/vocab.c       dumps valid structures/biomes per version (ask.py reads this)
-tools/xval.c        cubiomes side of cross-validation
-tools/XVal.java     independent JDK reference
-tools/Verify.java   re-verify individual seeds
-tools/biomecheck.c  inspect what "viable" meant
-tools/biomerecall.c measures biome-scan recall vs an exhaustive scan
-queries/*.json      example queries
-cubiomes/           the engine (git clone)
+serve.py              local web UI server (loopback only, refuses other origins)
+ui/index.html         the UI (Minecraft GUI theme, emoji/PNG icon system)
+assets/               optional user-provided structure/item PNGs (see its README)
+ask.py                older command-line NL path (Anthropic); the web prompt is current
+build.sh              build: ./build.sh [all | tools/x.c]
+setup.sh              clone + pin cubiomes, apply patches/
+test.sh               regression suite (./test.sh [-v] [--quick] [--kill])
+.github/workflows/    CI: Linux build + smoke, Windows build + quick suite
+patches/              fixes applied to the pinned cubiomes (see Engine)
+src/query.{h,c}       condition tree, cost model, planner, evaluator
+src/explain.{h,c}     selectivity sampling; predicts the funnel before searching
+src/platform.h        Win32 threads/atomics/clocks, or their POSIX equivalents
+src/seed.h            seed text -> seed, the way Minecraft parses it
+src/biomeat.h         the surface-biome lookup, correct on every version
+src/terrain.{h,c}     exact 1.18+ surface heights (generateRegion, world Y)
+src/ore.{h,c}         ore density, veins, exposure, Y bands
+src/loot.{h,c}        loot-table cache + item counting (full 64-bit seed)
+src/cactus.{h,c}      cactus height simulation
+src/climate.{h,c}     temperature pre-filter for biome scans
+src/invert.{h,c}      structure placement run backwards: which seeds put it HERE
+src/mitm.{h,c}        meet-in-the-middle: all of a cluster's constraints at once
+src/solve.{h,c}       candidate enumeration for tight clusters
+tools/find.c          CLI: parse -> plan -> search | --explain | --bias | --seed
+tools/describe.c      given a seed, print spawn + nearby structures & their biomes
+tools/map.c           render a seed's biome map as a PNG (no image library)
+tools/nearest.c       the Java /locate: nearest structure or biome to a point
+tools/locate.c        every instance of a structure in a radius
+tools/check*.c        re-derive one result through a separate path (see Verification)
+tools/checkregion.c   generateRegion: rectangular regions vs 1x1 (patch check)
+tools/xval.c          cubiomes side of the cross-validation
+tools/XVal.java       independent JDK reference
+tools/Verify.java     re-verify individual seeds against the JDK reference
+tools/mitm.c, quad.c  quad-hut enumeration and hunt
+tools/invert.c        CLI + two-sided soundness/completeness proof for the inverter
+tools/biomerecall.c   biome-scan recall vs an exhaustive scan
+tools/mcsrc.py        search the decompiled Minecraft sources (local use only)
+tier2/                real Minecraft 1.16.5 worldgen, headless (village buildings)
+tier2-outpost/        real Minecraft 1.21.1 worldgen, headless (outposts, treasure, ore)
+tier3-java/           drives real Java servers as an oracle; hunts and censuses
+tier3-bedrock/        drives Bedrock Dedicated Server as an oracle (/locate, probes)
+docs/                 design notes (meet-in-the-middle, cactus, reversal roadmap)
+queries/*.json        example queries
+packs/                a small resource pack (book-title rename), unrelated to search
+cubiomes/             the engine (git clone, not tracked)
 ```
