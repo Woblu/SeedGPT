@@ -379,6 +379,13 @@ def parse_seeds(out: str) -> list:
                 {"x2": int(m.group(1)), "z2": int(m.group(2)), "structure2": m.group(3),
                  "gap": int(m.group(4)), "area": int(m.group(5))})
             continue
+        # A negated condition ("not": true) has no position: it reports what
+        # was checked and from where.
+        m = re.match(r"^\s+(\w+)\s+none within (\d+) of (\S+)\s*$", line)
+        if m and cur:
+            cur.setdefault("absent", []).append(
+                {"id": m.group(1), "within": int(m.group(2)), "of": m.group(3)})
+            continue
         # A stronghold reports its roof, then (indented, no id) the teleport to
         # its shallowest piece. Unparsed, these rows fell through to "raw" and
         # a stronghold hit showed no coordinates at all.
@@ -800,10 +807,18 @@ Condition types (use EXACTLY these keys):
 
 - Biome present:  {"id","biome":<name>,"within","of"}  (of may be another biome:
     "biome B within D of biome A" = the two biomes are adjacent.)
-- Biome area:     {"id","biome_area":<name>,"pct":P,"within","of"}  P = min %% of
+- ABSENCE: add "not":true to a structure or biome condition to require that
+    there is NONE within the radius: "no ocean near spawn" ->
+    {"id":"o","biome":"ocean","family":true,"within":300,"of":"spawn","not":true};
+    "a mansion with no village within 600" -> the mansion, plus
+    {"id":"nv","structure":"village","within":600,"of":"<mansion id>","not":true}.
+    A "not" condition has no position: nothing may use it as "of", and it takes
+    no count or variant flags. A biome absence scans every 4-block cell, so it
+    is slow -- keep its radius modest (a few hundred blocks).
+- Biome area:     {"id","biome_area":<name>,"pct":P,"within","of"}  P = min % of
     the disc that is this biome (a huge mushroom island, sprawling mesa).
 - Island spawn:   {"id","island":true,"of":"spawn","pct":P,"within":R}  the spawn
-    (default "of":"spawn") is on LAND and ocean covers >= P%% (default 75) of the
+    (default "of":"spawn") is on LAND and ocean covers >= P% (default 75) of the
     disc of radius R (default 256) -- a small survival island. Higher pct / larger
     within = smaller, more isolated island. Use for "island / survival island /
     stranded / surrounded by ocean" spawns.

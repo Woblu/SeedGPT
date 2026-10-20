@@ -322,6 +322,16 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
                mm->stronghold.x, mm->stronghold.z, mm->eyes, EYE_FRAMES);
     for (int c = 0; c < q->n; c++) {
         const Cond *cd = &q->cond[c];
+        if (cd->negate) {
+            // An absence has no coordinates; say what was checked, from where.
+            char ref[48];
+            if (cd->parent == PARENT_SPAWN)      snprintf(ref, sizeof ref, "spawn");
+            else if (cd->parent == PARENT_AT)    snprintf(ref, sizeof ref, "%d,%d", cd->atX, cd->atZ);
+            else if (cd->parent >= 0)            snprintf(ref, sizeof ref, "%s", q->cond[cd->parent].id);
+            else                                 snprintf(ref, sizeof ref, "origin");
+            printf("   %-14s none within %d of %s\n", cd->id, cd->within, ref);
+            continue;
+        }
         if (cd->type == CT_LOOT) {
             const char *it = cd->lootItem;
             if (!strncmp(it, "minecraft:", 10)) it += 10;

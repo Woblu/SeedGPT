@@ -1450,6 +1450,124 @@ else
   bad "the spawn caveat is wrong" "spawn query=$sy (want >=1) origin query=$sn (want 0)"
 fi
 
+# ------------------------------------------- regressions from the 2026-10 review
+# Each of these was a wrong answer the review found by reading the code. They
+# are cheap (seconds), and each one fails if its fix is reverted.
+section "review fixes (loot seed, old biomes, parents, absence, seeds)"
+
+# 1.18+ chest loot depends on all 64 bits; the finder used to roll it from the
+# 48-bit structure seed, i.e. for a different world. Same pyramid, full seed vs
+# its structure seed: different chests on 1.21, identical on 1.16.
+LS=-4172144997902289642; LM=158581879764246
+l21a=$(./build/checkloot.exe $LS desert_pyramid 2384 -1168 1.21 2>/dev/null | head -1 | cut -d: -f2-)
+l21b=$(./build/checkloot.exe $LM desert_pyramid 2384 -1168 1.21 2>/dev/null | head -1 | cut -d: -f2-)
+l16a=$(./build/checkloot.exe $LS desert_pyramid 2384 -1168 1.16 2>/dev/null | grep -v getMin | head -1 | cut -d: -f2-)
+l16b=$(./build/checkloot.exe $LM desert_pyramid 2384 -1168 1.16 2>/dev/null | grep -v getMin | head -1 | cut -d: -f2-)
+if [ -n "$l21a" ] && [ "$l21a" != "$l21b" ] && [ -n "$l16a" ] && [ "$l16a" = "$l16b" ]; then
+  ok "1.18+ loot is rolled from the full 64-bit seed (1.16 still 48-bit)"
+else
+  bad "loot seed: the full and 48-bit seeds should differ on 1.21 and agree on 1.16" \
+      "1.21 same=$([ "$l21a" = "$l21b" ] && echo yes || echo no) 1.16 same=$([ "$l16a" = "$l16b" ] && echo yes || echo no)"
+fi
+
+# Biome conditions on 1.17 and earlier matched NOTHING: every lookup went
+# through a NULL layer entry. Plains near origin is in most seeds.
+for v in 1.12 1.16 1.17; do
+  printf '{"version":"%s","conditions":[{"id":"p","biome":"plains","within":600}]}\n' "$v" > /tmp/sc_test/old_$v.json
+  nhit=$(./build/find.exe /tmp/sc_test/old_$v.json 60 4 2>/dev/null | grep -c '^SEED')
+  [ "$nhit" -ge 5 ] && ok "biome conditions match on $v ($nhit seeds)" \
+                    || bad "biome conditions match nothing on $v" "hits=$nhit"
+done
+
+# A biome measured from a SPAWN-RELATIVE village must be measured from the
+# village that is reported (found around the true spawn in pass 2), not the
+# pass-1 one near origin.
+printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":300,"of":"spawn"},{"id":"b","biome":"plains","within":100,"of":"v"}]}\n' > /tmp/sc_test/par.json
+pbad=$(FIND_SECONDS=20 ./build/find.exe /tmp/sc_test/par.json 400000 8 2>/dev/null | awk '
+  $1=="b" {n++; if ($(NF-2)+0 > 100 || $NF != "v") bad++}
+  END {print (n+0) " " (bad+0)}')
+pn=${pbad% *}; pb=${pbad#* }
+[ "$pn" -ge 3 ] && [ "$pb" -eq 0 ] \
+  && ok "a child is measured from its parent's FINAL position ($pn hits)" \
+  || bad "child measured from a stale parent position" "hits=$pn wrong=$pb"
+
+# Absence. Every reported mansion must have no village within 600 that the
+# game generates -- re-checked with nearest, which locates by its own path.
+printf '{"version":"1.21","conditions":[{"id":"m","structure":"mansion","within":800},{"id":"nv","structure":"village","within":600,"of":"m","not":true}]}\n' > /tmp/sc_test/neg.json
+nn=0; nb=0
+while read -r sd mx mz; do
+  nn=$((nn+1))
+  d=$(./build/nearest.exe "$sd" 1.21 structure village "$mx" "$mz" 2>/dev/null | grep -oE 'dist=[0-9]+' | cut -d= -f2)
+  [ -n "$d" ] && [ "$d" -le 600 ] && nb=$((nb+1))
+done < <(FIND_SECONDS=15 ./build/find.exe /tmp/sc_test/neg.json 200000 8 2>/dev/null | python -c "
+import sys, re
+s = None
+for l in sys.stdin:
+    m = re.match(r'^SEED (-?\d+)', l)
+    if m: s = m.group(1); continue
+    m = re.match(r'^\s+m\s+x=\s*(-?\d+) z=\s*(-?\d+)', l)
+    if m and s: print(s, m.group(1), m.group(2)); s = None
+" | head -6)
+[ "$nn" -ge 3 ] && [ "$nb" -eq 0 ] \
+  && ok "\"not\": no generated village within 600 of any reported mansion ($nn checked)" \
+  || bad "\"not\" let a village through" "checked=$nn violated=$nb"
+printf '{"version":"1.21","conditions":[{"id":"nv","structure":"village","within":300,"not":true},{"id":"p","biome":"plains","within":100,"of":"nv"}]}\n' > /tmp/sc_test/negp.json
+./build/find.exe /tmp/sc_test/negp.json 1 1 2>&1 | grep -q "nothing can be measured from it" \
+  && ok "nothing can be measured from a \"not\" condition" \
+  || bad "a \"not\" condition was accepted as a parent" ""
+
+# Seeds are read the way Minecraft reads them: a long if it is one, else
+# String.hashCode -- so an out-of-range number is HASHED, not clamped.
+printf '{"version":"1.21","conditions":[{"id":"p","biome":"plains","within":600}]}\n' > /tmp/sc_test/sd.json
+s1=$(./build/find.exe /tmp/sc_test/sd.json --seed glacier 2>/dev/null | grep -oE '^--- seed -?[0-9]+' | grep -oE -- '-?[0-9]+$')
+s2=$(./build/find.exe /tmp/sc_test/sd.json --seed 18446744073709551615 2>/dev/null | grep -oE '^--- seed -?[0-9]+' | grep -oE -- '-?[0-9]+$')
+[ "$s1" = "108181935" ] && [ "$s2" = "1823116549" ] \
+  && ok "--seed follows Minecraft: text and out-of-range numbers hash (String.hashCode)" \
+  || bad "--seed parsing differs from Minecraft" "glacier=$s1 (want 108181935) overflow=$s2 (want 1823116549)"
+
+# A misspelt key used to be skipped silently, searching the default instead.
+printf '{"version":"1.21","conditions":[{"id":"p","biome":"plains","radius":100}]}\n' > /tmp/sc_test/uk.json
+./build/find.exe /tmp/sc_test/uk.json 1 1 2>/dev/null | grep -q 'unknown key "radius"' \
+  && ok "unknown condition keys are reported" || bad "unknown key ignored silently" ""
+
+# 1.18+ strongholds cannot be shallow under DRY land (roof <= 52, land >= 62);
+# the old refusal message even recommended "shallow". On the sea floor they can.
+printf '{"version":"1.21","conditions":[{"id":"s","stronghold":"shallow","within":3000}]}\n' > /tmp/sc_test/shs.json
+printf '{"version":"1.21","conditions":[{"id":"s","stronghold":"exposed","land":false,"within":3000}]}\n' > /tmp/sc_test/she.json
+./build/find.exe /tmp/sc_test/shs.json 1 1 2>&1 | grep -q 'least ground over one is 10' \
+  && ./build/find.exe /tmp/sc_test/she.json 1 1 2>&1 | grep -q '^plan' \
+  && ok "1.18+ stronghold bounds: shallow-on-land refused with the real limit, sea floor allowed" \
+  || bad "stronghold 1.18 bounds wrong" ""
+
+# Non-square terrain regions (the cubiomes stride patch).
+./build/checkregion.exe >/tmp/sc_test/region.txt 2>&1 \
+  && ok "generateRegion agrees with 1x1 generation on rectangular regions" \
+  || bad "generateRegion disagrees on a rectangular region (stride patch missing?)" "$(head -3 /tmp/sc_test/region.txt)"
+
+# find interleaves its threads, so a stopped run has one clean resume point.
+printf '{"version":"1.21","conditions":[{"id":"b","biome":"jungle","within":250}]}\n' > /tmp/sc_test/cov.json
+FIND_SECONDS=2 ./build/find.exe /tmp/sc_test/cov.json 500000000 8 2>/dev/null | grep -qE '^covered *: indices 0\.\.[0-9]+ -- resume with FIND_OFFSET=[1-9]' \
+  && ok "a time-budgeted run reports a gap-free resume offset" \
+  || bad "no resume offset after a budgeted run" ""
+
+# The web server must refuse other origins and non-JSON posts (CSRF / DNS
+# rebinding), and still accept the UI's own requests.
+RUIPORT=8792
+SEED_UI_PORT=$RUIPORT SEED_UI_NO_BROWSER=1 python serve.py >/tmp/sc_test/ui2.log 2>&1 &
+ruipid=$!
+for _ in $(seq 1 40); do
+  curl -s -m 1 "http://127.0.0.1:$RUIPORT/api/vocab?v=1.21" >/dev/null 2>&1 && break; sleep 0.25
+done
+QJ='{"query":{"version":"1.21","conditions":[{"id":"v","structure":"village","within":400}]}}'
+c_ok=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$QJ" "http://127.0.0.1:$RUIPORT/api/plan")
+c_txt=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: text/plain' -d "$QJ" "http://127.0.0.1:$RUIPORT/api/plan")
+c_org=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'Origin: https://example.com' -d "$QJ" "http://127.0.0.1:$RUIPORT/api/plan")
+c_hst=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: attacker.example:$RUIPORT" "http://127.0.0.1:$RUIPORT/api/vocab?v=1.21")
+kill "$ruipid" 2>/dev/null; wait "$ruipid" 2>/dev/null
+[ "$c_ok" = 200 ] && [ "$c_txt" = 403 ] && [ "$c_org" = 403 ] && [ "$c_hst" = 403 ] \
+  && ok "server refuses cross-origin, non-JSON and foreign-Host requests" \
+  || bad "server request gate" "json=$c_ok text=$c_txt origin=$c_org host=$c_hst (want 200/403/403/403)"
+
 # ---------------------------------------------------------------- summary
 section "summary"
 printf '\n\033[1m%d passed, %d skipped, %d failed\033[0m (%ss total)\n' \

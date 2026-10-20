@@ -156,6 +156,15 @@ static double viabCost(const Query *q, int i)
         double n = 2.0 * (c->within / 16.0) + 1.0;   // one RNG call per chunk
         return n * n * NS_SLIME_CHUNK + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
     }
+    if (c->type == CT_STRUCTURE && c->negate) {
+        // Proving absence checks every attempt in range, not just the nearest.
+        StructureConfig sc;
+        double n = 1.0;
+        if (getStructureConfig(c->structType, q->mc, &sc))
+            n = 2.0 * (c->within / (sc.regionSize * 16.0)) + 1.0;
+        double per = NS_VIABLE + (hasPlacementRule(q->mc, c->structType) ? 16.0 * NS_TERRAIN_CELL : 0.0);
+        return n * n * per + (c->parent == PARENT_SPAWN ? NS_SPAWN : 0.0);
+    }
     if (c->type == CT_STRUCTURE) {
         double cost = NS_VIABLE;
         // 1.18+ surface rule: four terrain columns, each needing the four noise
@@ -423,7 +432,7 @@ static const char *const COND_KEYS[] = {
     "count", "cracked", "deepslate", "exact", "exposed", "eyes", "family",
     "floating", "gap", "giant", "height", "id", "island", "land", "loot",
     "maxDepth", "max_depth", "metric", "minRoofY", "min_roof_y", "of", "ore",
-    "overlap", "pad", "pct", "precision", "relief", "ship", "sides", "size",
+    "not", "overlap", "pad", "pct", "precision", "relief", "ship", "sides", "size",
     "slime", "spread", "stronghold", "structure", "surface", "vein", "within",
     "y_max", "y_min",
     "note", "notes", "label", "comment", "description",
@@ -528,6 +537,9 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
 
         x = cJSON_GetObjectItem(e, "within");
         c->within = (x && cJSON_IsNumber(x)) ? x->valueint : 1000;
+
+        x = cJSON_GetObjectItem(e, "not");
+        c->negate = (x && cJSON_IsTrue(x)) ? 1 : 0;
 
         // How `within` measures. Default stays EUCLIDEAN so no existing query
         // changes meaning; "chebyshev" is opt-in and is what a seed finder means
@@ -1280,6 +1292,26 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 goto done;
             }
         }
+        if (c->negate) {
+            if (c->type != CT_STRUCTURE && c->type != CT_BIOME) {
+                snprintf(err, errlen,
+                    "condition \"%s\": \"not\" applies to a structure or a biome", c->id);
+                goto done;
+            }
+            // "No zombie village within 500" would need a different meaning
+            // per flag; "not" means no instance at all, so it stands alone.
+            if (c->type == CT_STRUCTURE &&
+                (c->structMin > 1 || c->surfaceOnly || c->reqAbandoned || c->reqBasement ||
+                 c->reqGiant || c->reqExposed || c->reqShip || c->caveBelow > 0 ||
+                 c->floatVoid > 0 || c->geodeSize > 0 || c->reqCracked)) {
+                snprintf(err, errlen,
+                    "condition \"%s\": \"not\" means no %s at all in range, so it "
+                    "cannot be combined with a count or a variant",
+                    c->id, struct2str(c->structType));
+                goto done;
+            }
+            if (c->type == CT_BIOME) c->scanStep = SCAN_EXACT;   // sound absence
+        }
         unknownKeys(e, c->id, q->warn, sizeof q->warn);
     }
     q->n = n;
@@ -1369,6 +1401,9 @@ int queryFeasible(const Query *q, char *err, size_t errlen)
 
     for (int i = 0; i < q->n; i++) {
         const Cond *c = &q->cond[i];
+        // "No village within 100 of the outpost" is not impossible -- it is
+        // always TRUE. None of the proofs below apply to an absence.
+        if (c->negate) continue;
 
         // An overlap condition naming both is impossible outright: their
         // footprints can never meet if they are 11 chunks apart at best.
@@ -1499,6 +1534,18 @@ int queryPlan(Query *q, char *err, size_t errlen)
     // not flag them, and nothing may be measured FROM one, because pass 1 would
     // then be filtering a radius around a position it cannot know.
     for (int i = 0; i < q->n; i++) {
+        // A negated condition asserts absence: it has no position, so nothing
+        // may be measured from it, and it runs only in pass 2.
+        if (q->cond[i].negate) {
+            if (q->cond[i].isParent) {
+                snprintf(err, errlen,
+                    "condition \"%s\" says something is NOT there, so it has no "
+                    "position and nothing can be measured from it", q->cond[i].id);
+                return 1;
+            }
+            done[i] = 1;
+            continue;
+        }
         if (q->cond[i].type != CT_STRUCTURE) continue;
         if (!isPopulationFeature(q->cond[i].structType)) continue;
         if (q->cond[i].isParent) {
@@ -1756,6 +1803,15 @@ int queryScore(const Query *q, const Match *m)
 const char *condDesc(const Query *q, int i, char *buf, size_t n)
 {
     const Cond *c = &q->cond[i];
+    if (c->negate) {
+        // The positive wording, negated -- one description to maintain.
+        static _Thread_local Query qc;
+        qc = *q; qc.cond[i].negate = 0;
+        char inner[192];
+        condDesc(&qc, i, inner, sizeof inner);
+        snprintf(buf, n, "NO %s", inner);
+        return buf;
+    }
     if (c->type == CT_EYES) {
         snprintf(buf, n, "end portal with >= %d of %d eyes", c->eyesMin, EYE_FRAMES);
         return buf;
@@ -2918,6 +2974,33 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             continue;
         }
 
+        // Absence: every attempt in range must fail to generate. Each goes
+        // through the same gate as a positive match (exclusion zone, biome,
+        // 1.18 terrain), so "no mansion" means no mansion the game builds --
+        // a phantom attempt does not count against the seed.
+        if (c->type == CT_STRUCTURE && c->negate) {
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
+            StructureConfig sc;
+            if (!getStructureConfig(c->structType, q->mc, &sc)) return 0;
+            int pop = isPopulationFeature(c->structType);
+            double span = sc.regionSize * 16.0;
+            int r0x = (int)floor((centre.x - c->within) / span);
+            int r1x = (int)floor((centre.x + c->within) / span);
+            int r0z = (int)floor((centre.z - c->within) / span);
+            int r1z = (int)floor((centre.z + c->within) / span);
+            int64_t lim = (int64_t)c->within * c->within;
+            for (int rx = r0x; rx <= r1x; rx++)
+            for (int rz = r0z; rz <= r1z; rz++) {
+                Pos p;
+                if (!getStructurePos(c->structType, q->mc, pop ? worldSeed : s48, rx, rz, &p))
+                    continue;
+                if (dmet(p, centre, c->metric) > lim) continue;
+                if (generatesAt(q, c->structType, s48, worldSeed, g, p)) return 0;
+            }
+            fixed->pos[k] = centre;
+            continue;
+        }
+
         // Cluster: re-count viable instances within the radius of the true
         // reference (spawn resolved here) and require at least structMin. Pass 1
         // only counted geometry, so this is where the biome check happens.
@@ -3126,6 +3209,14 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                     if (!c->isParent) break;   // presence-only: first hit is enough
                 }
                 if (hit && !c->isParent) break;
+            }
+            if (c->negate) {
+                // Absence: any matching quart in the disc rejects the seed.
+                // (scanStep is forced to every quart for a negated biome, so
+                // "none seen" is "none there", not "none on the lattice".)
+                if (hit) return 0;
+                fixed->pos[k] = centre;
+                continue;
             }
             if (!hit) return 0;
             // The sampled point itself, so checkbiome at this position reads

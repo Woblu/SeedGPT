@@ -189,6 +189,13 @@ typedef struct {
                             // cluster anywhere in `within`), not just within
                             // `within` of the reference. 0 = anchored cluster.
     int      isParent;      // some other condition is measured from this one
+    // "not": true -- the condition holds when there is NO such structure or
+    // biome within `within` of its reference ("no ocean within 300 of spawn").
+    // Checked entirely in pass 2, against every attempt that really generates,
+    // because an attempt existing in pass 1 does not prove the structure does.
+    // A negated biome always scans every quart: a coarse lattice can step over
+    // a small patch, and "none found" would then be a false positive.
+    int      negate;
 } Cond;
 
 // Biome scan precision. A biome condition samples points across the disc; the

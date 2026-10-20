@@ -1813,7 +1813,9 @@
 
       const g2 = el('div', 'grid' + (c.kind === 'biome' ? '' : ' full'));
       const of = el('select');
-      const opts = ['origin', 'spawn', ...conds.filter(o => o.id !== c.id).map(o => o.id)];
+      // A condition that says something is NOT there has no position, so it
+      // cannot be measured from.
+      const opts = ['origin', 'spawn', ...conds.filter(o => o.id !== c.id && !o.not).map(o => o.id)];
       opts.forEach(o => {
         const label = o === 'origin' ? 'from origin (0,0)'
                     : o === 'spawn'  ? 'from world spawn (slower)'
@@ -1835,8 +1837,18 @@
       }
       d.append(g2);
 
+      // "not": there must be NONE of this in range -- "no ocean within 300".
+      const nrow = el('label', 'chk');
+      const ncb = el('input'); ncb.type = 'checkbox'; ncb.checked = !!c.not;
+      ncb.onchange = e => { c.not = e.target.checked; render(); };
+      nrow.append(ncb, document.createTextNode(' none within this radius (must NOT be here)'));
+      d.append(nrow);
+      if (c.not) d.append(el('div', 'note', c.kind === 'biome'
+        ? 'Absence is checked on every 4-block cell in the radius, so a small patch cannot slip between samples. Slower than a presence check; nothing can be measured from it.'
+        : 'Every placement attempt in range must fail to generate in the real game (biome and terrain rules included). Nothing can be measured from it.'));
+
       // Structure cluster count: >= N of this structure within the radius.
-      if (c.kind === 'structure') {
+      if (c.kind === 'structure' && !c.not) {
         const g3 = el('div','grid');
         const cl = el('div');
         cl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
@@ -1863,7 +1875,7 @@
       }
 
       // Variant filters, each offered only on the structure that has it.
-      if (c.kind === 'structure' && (c.count || 1) === 1) {
+      if (c.kind === 'structure' && (c.count || 1) === 1 && !c.not) {
         VARIANTS.filter(v => v.applies(c.name)).forEach(v => {
           const row = el('label','chk');
           const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!c[v.key];
@@ -1988,7 +2000,10 @@
           return h;
         }
         const o = { id: c.id, within: c.within, of: c.of };
-        if (c.kind === 'structure') {
+        if (c.kind === 'structure' && c.not) {
+          o.structure = c.name; o.not = true;               // absence: no count/variant
+        }
+        else if (c.kind === 'structure') {
           o.structure = c.name;
           if ((c.count || 1) > 1) {                            // cluster
             o.count = c.count;
@@ -2001,7 +2016,7 @@
             if (c.sealed === 'cracked') o.cracked = true;
           }
         }
-        else { o.biome = c.name; o.precision = c.precision; }
+        else { o.biome = c.name; o.precision = c.precision; if (c.not) o.not = true; }
         return o;
       })
     };
@@ -2467,6 +2482,7 @@
   // the interpretation at the top of every result, with ways to change it.
   const ofLabel = of => !of || of === 'origin' ? 'origin' : of === 'spawn' ? 'spawn' : of;
   function condText(c) {
+    if (c.not) return 'NO ' + condText(Object.assign({}, c, { not: false }));
     const w = c.within !== undefined ? ` ≤${c.within} from ${ofLabel(c.of)}` : '';
     if (c.eyes !== undefined) return `end portal with ≥${c.eyes} eyes`;
     if (c.loot) return `${c.loot.count || 1}+ ${pretty(c.loot.item)} in a ${pretty(c.loot.structure)} chest${w}`;
@@ -2628,6 +2644,10 @@
         idCell('structure', o.structure, `${o.count}× ${pretty(o.structure)}`),
         goCell(o.x, o.z, o.structure),
         o.tight ? `${o.count} within ${o.spread} of each other` : `${o.count} within ${o.within}`));
+      (s.absent || []).forEach(a => {
+        const td = el('td', 'd', '—');
+        row(idCell('structure', '', 'None: ' + a.id), td, `none within ${a.within} of ${a.of}`);
+      });
       (s.places || []).forEach(p => row(
         idCell('structure', condName[p.id] || p.id, pretty(condName[p.id] || p.id)),
         goCell(p.x, p.z, condName[p.id]),
@@ -3192,6 +3212,7 @@
         const o = { id: c.id, kind: 'structure', name: c.structure,
           within: c.within || 400, of: c.of || 'origin', precision: 'fine' };
         ['surface', 'giant', 'abandoned', 'basement', 'ship'].forEach(k => { if (c[k]) o[k] = true; });
+        if (c.not) o.not = true;
         if (c.count) o.count = c.count;
         if (c.spread) o.spread = c.spread;
         if (c.structure === 'geode') {
@@ -3201,8 +3222,10 @@
         }
         return o;
       }
-      return { id: c.id, kind: 'biome', name: c.biome || 'plains',
+      const b = { id: c.id, kind: 'biome', name: c.biome || 'plains',
         within: c.within || 400, of: c.of || 'origin', precision: c.precision || 'fine' };
+      if (c.not) b.not = true;
+      return b;
     });
     nextId = conds.reduce((m, c) =>
       Math.max(m, parseInt(String(c.id).replace(/\D/g, '')) || 0), conds.length) + 1;
