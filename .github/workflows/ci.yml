@@ -1,0 +1,51 @@
+# Build and test on GitHub's machines instead of the developer's.
+#
+# The test suite takes ~8 minutes of every core, and it used to run only on the
+# one Windows PC this project is written on -- which is also someone's daily
+# machine. Linux had never been built at all (src/platform.h makes it
+# possible; this is what proves it).
+#
+# Manual and pull-request triggers only: nothing runs until someone asks.
+name: build and test
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: engine (pinned cubiomes + patches)
+        run: ./setup.sh
+      - name: build every tool
+        run: ./build.sh all
+      - name: smoke
+        run: |
+          printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":400}]}\n' > /tmp/q.json
+          ./build/find.exe /tmp/q.json 20000 2 | tee /tmp/out.txt
+          grep -q '^SEED' /tmp/out.txt
+          ./build/checkregion.exe
+          printf '{"version":"1.16","conditions":[{"id":"p","biome":"plains","within":600}]}\n' > /tmp/b.json
+          test "$(./build/find.exe /tmp/b.json 60 2 | grep -c '^SEED')" -ge 5
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: engine (pinned cubiomes + patches)
+        run: ./setup.sh
+      - name: build every tool
+        run: ./build.sh all
+      - name: test suite (quick tier)
+        run: ./test.sh --quick
