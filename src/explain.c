@@ -23,7 +23,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
-#include <windows.h>
+#include "platform.h"
 
 #ifndef MASK48             // finders.h defines the same mask
 #define MASK48 ((1ULL << 48) - 1)

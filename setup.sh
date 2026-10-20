@@ -26,6 +26,17 @@ echo "cubiomes pinned at ${PIN:0:12} ($(git -C cubiomes log -1 --format=%ad --da
 
 # clang here targets x86_64-pc-windows-msvc, which has no POSIX <sys/time.h>.
 # cubiomes/tests.c includes it and uses clock_gettime; this shim supplies both.
+#
+# Windows ONLY. cubiomes/compat is on the include path for every compile, so on
+# Linux or macOS this file would shadow the real <sys/time.h> -- which system
+# headers include themselves -- and drag <windows.h> into a build that has none.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ;;
+  *) rm -rf cubiomes/compat
+     echo "non-Windows: no compat shim needed"
+     SKIP_SHIM=1 ;;
+esac
+if [ -z "${SKIP_SHIM:-}" ]; then
 mkdir -p cubiomes/compat/sys
 cat > cubiomes/compat/sys/time.h <<'SHIM'
 /* Shim for building cubiomes with clang targeting x86_64-pc-windows-msvc,
@@ -58,6 +69,7 @@ static inline int clock_gettime(clockid_t clk, struct timespec *ts)
 SHIM
 
 echo "compat shim written"
+fi
 
 # Upstream's getFortressPieces takes a buffer bound, stores it in env->nmax and
 # never reads it -- so a fortress with more pieces than the caller allocated

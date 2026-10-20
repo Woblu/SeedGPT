@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <windows.h>
+#include "platform.h"
 
 #define K    0x5deece66dULL
 #define B    0xbULL

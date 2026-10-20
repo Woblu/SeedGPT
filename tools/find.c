@@ -19,7 +19,7 @@
 #include <math.h>
 #include <limits.h>
 #include <inttypes.h>
-#include <windows.h>
+#include "platform.h"
 
 #define MAX_HITS      12
 // How many of a structure seed's 65536 sister world seeds to try before giving

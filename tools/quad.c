@@ -35,7 +35,7 @@
 #include <string.h>
 #include <math.h>
 #include <inttypes.h>
-#include <windows.h>
+#include "platform.h"
 
 typedef struct {
     int mc, st, spread;

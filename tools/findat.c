@@ -28,7 +28,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <math.h>
-#include <windows.h>
+#include "platform.h"
 
 #define UPPER_TRIES 64
 
