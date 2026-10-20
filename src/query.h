@@ -235,6 +235,11 @@ typedef struct {
     // and every generator this query creates has to be told about it.
     int  largeBiomes;
 
+    // Non-fatal parse findings -- keys the parser does not know -- for the
+    // caller to print. A misspelt "withn" used to be skipped silently, and the
+    // condition searched its default radius instead.
+    char warn[512];
+
     // --- leaderboard ("what is the biggest X anywhere?") ---
     //
     // A normal query is a FILTER: every condition is pass/fail and the search

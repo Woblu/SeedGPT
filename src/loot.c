@@ -160,23 +160,25 @@ static void rpChestXZ(const StructureVariant *sv, int minBlockX, int minBlockZ,
     *cz = minBlockZ + rz;
 }
 
-static uint64_t rpLootSeed(int mc, uint64_t s48, const StructureVariant *sv,
+// `seed` is the full world seed: on 1.18+ the population seed depends on all
+// 64 bits (see loot.h).
+static uint64_t rpLootSeed(int mc, uint64_t seed, const StructureVariant *sv,
                            int chestX, int chestZ)
 {
     StructureSaltConfig ss;
     if (!getStructureSaltConfig(Ruined_Portal, mc, sv->biome, &ss)) return 0;
-    uint64_t pop = getPopulationSeed(mc, s48, chestX & ~15, chestZ & ~15);
+    uint64_t pop = getPopulationSeed(mc, seed, chestX & ~15, chestZ & ~15);
     CREATE_RANDOM_SOURCE(rnd, mc <= MC_1_17);
     rnd.setSeed(rnd.state, pop + ss.decoratorIndex + 10000ULL * ss.generationStep);
     return rnd.nextLong(rnd.state);          // no pre-consumption for ruined portal
 }
 
-static int rpCountItem(LootCache *lc, int mc, uint64_t s48, int blockX, int blockZ,
+static int rpCountItem(LootCache *lc, int mc, uint64_t seed, int blockX, int blockZ,
                        const StructureVariant *sv, const char *item)
 {
     int cx, cz;
     rpChestXZ(sv, blockX & ~15, blockZ & ~15, &cx, &cz);
-    uint64_t lootSeed = rpLootSeed(mc, s48, sv, cx, cz);
+    uint64_t lootSeed = rpLootSeed(mc, seed, sv, cx, cz);
     loot_lock();
     LootTableContext *ctx = getCtx(lc, mc, "ruined_portal");
     int total = -1;

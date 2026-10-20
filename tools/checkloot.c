@@ -6,6 +6,7 @@
 #include "util.h"
 #include "loot/loot_tables.h"
 #include "loot/loot_table_context.h"
+#include "biomeat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,8 +49,8 @@ int main(int argc, char **argv)
     applySeed(&g, dim, seed);
 
     StructureVariant sv;
-    int biome = getBiomeAt(&g, 0, (bx>>4)*4+2, 319>>2, (bz>>4)*4+2);
-    getVariant(&sv, type, mc, seed & ((1ULL<<48)-1), bx, bz, biome);
+    int biome = chunkBiome(&g, bx, bz);
+    getVariant(&sv, type, mc, seed, bx, bz, biome);
     StructureSaltConfig ss;
     if (!getStructureSaltConfig(type, mc, -1, &ss)) { fprintf(stderr, "no salt\n"); return 1; }
 
@@ -59,7 +60,8 @@ int main(int argc, char **argv)
     enum { PIECE_CAP = 1024 };
     Piece *pieces = malloc((size_t)PIECE_CAP * sizeof(Piece));
     if (!pieces) { fprintf(stderr, "out of memory\n"); return 3; }
-    int n = getStructurePieces(pieces, PIECE_CAP, type, ss, &sv, mc, seed & ((1ULL<<48)-1), bx, bz);
+    // The FULL seed: on 1.18+ chest loot seeds depend on all 64 bits (loot.h).
+    int n = getStructurePieces(pieces, PIECE_CAP, type, ss, &sv, mc, seed, bx, bz);
     if (n < 0) { fprintf(stderr, "engine declined to build pieces\n"); return 1; }
     if (n >= PIECE_CAP) { fprintf(stderr, "piece buffer full -- count would be short\n"); return 1; }
 

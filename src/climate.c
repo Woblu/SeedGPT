@@ -21,11 +21,23 @@ int climatePlan(const Query *q, ClimatePlan *cp)
         if (c->type != CT_BIOME && c->type != CT_BIOME_AREA) continue;
         if (c->dim != DIM_OVERWORLD) continue;   // limits are overworld-only
 
-        const int *lim = getBiomeParaLimits(q->mc, c->biomeId);
-        if (!lim) continue;                      // unknown biome, no claim made
-
-        int64_t lo = (int64_t)lim[0] - CLIMATE_MARGIN;   // temperature is the
-        int64_t hi = (int64_t)lim[1] + CLIMATE_MARGIN;   // first of six pairs
+        // The window is the UNION over every biome the condition accepts. A
+        // family ("ocean", "badlands") is many biomes, and gating it on the
+        // representative alone rejected points where a sibling -- a warm or a
+        // frozen ocean -- would have matched: a silent false negative from a
+        // filter whose whole claim is that it loses nothing. Any member with
+        // no known limits means no claim can be made for the condition.
+        int64_t lo = INT64_MAX, hi = INT64_MIN, known = 1;
+        for (int id = 0; id < 256 && known; id++) {
+            if (c->biomeIsSet ? !c->biomeSet[id] : id != c->biomeId) continue;
+            const int *lim = getBiomeParaLimits(q->mc, id);
+            if (!lim) { known = 0; break; }
+            if (lim[0] < lo) lo = lim[0];       // temperature is the first of
+            if (lim[1] > hi) hi = lim[1];       // six (lo, hi) pairs
+        }
+        if (!known || lo > hi) continue;         // unknown biome, no claim made
+        lo -= CLIMATE_MARGIN;
+        hi += CLIMATE_MARGIN;
 
         // Not every biome is defined by temperature. Mushroom fields are carved
         // out of continentalness and occur at any temperature at all; for those

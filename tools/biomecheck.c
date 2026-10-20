@@ -1,3 +1,4 @@
+#include "biomeat.h"
 // Sanity-check what "viable" actually meant: print the biome cubiomes' own
 // viability test looks at, plus a naive surface probe for contrast.
 //
@@ -16,7 +17,7 @@ static int viabilityBiome(Generator *g, int blockX, int blockZ)
 {   // matches the 1.18+ surface sampling isViableStructurePos uses for the
     // grouped overworld structures: scale 0, quart-y 319>>2 (near build height)
     int chunkX = blockX >> 4, chunkZ = blockZ >> 4;
-    return getBiomeAt(g, 0, chunkX * 4 + 2, 319 >> 2, chunkZ * 4 + 2);
+    return surfaceBiomeQ(g, chunkX * 4 + 2, chunkZ * 4 + 2);
 }
 
 int main(int argc, char **argv)

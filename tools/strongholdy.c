@@ -64,13 +64,17 @@ int main(int argc, char **argv)
 
     while (nextStronghold(&sh, &g) > 0) {
         int64_t dx = sh.pos.x, dz = sh.pos.z;
-        // sh.dist is the NEXT ring distance in chunks. Same termination locate.c
-        // uses: rings march outward, so once the next one is comfortably past
-        // the radius nothing later can fall back inside it.
-        if (sh.dist * 16.0 > (double)radius * 2.0 + 2048.0)
-            break;
-        if (dx * dx + dz * dz > lim2)
+        // sh.dist is the NEXT stronghold's distance in chunks, sh.pos the
+        // CURRENT one's. Rings march outward, so once the next is comfortably
+        // past the radius nothing later can fall back inside it -- but the
+        // current one must be tested first. Breaking before testing it threw
+        // away an in-range stronghold whenever the next ring cleared the cutoff
+        // (the bug the engine fixed in its own ring walk).
+        int pastLast = (sh.dist * 16.0 > (double)radius * 2.0 + 2048.0);
+        if (dx * dx + dz * dz > lim2) {
+            if (pastLast) break;
             continue;
+        }
         int cnt = getStrongholdPiecesOpt(pieces, MAXP, mc, seed,
                                          sh.pos.x >> 4, sh.pos.z >> 4, 1);
         if (cnt <= 0) continue;

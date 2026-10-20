@@ -25,7 +25,9 @@
 #include <string.h>
 #include <windows.h>
 
+#ifndef MASK48             // finders.h defines the same mask
 #define MASK48 ((1ULL << 48) - 1)
+#endif
 // Must match tools/find.c's DEFAULT. The real searcher can be raised with
 // FIND_UPPERS, in which case the estimate below is conservative -- it predicts
 // fewer hits than a raised run will find, never more.
@@ -97,8 +99,13 @@ static DWORD WINAPI workerB(LPVOID arg)
         for (int p = 0; p < s->probesEach; p++) {
             uint64_t up = (splitmix64(&s->rngState) >> 16) & 0xFFFF;
             s->tried++;
-            // queryStage2 applies the seed itself, once per dimension.
-            if (queryStage2(s->q, &g, (up << 48) | s->seeds[i], &s->matches[i], lc)) s->passed++;
+            // queryStage2 applies the seed itself, once per dimension. It
+            // writes the match back on success -- including the cached eye
+            // count -- so every probe starts from a fresh copy of pass 1's
+            // match; reusing one made later sisters inherit an earlier
+            // sister's portal and inflated eye-count estimates.
+            Match mt = s->matches[i];
+            if (queryStage2(s->q, &g, (up << 48) | s->seeds[i], &mt, lc)) s->passed++;
             // A fine/exact biome scan costs milliseconds, so a fixed probe
             // budget can run for minutes. Stop on wall clock instead and
             // report the smaller sample honestly.

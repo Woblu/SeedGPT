@@ -12,6 +12,7 @@
 #include "explain.h"
 #include "climate.h"
 #include "util.h"
+#include "seed.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -70,7 +71,7 @@ static void rankOffer(const Query *q, uint64_t ws, const Match *m, int score)
 
 typedef struct {
     const Query *q;
-    uint64_t lo, hi;
+    uint64_t lo, hi, stride;   // indices lo, lo+stride, ... below hi
     // When the query has a tight-cluster condition, `cand` holds structure seeds
     // that src/solve.c already knows satisfy its geometry, and [lo,hi) indexes
     // that list instead of counting seeds. Everything downstream is unchanged:
@@ -82,15 +83,33 @@ typedef struct {
     int nhits;
 } Job;
 
-static volatile LONG g_found = 0;
+// 64-bit: a permissive hit stream passes 2^31 matches in about an hour, and a
+// 32-bit counter then wraps negative and every thread stops on "found enough"
+// without a word.
+static volatile LONG64 g_found = 0;
 static volatile LONG64 g_scanned = 0;   // total seeds scanned across all threads
-static int g_want = MAX_HITS;
+static LONG64 g_want = MAX_HITS;
 static uint64_t g_offset = 0;   // FIND_OFFSET: index base, so runs can resume
 // Stream mode (env FIND_STREAM): emit "@TICK <seed>" heartbeats so the web UI
 // can show the seeds being scanned scroll past live. Time-throttled per thread
 // so the rate is readable regardless of how fast the query scans.
 static int g_stream = 0;
 static int g_hitstream = 0;   // FIND_HITSTREAM: print every hit, uncapped
+
+static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv);
+static void writeTsv(const Query *q, uint64_t ws, const Match *mm, FILE *tsv);
+
+// In stream mode a hit is printed the moment it is found, in the same SEED
+// block the end-of-run report uses, so a reader can show it immediately and --
+// the part that matters -- keep it when the search is stopped or killed. Before
+// this, results existed only in the final report, and stopping a 30-minute run
+// at minute 29 threw away everything it had found. Caller holds g_lock.
+static void emitHit(const Query *q, uint64_t ws, const Match *m)
+{
+    printf("SEED %" PRId64 "\n", (int64_t)ws);
+    printHit(q, ws, m, NULL);
+    fflush(stdout);
+}
 
 // Time budget (env FIND_SECONDS). A range is a poor way to ask for "keep
 // looking while I make coffee": how many seeds that buys depends entirely on
@@ -163,7 +182,7 @@ static DWORD WINAPI worker(LPVOID arg)
     // seeds" means what it says.
     int wholeSeed = (j->q->ngeom == 0);
     if (wholeSeed) {
-        for (uint64_t i = j->lo; i < j->hi; i++) {
+        for (uint64_t i = j->lo; i < j->hi; i += j->stride) {
             if (g_found >= g_want) break;
             if (outOfTime(j->scanned)) break;
             j->scanned++;
@@ -189,21 +208,22 @@ static DWORD WINAPI worker(LPVOID arg)
             j->pass2++;
 
             if (j->q->rankTop > 0) {
+                // Not counted against g_want: a leaderboard never stops early.
                 rankOffer(j->q, ws, &m, queryScore(j->q, &m));
-                InterlockedIncrement(&g_found);
                 continue;
             }
             EnterCriticalSection(&g_lock);
             if (j->nhits < MAX_HITS) { j->hits[j->nhits].ws = ws; j->hits[j->nhits].m = m; j->nhits++; }
             if (g_hitstream) { printf("HIT %lld %d %d\n", (long long)ws, m.pos[0].x, m.pos[0].z); fflush(stdout); }
-            InterlockedIncrement(&g_found);
+            else if (g_stream && g_found < g_want) emitHit(j->q, ws, &m);
+            InterlockedIncrement64(&g_found);
             LeaveCriticalSection(&g_lock);
         }
         lootCacheFree(lc);
         return 0;
     }
 
-    for (uint64_t idx = j->lo; idx < j->hi; idx++) {
+    for (uint64_t idx = j->lo; idx < j->hi; idx += j->stride) {
         uint64_t s48 = j->cand ? j->cand[idx] : idx;
         if (g_found >= g_want) break;
         if (outOfTime(j->scanned)) break;
@@ -232,28 +252,44 @@ static DWORD WINAPI worker(LPVOID arg)
         // Scatter the upper 16 bits. Trying up=0 first made the reported seed
         // literally equal the structure seed -- so a scan from 0 returned
         // "128", "146", ... clustered at thread starts. Any upper value is
-        // equally valid, so pick them pseudo-randomly per seed.
-        uint64_t ustate = s48 * 0x9E3779B97F4A7C15ULL + 0xD1B54A32D192ED03ULL;
+        // equally valid, so visit them in a pseudo-random order per seed.
+        //
+        // The order is a PERMUTATION of the 65536 sisters: start + t*step with
+        // an odd step is a bijection mod 2^16, so the first N tried are N
+        // different worlds. Drawing each one independently, as this used to,
+        // repeated ~3% of the default 64 and left over a third of the sisters
+        // unvisited even at FIND_UPPERS=65536.
+        uint64_t h = s48 * 0x9E3779B97F4A7C15ULL + 0xD1B54A32D192ED03ULL;
+        h ^= h >> 31; h *= 0xBF58476D1CE4E5B9ULL; h ^= h >> 29;
+        uint64_t ustart = h & 0xFFFF, ustep = ((h >> 16) & 0xFFFF) | 1;
+
+        // Ranked search scores EVERY sister tried, then offers only the best of
+        // them. Stopping at the first sister that passed made the board "the
+        // first viable world per structure seed", which for ore, height, loot or
+        // biome area -- anything the upper 16 bits change -- is not the best of
+        // anything. One entry per structure seed still keeps a single layout
+        // from flooding the table with near-identical variants.
+        int ranked = j->q->rankTop > 0;
+        Match m1 = m, best;
+        int bestScore = INT_MIN; uint64_t bestWs = 0; int haveBest = 0;
         for (int t = 0; t < g_uppers; t++) {
-            ustate ^= ustate >> 30; ustate *= 0xBF58476D1CE4E5B9ULL;
-            ustate ^= ustate >> 27; ustate *= 0x94D049BB133111EBULL;
-            ustate ^= ustate >> 31;
-            uint64_t up = ustate & 0xFFFF;
+            uint64_t up = (ustart + (uint64_t)t * ustep) & 0xFFFF;
             uint64_t ws = (up << 48) | s48;
             j->applies++;
             // queryStage2 applies the seed itself, once per dimension the query
-            // touches -- the caller must not applySeed here.
+            // touches -- the caller must not applySeed here. It overwrites the
+            // match on success, so each sister starts from pass 1's.
+            m = m1;
             if (!queryStage2(j->q, &g, ws, &m, lc)) continue;
             j->pass2++;
 
-            // Ranked search: every survivor is a leaderboard candidate, and the
-            // scan keeps going. Breaking here (rather than trying more upper
-            // bits) keeps one structure seed from flooding the table with 64
-            // near-identical variants of the same world.
-            if (j->q->rankTop > 0) {
-                rankOffer(j->q, ws, &m, queryScore(j->q, &m));
-                InterlockedIncrement(&g_found);
-                break;
+            if (ranked) {
+                int sc = queryScore(j->q, &m);
+                if (!haveBest || sc > bestScore) {
+                    bestScore = sc; bestWs = ws; best = m; haveBest = 1;
+                }
+                if (outOfTime(j->scanned)) break;
+                continue;
             }
 
             EnterCriticalSection(&g_lock);
@@ -262,10 +298,12 @@ static DWORD WINAPI worker(LPVOID arg)
             // (condition 0's matched position), uncapped -- for tier-2 pipelines
             // that need thousands of candidates, not the 12 the array holds.
             if (g_hitstream) { printf("HIT %lld %d %d\n", (long long)ws, m.pos[0].x, m.pos[0].z); fflush(stdout); }
-            InterlockedIncrement(&g_found);
+            else if (g_stream && g_found < g_want) emitHit(j->q, ws, &m);
+            InterlockedIncrement64(&g_found);
             LeaveCriticalSection(&g_lock);
             break;
         }
+        if (haveBest) rankOffer(j->q, bestWs, &best, bestScore);
     }
     j->climgate = climateGated();     // thread-local, so read them here
     j->climskip = climateSkipped();
@@ -435,17 +473,22 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
         // results that look wrong in game.
         int spawnRel = (cd->parent == PARENT_SPAWN && mm->haveSpawn);
         int atRel    = (cd->parent == PARENT_AT);
-        int64_t refx = spawnRel ? mm->spawn.x : atRel ? cd->atX : 0;
-        int64_t refz = spawnRel ? mm->spawn.z : atRel ? cd->atZ : 0;
+        int condRel  = (cd->parent >= 0);
+        int64_t refx = spawnRel ? mm->spawn.x : atRel ? cd->atX
+                     : condRel ? mm->pos[cd->parent].x : 0;
+        int64_t refz = spawnRel ? mm->spawn.z : atRel ? cd->atZ
+                     : condRel ? mm->pos[cd->parent].z : 0;
         int64_t dx = p.x - refx, dz = p.z - refz;
         // The label has to name the reference actually used. A search centred a
         // million blocks out reported "1441772 from origin" -- true, and useless:
         // it reads as a miss when the structure is 400 blocks from where it was
-        // asked for.
+        // asked for. The same went for "village within 300 of the mansion",
+        // which printed the village's distance from origin under that label.
         char refname[48];
-        if (spawnRel)   snprintf(refname, sizeof refname, "from spawn");
-        else if (atRel) snprintf(refname, sizeof refname, "from %d,%d", cd->atX, cd->atZ);
-        else            snprintf(refname, sizeof refname, "from origin");
+        if (spawnRel)     snprintf(refname, sizeof refname, "from spawn");
+        else if (atRel)   snprintf(refname, sizeof refname, "from %d,%d", cd->atX, cd->atZ);
+        else if (condRel) snprintf(refname, sizeof refname, "from %s", q->cond[cd->parent].id);
+        else              snprintf(refname, sizeof refname, "from origin");
         printf("   %-14s x=%6d z=%6d   %d %s", cd->id, p.x, p.z,
                (int)sqrt((double)(dx*dx + dz*dz)), refname);
         if (cd->structType == Geode && mm->geodeSize[c] > 0)
@@ -463,22 +506,26 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
         }
         printf("\n");
     }
-    // machine-readable twin, for piping into verifiers
-    if (tsv) {
-        fprintf(tsv, "%" PRId64, (int64_t)ws);
-        for (int c = 0; c < q->n; c++) {
-            // Anything with a matched position: structures, loot, overlaps.
-            if (q->cond[c].type != CT_STRUCTURE && q->cond[c].type != CT_LOOT &&
-                q->cond[c].type != CT_OVERLAP)
-                continue;
-            fprintf(tsv, "\t%s\t%d\t%d", q->cond[c].id, mm->pos[c].x, mm->pos[c].z);
-            if (q->cond[c].type == CT_OVERLAP)
-                fprintf(tsv, "\t%s.b\t%d\t%d", q->cond[c].id,
-                        mm->partner[c].x, mm->partner[c].z);
-        }
-        fprintf(tsv, "\n");
-    }
+    writeTsv(q, ws, mm, tsv);
     printf("\n");
+}
+
+// The machine-readable twin of a hit, for piping into verifiers.
+static void writeTsv(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
+{
+    if (!tsv) return;
+    fprintf(tsv, "%" PRId64, (int64_t)ws);
+    for (int c = 0; c < q->n; c++) {
+        // Anything with a matched position: structures, loot, overlaps.
+        if (q->cond[c].type != CT_STRUCTURE && q->cond[c].type != CT_LOOT &&
+            q->cond[c].type != CT_OVERLAP)
+            continue;
+        fprintf(tsv, "\t%s\t%d\t%d", q->cond[c].id, mm->pos[c].x, mm->pos[c].z);
+        if (q->cond[c].type == CT_OVERLAP)
+            fprintf(tsv, "\t%s.b\t%d\t%d", q->cond[c].id,
+                    mm->partner[c].x, mm->partner[c].z);
+    }
+    fprintf(tsv, "\n");
 }
 
 static char *slurp(const char *path)
@@ -511,18 +558,30 @@ int main(int argc, char **argv)
     // what verifying a known find consists of -- had no path through this tool
     // at all, and the alternative was to search for it, which is absurd.
     int seedmode = (argc > 3) && !strcmp(argv[2], "--seed");
-    uint64_t oneseed = seedmode ? (uint64_t)strtoll(argv[3], NULL, 10) : 0;
+    uint64_t oneseed = 0;
+    // The seed exactly as Minecraft reads it: a number if it is a valid long,
+    // otherwise the hash of the text (src/seed.h).
+    if (seedmode && !parseWorldSeed(argv[3], &oneseed)) {
+        fprintf(stderr, "--seed: empty seed\n");
+        return 2;
+    }
     uint64_t range   = (argc > 2 && !explain && !bias && !seedmode) ? strtoull(argv[2], NULL, 10) : 5000000;
     uint64_t samples = ((explain || bias) && argc > 3) ? strtoull(argv[3], NULL, 10) : 200000;
     int nthreads = (explain || bias) ? ((argc > 4) ? atoi(argv[4]) : 16)
                                      : ((argc > 3) ? atoi(argv[3]) : 16);
+    // 0 divided the range by zero; more than 64 (MAXIMUM_WAIT_OBJECTS) made the
+    // wait return at once and the results were read while workers still ran.
+    if (nthreads < 1) nthreads = 1;
+    if (nthreads > 64) nthreads = 64;
 
     char *json = slurp(argv[1]);
     if (!json) { fprintf(stderr, "cannot read %s\n", argv[1]); return 2; }
 
-    Query q; char err[256];
+    Query q; char err[1024];
     if (queryParse(&q, json, err, sizeof err)) { fprintf(stderr, "query error: %s\n", err); return 1; }
     if (queryPlan(&q, err, sizeof err))        { fprintf(stderr, "plan error: %s\n", err); return 1; }
+
+    if (q.warn[0]) printf("NOTE: %s\n\n", q.warn);
 
     char buf[96];
     printf("query   : %d conditions, MC %s\n", q.n, mc2str(q.mc));
@@ -667,7 +726,13 @@ int main(int argc, char **argv)
                            "found nothing.\n\n", why, sel);
                     free(cand); cand = NULL;
                     range = 0;
-                } else if (ncand < 1000) {
+                } else if (ncand < 1000 && timedOut) {
+                    // Only a TIMED-OUT solver with a thin yield is a sign that
+                    // scanning would do better. A solver that finished has
+                    // enumerated every structure seed in 2^48 that places the
+                    // cluster, so a short list is the complete answer and
+                    // scanning instead would throw it away for a search that
+                    // can only find a subset of it.
                     printf("solver: %s\n        but only %" PRIu64 " candidates in %.1fs, so this "
                            "target is common enough that scanning\n        beats solving it; "
                            "scanning instead\n\n", why, ncand, sel);
@@ -688,15 +753,22 @@ int main(int argc, char **argv)
     InitializeCriticalSection(&g_lock);
     Job *jobs = calloc(nthreads, sizeof(Job));
     HANDLE *th = calloc(nthreads, sizeof(HANDLE));
-    uint64_t chunk = range / nthreads;
 
     LARGE_INTEGER freq, t0, t1;
     QueryPerformanceFrequency(&freq); QueryPerformanceCounter(&t0);
     for (int i = 0; i < nthreads; i++) {
         jobs[i].q = &q;
         jobs[i].cand = cand;
-        jobs[i].lo = (uint64_t)i * chunk;
-        jobs[i].hi = (i == nthreads-1) ? range : (uint64_t)(i+1) * chunk;
+        // INTERLEAVED, not one contiguous block per thread. With blocks, a run
+        // stopped by its time budget left an unscanned tail inside every block,
+        // so there was no single place to resume from: a hunt that advanced by
+        // the whole range silently skipped those tails, and one that advanced
+        // by the count scanned re-ran most of the range. Interleaved, everything
+        // below base + nthreads * (fewest seeds any thread scanned) is covered,
+        // which is a clean resume point (printed as "covered" below).
+        jobs[i].lo = (uint64_t)i;
+        jobs[i].hi = range;
+        jobs[i].stride = (uint64_t)nthreads;
         // The offset shifts the INDEX walk only. When `cand` is set, [lo,hi)
         // indexes the solver's candidate array rather than counting seeds, so
         // shifting it would read off the end of that array -- a resumable search
@@ -724,9 +796,12 @@ int main(int argc, char **argv)
             printHit(&q, g_rank[i].ws, &g_rank[i].m, tsv);
         }
     } else {
+        // Stream mode already printed each hit as it was found; printing them
+        // again would show every seed twice. The TSV twin is still written.
         for (int i = 0; i < nthreads && shown < MAX_HITS; i++)
             for (int k = 0; k < jobs[i].nhits && shown < MAX_HITS; k++, shown++) {
                 Hit *h = &jobs[i].hits[k];
+                if (g_stream && !g_hitstream) { writeTsv(&q, h->ws, &h->m, tsv); continue; }
                 printf("SEED %" PRId64 "\n", (int64_t)h->ws);
                 printHit(&q, h->ws, &h->m, tsv);
             }
@@ -739,6 +814,23 @@ int main(int argc, char **argv)
     // and "best of N seeds" would quietly mean a different N than requested.
     if (g_expired)
         printf("stopped    : time budget expired before the range was exhausted\n");
+    // Where a follow-up run should start so that nothing is skipped. Every
+    // index below this was scanned (see the interleaving note above); a few
+    // just past it may have been too, which costs a little duplicate work and
+    // never a gap. Solver runs index a candidate list, not the seed space, so
+    // there is no offset to resume from.
+    if (!cand) {
+        uint64_t minScan = UINT64_MAX;
+        for (int i = 0; i < nthreads; i++)
+            if ((uint64_t)i < range && jobs[i].scanned < minScan) minScan = jobs[i].scanned;
+        if (minScan == UINT64_MAX) minScan = 0;
+        uint64_t covered = minScan * (uint64_t)nthreads;
+        if (!g_expired && g_found < g_want) covered = range;   // ran to the end
+        if (covered > range) covered = range;
+        printf("covered    : indices %" PRIu64 "..%" PRIu64 " -- resume with "
+               "FIND_OFFSET=%" PRIu64 "\n", g_offset, g_offset + covered,
+               g_offset + covered);
+    }
     if (wholeSeed) {
         // No geometry pass exists here, so reporting a survival rate would be
         // theatre: it is 100% by construction.

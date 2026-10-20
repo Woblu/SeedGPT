@@ -1,3 +1,4 @@
+#include "biomeat.h"
 // nearest -- the closest viable structure, or the closest point of a biome, to
 // a coordinate. The Java-side counterpart of Bedrock's `/locate`, so the two
 // engines can be asked the same question in the same units and diffed.
@@ -59,7 +60,7 @@ int main(int argc, char **argv)
             for (int dz = -r; dz <= r; dz += 16) {
                 if (r > 0 && abs(dx) != r && abs(dz) != r) continue;   // ring only
                 int px = x + dx, pz = z + dz;
-                if (getBiomeAt(&g, 0, (px>>4)*4 + 2, 319 >> 2, (pz>>4)*4 + 2) != id) continue;
+                if (chunkBiome(&g, px, pz) != id) continue;
                 int64_t d = (int64_t)dx*dx + (int64_t)dz*dz;
                 if (best < 0 || d < best) { best = d; bx = px; bz = pz; }
             }

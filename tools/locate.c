@@ -112,7 +112,11 @@ int main(int argc, char **argv)
             // sh.dist is the next ring distance in CHUNKS. Once the ring
             // itself is well past the radius, nothing later in it can come
             // back inside, so the walk can stop instead of running forever.
-            if (sh.dist * 16.0 > (double)radius * 2.0 + 2048.0)
+            // Rings are centred on the ORIGIN, so the cutoff has to clear the
+            // search centre's own distance too, or a search far from 0,0
+            // stops at the inner rings before reaching any near it.
+            if (sh.dist * 16.0 > sqrt((double)cx * cx + (double)cz * cz)
+                                 + (double)radius * 2.0 + 2048.0)
                 break;
         }
         fprintf(stderr, "%" PRIu64 " stronghold within %d of (%d,%d) -- "

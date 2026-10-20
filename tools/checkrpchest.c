@@ -21,6 +21,7 @@
 #include "loot.h"
 #include "loot/loot_tables.h"
 #include "loot/loot_table_context.h"
+#include "biomeat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,12 +68,12 @@ static void rpChestXZ(const StructureVariant *sv, int minBlockX, int minBlockZ,
 //     false, and there is one chest (index 0) -- so, unlike igloo (which
 //     discards a nextLong) or desert pyramid (nextInt(3)), there is NO
 //     pre-consumption: set the decorator seed, then read one nextLong.
-static uint64_t rpLootSeed(int mc, uint64_t s48, const StructureVariant *sv,
+static uint64_t rpLootSeed(int mc, uint64_t seed, const StructureVariant *sv,
                            int chestX, int chestZ)
 {
     StructureSaltConfig ss;
     if (!getStructureSaltConfig(Ruined_Portal, mc, sv->biome, &ss)) return 0;
-    uint64_t pop = getPopulationSeed(mc, s48, chestX & ~15, chestZ & ~15);
+    uint64_t pop = getPopulationSeed(mc, seed, chestX & ~15, chestZ & ~15);  // all 64 bits on 1.18+
     CREATE_RANDOM_SOURCE(rnd, mc <= MC_1_17);
     rnd.setSeed(rnd.state, pop + ss.decoratorIndex + 10000ULL * ss.generationStep);
     return rnd.nextLong(rnd.state);
@@ -126,12 +127,12 @@ int main(int argc, char **argv)
     if (argc >= 6 && !strcmp(argv[3], "--at")) {
         Pos best = { atoi(argv[4]), atoi(argv[5]) };
         const char *want = (argc > 6) ? argv[6] : NULL;
-        int biomeID = getBiomeAt(&g, 0, (best.x>>4)*4+2, 319>>2, (best.z>>4)*4+2);
+        int biomeID = chunkBiome(&g, best.x, best.z);
         StructureVariant sv;
         getVariant(&sv, Ruined_Portal, mc, s48, best.x, best.z, biomeID);
         int cx, cz;
         rpChestXZ(&sv, best.x & ~15, best.z & ~15, &cx, &cz);
-        uint64_t lootSeed = rpLootSeed(mc, s48, &sv, cx, cz);
+        uint64_t lootSeed = rpLootSeed(mc, seed, &sv, cx, cz);
         LootTableContext *ctx = NULL;
         if (!init_loot_table_name(&ctx, "ruined_portal", mc) || !ctx) return 1;
         set_loot_seed(ctx, lootSeed); generate_loot(ctx);
@@ -182,13 +183,13 @@ int main(int argc, char **argv)
     }
     if (!found) { printf("%lld no ruined_portal within %d\n", (long long)seed, radius); return 1; }
 
-    int biomeID = getBiomeAt(&g, 0, (best.x>>4)*4+2, 319>>2, (best.z>>4)*4+2);
+    int biomeID = chunkBiome(&g, best.x, best.z);
     StructureVariant sv;
     getVariant(&sv, Ruined_Portal, mc, s48, best.x, best.z, biomeID);
 
     int cx, cz;
     rpChestXZ(&sv, best.x & ~15, best.z & ~15, &cx, &cz);
-    uint64_t lootSeed = rpLootSeed(mc, s48, &sv, cx, cz);
+    uint64_t lootSeed = rpLootSeed(mc, seed, &sv, cx, cz);
 
     char vis0[96];
     portal_visibility(&g, mc, best.x, best.z, sv.underground, vis0, sizeof vis0);

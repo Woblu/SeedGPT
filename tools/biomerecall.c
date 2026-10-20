@@ -1,3 +1,4 @@
+#include "biomeat.h"
 // biomerecall -- measure what a biome scan actually finds, and what it costs.
 //
 //   usage: biomerecall [radius] [seeds] [biome]
@@ -26,7 +27,7 @@ static int latticeHit(Generator *g, int cx, int cz, int within, int biome, int s
     for (int dz = -within; dz <= within; dz += step) {
         if ((int64_t)dx*dx + (int64_t)dz*dz > lim) continue;
         int bx = cx + dx, bz = cz + dz;
-        if (getBiomeAt(g, 0, (bx>>4)*4 + 2, 319 >> 2, (bz>>4)*4 + 2) == biome) return 1;
+        if (chunkBiome(g, bx, bz) == biome) return 1;
     }
     return 0;
 }

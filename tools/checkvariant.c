@@ -1,3 +1,4 @@
+#include "biomeat.h"
 // checkvariant -- read a structure's variant flags (zombie village, igloo
 // basement, giant/buried ruined portal) from scratch for one seed, independent
 // of the search path. Confirms the finder's variant filters rather than
@@ -41,7 +42,7 @@ int main(int argc, char **argv)
     Generator g; setupGenerator(&g, mc, 0);
     applySeed(&g, DIM_OVERWORLD, seed);
 
-    int biomeID = getBiomeAt(&g, 0, (x>>4)*4+2, 319>>2, (z>>4)*4+2);
+    int biomeID = chunkBiome(&g, x, z);
     StructureVariant sv;
     getVariant(&sv, st, mc, seed, x, z, biomeID);
     if (st == Geode) {

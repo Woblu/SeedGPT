@@ -1,3 +1,4 @@
+#include "biomeat.h"
 // describe -- given a seed, print what's actually in that world near spawn.
 //
 //   usage: describe <seed> [version] [radius_blocks]
@@ -19,7 +20,7 @@
 // quart-y near build height) -- a y=63 probe lands in cave biomes.
 static int surfaceBiome(Generator *g, int bx, int bz)
 {
-    return getBiomeAt(g, 0, (bx >> 4) * 4 + 2, 319 >> 2, (bz >> 4) * 4 + 2);
+    return chunkBiome(g, bx, bz);
 }
 
 typedef struct { const char *name; Pos pos; int dist; int biome; char note[40]; } Found;

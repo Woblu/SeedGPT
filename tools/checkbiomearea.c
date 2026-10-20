@@ -8,6 +8,7 @@
 // defaults to fine, the finder's default.
 #include "generator.h"
 #include "util.h"
+#include "biomeat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,7 +54,7 @@ int main(int argc, char **argv)
         if ((long long)dx*dx + (long long)dz*dz > lim) continue;
         int bx = x + dx, bz = z + dz;
         total++;
-        int id = getBiomeAt(&g, 0, (bx>>4)*4 + 2, 319 >> 2, (bz>>4)*4 + 2);
+        int id = chunkBiome(&g, bx, bz);
         if (id == biomeId) match++;
     }
     int pct = total > 0 ? (int)((long long)match * 100 / total) : 0;

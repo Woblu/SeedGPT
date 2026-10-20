@@ -7,6 +7,7 @@
 #include "ore.h"
 #include "climate.h"
 #include "cactus.h"
+#include "biomeat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -413,6 +414,78 @@ static int structHalfExtent(int stype)
     }
 }
 
+// The keys a condition object may carry -- every one the parser reads, plus a
+// few a model adds as annotations. Anything else is a typo or an invention
+// ("radius", "distance", "withn"), and it used to be skipped without a word:
+// "radius": 100 searched the default 1000 and looked like a working query.
+static const char *const COND_KEYS[] = {
+    "abandoned", "basement", "biome", "biome_area", "cactus", "cave_below",
+    "count", "cracked", "deepslate", "exact", "exposed", "eyes", "family",
+    "floating", "gap", "giant", "height", "id", "island", "land", "loot",
+    "maxDepth", "max_depth", "metric", "minRoofY", "min_roof_y", "of", "ore",
+    "overlap", "pad", "pct", "precision", "relief", "ship", "sides", "size",
+    "slime", "spread", "stronghold", "structure", "surface", "vein", "within",
+    "y_max", "y_min",
+    "note", "notes", "label", "comment", "description",
+    NULL
+};
+
+static void unknownKeys(const cJSON *e, const char *id, char *warn, size_t n)
+{
+    for (const cJSON *it = e->child; it; it = it->next) {
+        if (!it->string) continue;
+        int known = 0;
+        for (int i = 0; COND_KEYS[i] && !known; i++)
+            known = !strcmp(it->string, COND_KEYS[i]);
+        if (known) continue;
+        size_t len = strlen(warn);
+        if (len + 96 >= n) return;
+        snprintf(warn + len, n - len, "%scondition \"%s\": unknown key \"%s\" was ignored",
+                 len ? "; " : "", id, it->string);
+    }
+}
+
+// The hard limits on a stronghold's height from 1.18, checked up front so an
+// impossible request is refused instead of searched overnight.
+//
+// moveBelowSeaLevel puts the roof at k = span + minY + 1, then draws
+// k += nextInt(53 - k) only while k < 53. Before 1.18 minY is 0, so a vertical
+// span of 52+ pushes the roof above 52 -- exactly what the shallow strongholds
+// are. From 1.18 minY is -64, so k starts 64 lower and would need a 116-block
+// span to clear 52, which no stronghold has. So from 1.18:
+//   - no roof is above y=52, and
+//   - on DRY land (top block at y>=62, SEA_LEVEL_Y) the ground is at least
+//     10 blocks over the roof. "shallow" (<=4) and "exposed" (<=0) are both
+//     impossible there -- the old message even recommended "shallow" as the
+//     fix. On the sea floor they are possible: an ocean floor below y=52 sits
+//     under the roof, so with "land": false an exposed stronghold is real.
+#define SH_ROOF_MAX_118 52
+static int strongholdBound18(int mc, const Cond *c, char *err, size_t errlen)
+{
+    if (mc < MC_1_18) return 0;
+    if (c->hasRoofMin && c->minRoofY > SH_ROOF_MAX_118) {
+        snprintf(err, errlen,
+            "impossible: condition \"%s\" asks for a stronghold roof at y>=%d, "
+            "but from 1.18 a stronghold's roof can never be above y=%d "
+            "(moveBelowSeaLevel starts it 64 blocks lower than it used to). "
+            "Surface-level strongholds are a pre-1.18 phenomenon -- try 1.17.",
+            c->id, c->minRoofY, SH_ROOF_MAX_118);
+        return 1;
+    }
+    int minLand = SEA_LEVEL_Y - SH_ROOF_MAX_118;     // 10 blocks
+    if (c->hasMaxDepth && c->landOnly && c->maxDepth < minLand) {
+        snprintf(err, errlen,
+            "impossible: condition \"%s\" asks for a stronghold under at most "
+            "%d block(s) of DRY ground, but from 1.18 the roof tops out at y=%d "
+            "while dry land starts at y=%d, so the least ground over one is %d "
+            "blocks. Ask for max_depth %d or more, set \"land\": false for one "
+            "open to the sea floor, or use 1.17, where surface strongholds exist.",
+            c->id, c->maxDepth, SH_ROOF_MAX_118, SEA_LEVEL_Y, minLand, minLand);
+        return 1;
+    }
+    return 0;
+}
+
 int queryParse(Query *q, const char *json, char *err, size_t errlen)
 {
     memset(q, 0, sizeof(*q));
@@ -520,21 +593,12 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
             cJSON *jr = cJSON_GetObjectItem(e, "min_roof_y");
             if (!jr) jr = cJSON_GetObjectItem(e, "minRoofY");
             if (jr && cJSON_IsNumber(jr)) { c->hasRoofMin = 1; c->minRoofY = jr->valueint; }
-
-            // The same hard bound the overlap form checks, for the same reason:
-            // from 1.18 moveBelowSeaLevel starts the structure 64 blocks lower,
-            // so its roof cannot reach a surface that still sits near y=63.
-            if (q->mc >= MC_1_18 && c->hasMaxDepth && c->maxDepth <= 0) {
-                snprintf(err, errlen,
-                    "impossible: condition \"%s\" asks for a stronghold breaking "
-                    "the surface, but from 1.18 a stronghold's roof can never be "
-                    "above y=52 while the ground stays near y=63. Surface-level "
-                    "strongholds are a pre-1.18 thing -- try version 1.17, or ask "
-                    "for \"shallow\" instead of \"exposed\".", c->id);
-                goto done;
-            }
             cJSON *jland = cJSON_GetObjectItem(e, "land");
             c->landOnly = (jland && cJSON_IsFalse(jland)) ? 0 : 1;
+
+            // The same hard bounds the overlap form checks (strongholdBound18),
+            // which need `land` -- so it is read first.
+            if (strongholdBound18(q->mc, c, err, errlen)) goto done;
             cJSON *sw = cJSON_GetObjectItem(e, "within");
             c->within = (sw && cJSON_IsNumber(sw)) ? sw->valueint : 3000;
             if (c->within > 30000) c->within = 30000;
@@ -582,26 +646,6 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 }
                 c->minRoofY = jroof->valueint;
                 c->hasRoofMin = 1;
-                // A roof above y=52 is impossible from 1.18, and saying so here
-                // saves an overnight search that could never hit.
-                //
-                // moveBelowSeaLevel puts the roof at k = span + minY + 1, then
-                // draws k += nextInt(53 - k) only while k < 53. So k lands below
-                // 53 unless span + minY + 1 already clears it. Before 1.18 minY
-                // is 0, so a span of 52+ blocks pushes the roof up -- that is
-                // exactly what the shallow strongholds are. From 1.18 minY is
-                // -64, so k starts 64 lower and would need a 116-block vertical
-                // span to reach 53, which no stronghold has.
-                if (q->mc >= MC_1_18 && c->minRoofY > 52) {
-                    snprintf(err, errlen,
-                        "impossible: from 1.18 a stronghold's roof can never be "
-                        "above y=52 (moveBelowSeaLevel starts it 64 blocks lower "
-                        "than it used to), so min_roof_y=%d has no solutions. "
-                        "Surface-level strongholds are a pre-1.18 phenomenon -- "
-                        "try version 1.17.",
-                        c->minRoofY);
-                    goto done;
-                }
             }
             // max_depth: ground over the piece that meets the partner, in
             // blocks. 0 = it breaks the surface, i.e. genuinely EXPOSED. This
@@ -627,16 +671,10 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 // make them the find people mean.
                 cJSON *jl = cJSON_GetObjectItem(e, "land");
                 c->landOnly = (jl && cJSON_IsFalse(jl)) ? 0 : 1;
-                if (q->mc >= MC_1_18 && c->maxDepth <= 0) {
-                    snprintf(err, errlen,
-                        "impossible: condition \"%s\" asks for a stronghold that "
-                        "breaks the surface, but from 1.18 the roof tops out at "
-                        "y=52 while the ground stays near y=63. Exposed "
-                        "strongholds are a pre-1.18 phenomenon -- try version "
-                        "1.17.", c->id);
-                    goto done;
-                }
             }
+            if ((c->structType == Stronghold || c->structType2 == Stronghold) &&
+                strongholdBound18(q->mc, c, err, errlen))
+                goto done;
             // A stronghold has no StructureConfig; it is always overworld.
             StructureConfig sa, sb;
             if (c->structType == Stronghold) {
@@ -1223,6 +1261,26 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
                 snprintf(err, errlen, "condition \"%s\": need \"structure\" or \"biome\"", c->id);
             goto done;
         }
+
+        // Every other condition type clamps its own radius; structures and
+        // biomes took any number. A stray value -- a typo, or a model writing
+        // 50000 -- is not harmless: a biome scan is quadratic in it (30000 at
+        // "fine" is ~11M samples per seed, a search that never returns) and
+        // within + SPAWN_MARGIN can overflow. Refused rather than clamped, so
+        // the query never silently means something other than what was asked;
+        // a far-away search is "of":"x,z" with a modest radius.
+        if (c->type == CT_STRUCTURE || c->type == CT_BIOME) {
+            int cap = (c->type == CT_BIOME) ? 10000 : 100000;
+            if (c->within < 0 || c->within > cap) {
+                snprintf(err, errlen,
+                    "condition \"%s\": within=%d is out of range for a %s (0..%d). "
+                    "To search far from the origin, use \"of\": \"<x>,<z>\" with "
+                    "a smaller radius.", c->id, c->within,
+                    c->type == CT_BIOME ? "biome" : "structure", cap);
+                goto done;
+            }
+        }
+        unknownKeys(e, c->id, q->warn, sizeof q->warn);
     }
     q->n = n;
     q->rankIdx = -1;
@@ -1366,6 +1424,30 @@ int queryFeasible(const Query *q, char *err, size_t errlen)
     return 0;
 }
 
+// Is condition p's matched position produced, or moved, in pass 2? Pass 1 fixes
+// a plain structure's position from 48-bit geometry and pass 2 only confirms
+// it. Everything else is decided in pass 2: biomes, ore, height and the other
+// scans exist only there; a spawn-relative structure is re-found around the
+// true spawn; a cluster is re-counted with viability; loot settles on the
+// first chest that qualifies; an overlap re-picks its pair. A structure
+// measured from any of those moves with it.
+//
+// Anything measured FROM such a condition must run after it in pass 2 and read
+// the pass-2 position. Reading the pass-1 one measured a biome around the
+// village nearest the origin while the output named the village nearest spawn.
+static int posFromPass2(const Query *q, int p)
+{
+    for (int depth = 0; depth <= MAX_COND && p >= 0; depth++) {
+        const Cond *c = &q->cond[p];
+        if (c->type != CT_STRUCTURE) return 1;
+        if (isPopulationFeature(c->structType)) return 1;
+        if (c->structMin > 1) return 1;
+        if (c->parent == PARENT_SPAWN) return 1;
+        p = c->parent;      // a plain structure moves exactly when its parent does
+    }
+    return 0;
+}
+
 int queryPlan(Query *q, char *err, size_t errlen)
 {
     // resolve parents
@@ -1445,6 +1527,25 @@ int queryPlan(Query *q, char *err, size_t errlen)
         q->geom[q->ngeom++] = best;
     }
 
+    // A structure, loot or overlap condition is placed in pass 1, so it cannot
+    // be measured from something pass 1 never places. That used to surface as
+    // "dependency cycle", which sent people hunting for a cycle that was not
+    // there. Say what is actually wrong, and how to express it instead.
+    for (int i = 0; i < q->n; i++) {
+        CondType t = q->cond[i].type;
+        int p = q->cond[i].parent;
+        if (done[i] || p < 0) continue;
+        if (t != CT_STRUCTURE && t != CT_LOOT && t != CT_OVERLAP) continue;
+        CondType pt = q->cond[p].type;
+        if (pt != CT_STRUCTURE && pt != CT_LOOT && pt != CT_OVERLAP) {
+            snprintf(err, errlen,
+                "condition \"%s\" is a structure measured from \"%s\", which is "
+                "only located after the structure pass -- measure \"%s\" from "
+                "\"%s\" instead (swap the \"of\")",
+                q->cond[i].id, q->cond[p].id, q->cond[p].id, q->cond[i].id);
+            return 1;
+        }
+    }
     // any structure condition left unscheduled means a dependency cycle
     for (int i = 0; i < q->n; i++)
         if ((q->cond[i].type == CT_STRUCTURE || q->cond[i].type == CT_LOOT
@@ -1452,6 +1553,17 @@ int queryPlan(Query *q, char *err, size_t errlen)
             snprintf(err, errlen, "dependency cycle involving \"%s\"", q->cond[i].id);
             return 1;
         }
+    // An eye count has no position, so nothing can be measured from it.
+    for (int i = 0; i < q->n; i++) {
+        int p = q->cond[i].parent;
+        if (p >= 0 && q->cond[p].type == CT_EYES) {
+            snprintf(err, errlen,
+                "condition \"%s\" is measured from \"%s\", an eye count, which "
+                "has no position -- measure it from a stronghold instead",
+                q->cond[i].id, q->cond[p].id);
+            return 1;
+        }
+    }
     // A biome may be measured from a structure (placed in pass 1) or from
     // another biome (placed in pass 2 -- this is how "biome A adjacent to
     // biome B" is expressed: B is measured within a short radius of A). It may
@@ -1503,12 +1615,13 @@ int queryPlan(Query *q, char *err, size_t errlen)
         if (!seen && q->ndims < 3) q->dims[q->ndims++] = d;
     }
 
-    // Pass 2 order: everything biome-dependent, cheapest first. Structure
-    // positions are fixed by pass 1, so most conditions have no ordering
-    // constraint. The exception is a condition measured from a BIOME parent:
-    // that parent's position is produced here in pass 2, so it must run first.
-    // Schedule like pass 1 -- cheapest currently-schedulable condition each
-    // round -- honouring only the biome-parent edge.
+    // Pass 2 order: everything biome-dependent, cheapest first. A plain
+    // structure's position is fixed by pass 1, so a condition measured from one
+    // has no ordering constraint. A parent whose position pass 2 produces or
+    // moves (posFromPass2: biomes, scans, spawn-relative structures, clusters,
+    // loot, overlaps) must run first, or its child is measured from a position
+    // that is about to change. Schedule like pass 1 -- cheapest
+    // currently-schedulable condition each round -- honouring those edges.
     int doneV[MAX_COND] = {0};
     q->nviab = 0;
     for (int iter = 0; iter < q->n + 1 && q->nviab < q->n; iter++) {
@@ -1516,8 +1629,7 @@ int queryPlan(Query *q, char *err, size_t errlen)
         for (int i = 0; i < q->n; i++) {
             if (doneV[i]) continue;
             int p = q->cond[i].parent;
-            // Only a biome parent is produced in pass 2; wait for it.
-            if (p >= 0 && q->cond[p].type == CT_BIOME && !doneV[p]) continue;
+            if (p >= 0 && posFromPass2(q, p) && !doneV[p]) continue;
             double c = viabCost(q, i);
             if (c < bestc) { bestc = c; best = i; }
         }
@@ -1525,7 +1637,7 @@ int queryPlan(Query *q, char *err, size_t errlen)
         doneV[best] = 1;
         q->viab[q->nviab++] = best;
     }
-    // Unscheduled leftovers mean a biome-parent cycle (A of B, B of A).
+    // Unscheduled leftovers mean a pass-2 parent cycle (A of B, B of A).
     if (q->nviab < q->n) {
         for (int i = 0; i < q->n; i++)
             if (!doneV[i]) {
@@ -1835,6 +1947,8 @@ static inline int64_t dmet(Pos a, Pos b, int metric) {
 // The centroid of the counted instances is written to `*centroid` when found.
 static int placementOk(int mc, uint32_t gflags, uint64_t worldSeed, int stype, Pos p);
 static int hasPlacementRule(int mc, int stype);
+static int generatesAt(const Query *q, int stype, uint64_t s48, uint64_t worldSeed,
+                       Generator *g, Pos p);
 
 static int countInstances(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
                           Pos centre, int reach, Generator *g, Pos *centroid)
@@ -1854,9 +1968,7 @@ static int countInstances(const Query *q, int k, uint64_t s48, uint64_t worldSee
         Pos p;
         if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
         if (dmet(p, centre, c->metric) > lim) continue;
-        if (!placementAllowed(q->mc, s48, c->structType, p)) continue;
-        if (g && !isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
-        if (g && !placementOk(q->mc, queryGenFlags(q), worldSeed, c->structType, p)) continue;
+        if (!generatesAt(q, c->structType, s48, worldSeed, g, p)) continue;
         cnt++; sx += p.x; sz += p.z;
     }
     if (cnt > 0 && centroid) { centroid->x = (int)(sx / cnt); centroid->z = (int)(sz / cnt); }
@@ -1896,9 +2008,7 @@ static int tightCluster(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
         int idx = j * W + i; has[idx] = 0;
         Pos p;
         if (!getStructurePos(c->structType, q->mc, s48, g0x + i, g0z + j, &p)) continue;
-        if (!placementAllowed(q->mc, s48, c->structType, p)) continue;
-        if (g && !isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
-        if (g && !placementOk(q->mc, queryGenFlags(q), worldSeed, c->structType, p)) continue;
+        if (!generatesAt(q, c->structType, s48, worldSeed, g, p)) continue;
         grid[idx] = p; has[idx] = 1;
     }
 
@@ -1974,6 +2084,18 @@ static int shSurfaceY(const Query *q, uint64_t worldSeed, Generator *g, int x, i
     return (int)fy;
 }
 
+// May the ring walk stop? Strongholds come in rings around the ORIGIN, walked
+// outward, and sh.dist is the next one's distance from the origin (chunks).
+// Once that is past every point within `reach` of `centre` -- plus the margin
+// a ring's spread needs -- no later stronghold can be in range. The cutoff used
+// to ignore the centre, so a search at "of":"20000,0" stopped at the inner
+// rings and never reached the ones that were actually near it.
+static int shPastLast(const StrongholdIter *sh, Pos centre, int reach)
+{
+    double cdist = sqrt((double)centre.x * centre.x + (double)centre.z * centre.z);
+    return sh->dist * 16.0 > cdist + (double)reach * 2.0 + 2048.0;
+}
+
 static int strongholdOverlapFind(const Query *q, int k, uint64_t s48,
                                  uint64_t worldSeed, Pos centre, int reach,
                                  Generator *g, Pos *aOut, Pos *bOut)
@@ -2021,7 +2143,7 @@ static int strongholdOverlapFind(const Query *q, int k, uint64_t s48,
         // first and the break moved after it. The break is only an
         // optimisation; there are 128 strongholds in a world, so walking a few
         // extra costs nothing and missing one is a wrong answer.
-        int pastLast = (sh.dist * 16.0 > (double)reach * 2.0 + 2048.0);
+        int pastLast = shPastLast(&sh, centre, reach);
         if (dmet(sh.pos, centre, c->metric) > lim) { if (pastLast) break; continue; }
 
         int span = 112 + hb;
@@ -2035,8 +2157,7 @@ static int strongholdOverlapFind(const Query *q, int k, uint64_t s48,
             Pos b;
             if (!getStructurePos(other, q->mc, s48, qx, qz, &b)) continue;
             if (abs(b.x - sh.pos.x) > span || abs(b.z - sh.pos.z) > span) continue;
-            if (!placementAllowed(q->mc, s48, other, b)) continue;
-            if (!isViableStructurePos(other, g, b.x, b.z, 0)) continue;
+            if (!generatesAt(q, other, s48, worldSeed, g, b)) continue;
 
             // Only now is assembling the stronghold worth it, and the pieces are
             // the same for every partner, so this runs at most once per site.
@@ -2108,8 +2229,7 @@ static int overlapFind(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
         Pos a;
         if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &a)) continue;
         if (dmet(a, centre, c->metric) > lim) continue;
-        if (!placementAllowed(q->mc, s48, c->structType, a)) continue;
-        if (g && !isViableStructurePos(c->structType, g, a.x, a.z, 0)) continue;
+        if (!generatesAt(q, c->structType, s48, worldSeed, g, a)) continue;
 
         // Only the regions that could hold a second structure close enough.
         int b0x = (int)floor((a.x - span) / spanB), b1x = (int)floor((a.x + span) / spanB);
@@ -2126,8 +2246,7 @@ static int overlapFind(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
             if (ox <= 0 || oz <= 0) continue;
             int area = ox * oz;
             if (area <= best) continue;
-            if (!placementAllowed(q->mc, s48, c->structType2, b)) continue;
-            if (g && !isViableStructurePos(c->structType2, g, b.x, b.z, 0)) continue;
+            if (!generatesAt(q, c->structType2, s48, worldSeed, g, b)) continue;
             best = area;
             if (aOut) *aOut = a;
             if (bOut) *bOut = b;
@@ -2258,11 +2377,31 @@ static int placementAllowed(int mc, uint64_t s48, int stype, Pos p)
     return 1;
 }
 
+// Does this candidate instance really generate? Every loop over candidate
+// instances goes through here, so the rules cubiomes leaves out (the outpost
+// exclusion zone, the 1.18 terrain floor) cannot be applied in one copy of the
+// loop and forgotten in another. They were: the loot and overlap loops skipped
+// both, so a loot hit could sit in a desert pyramid the game never builds, and
+// an outpost the game refuses still rolled a chest. With g == NULL (pass 1)
+// only the 48-bit part applies; pass 2 adds biome viability, then terrain, in
+// cost order.
+static int generatesAt(const Query *q, int stype, uint64_t s48, uint64_t worldSeed,
+                       Generator *g, Pos p)
+{
+    if (!placementAllowed(q->mc, s48, stype, p)) return 0;
+    if (!g) return 1;
+    if (!isViableStructurePos(stype, g, p.x, p.z, 0)) return 0;
+    return placementOk(q->mc, queryGenFlags(q), worldSeed, stype, p);
+}
+
 int queryStage1(const Query *q, uint64_t s48, Match *m)
 {
     // Zero it: callers declare Match on the stack, and haveSpawn/haveEyes must
     // start false or pass 2 will short-circuit on garbage and report junk.
     memset(m, 0, sizeof(*m));
+    // Where each condition's pass-2 position can land: within slack[k] of
+    // anc[k]. Only read for conditions whose position pass 2 moves.
+    Pos anc[MAX_COND]; int slack[MAX_COND];
     for (int i = 0; i < q->ngeom; i++) {
         int k = q->geom[i];
         const Cond *c = &q->cond[k];
@@ -2279,6 +2418,16 @@ int queryStage1(const Query *q, uint64_t s48, Match *m)
         // so a spawn-relative condition is filtered against origin widened by
         // SPAWN_MARGIN. Over-admits; pass 2 then checks it exactly.
         int reach = c->within + (c->parent == PARENT_SPAWN ? SPAWN_MARGIN : 0);
+        // Same reasoning one level down. If the parent's position moves in
+        // pass 2, the child will be measured from wherever it lands -- which
+        // is anywhere within the parent's own slack. Filter against that whole
+        // area, not the pass-1 guess, or seeds whose true parent has the child
+        // nearby are thrown away here and never reach pass 2.
+        if (c->parent >= 0 && posFromPass2(q, c->parent)) {
+            centre = anc[c->parent];
+            reach += slack[c->parent];
+        }
+        anc[k] = centre; slack[k] = reach;
 
         // Footprint collision: a rare pairing, so filtering it here on pure
         // geometry kills the overwhelming majority of seeds before any biome
@@ -2423,14 +2572,15 @@ static int resolveEyes(const Query *q, Generator *g, uint64_t worldSeed, Match *
     return 0;   // no portal room among the generated pieces
 }
 
-// The point a condition's radius is measured from. A structure parent's
-// position comes from pass 1 (m->pos, or fixed->pos when it was spawn-relative
-// and refined in pass 2); a BIOME parent's position is produced in pass 2
-// (fixed->pos) -- this is what makes "biome B within D of biome A" work.
-// Origin is (0,0); spawn is resolved lazily and cached.
+// The point a condition's radius is measured from. Origin is (0,0); spawn is
+// resolved lazily and cached. A parent's position is read from `fixed`, which
+// starts as a copy of pass 1's match and is overwritten whenever pass 2
+// produces or moves a position -- so it is always the parent as finally
+// verified. The planner runs every such parent first (posFromPass2).
 static Pos condCentre(const Query *q, int k, const Match *m, Match *fixed,
                       int *haveSpawn, Pos *spawn, Generator *g)
 {
+    (void)m;
     const Cond *c = &q->cond[k];
     if (c->parent == PARENT_SPAWN) {
         if (!*haveSpawn) { *spawn = getSpawn(g); *haveSpawn = 1; }
@@ -2438,9 +2588,7 @@ static Pos condCentre(const Query *q, int k, const Match *m, Match *fixed,
     }
     if (c->parent == PARENT_ORIGIN) return (Pos){0, 0};
     if (c->parent == PARENT_AT)     return (Pos){c->atX, c->atZ};
-    const Cond *p = &q->cond[c->parent];
-    if (p->type == CT_BIOME) return fixed->pos[c->parent];
-    return (p->parent == PARENT_SPAWN) ? fixed->pos[c->parent] : m->pos[c->parent];
+    return fixed->pos[c->parent];
 }
 
 static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
@@ -2485,7 +2633,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 // the NEXT stronghold, sh.pos the current one. A stronghold 81
                 // blocks from spawn was reported as no match at within=112 and
                 // as a match at within=300, purely because the cutoff moved.
-                int pastLast = (sh.dist * 16.0 > (double)c->within * 2.0 + 2048.0);
+                int pastLast = shPastLast(&sh, centre, c->within);
                 if (dmet(sh.pos, centre, c->metric) > lim) { if (pastLast) break; continue; }
 
                 int cnt = getStrongholdPiecesOpt(g_shPieces, SH_MAXPIECE, q->mc,
@@ -2509,6 +2657,11 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 Pos bestAt = sh.pos;
                 for (int i = 0; i < cnt; i++) {
                     const Piece *pc = &g_shPieces[i];
+                    // The roof bound is a property of the piece that is the
+                    // find. Testing it only on whichever piece came out
+                    // shallowest rejected strongholds where a different piece
+                    // met both bounds. Cheap, so before the terrain lookup.
+                    if (c->hasRoofMin && pc->bb1.y < c->minRoofY) continue;
                     int px = (pc->bb0.x + pc->bb1.x) >> 1;
                     int pz = (pc->bb0.z + pc->bb1.z) >> 1;
                     int ok = 0;
@@ -2526,8 +2679,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                         bestSurf = psurf; bestAt = (Pos){px, pz};
                     }
                 }
-                if (bestDepth == 0x7fffffff) continue;   // every piece was at sea
-                if (c->hasRoofMin && bestRoof < c->minRoofY) continue;
+                if (bestDepth == 0x7fffffff) continue;   // no piece qualified
                 if (c->hasMaxDepth && bestDepth > c->maxDepth) continue;
                 (void)bestSurf;
 
@@ -2616,7 +2768,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
             // The reference must be LAND, and ocean must cover >= pct% of the
             // disc: a small island in open water. Same surface probe as biomes.
-            int cid = getBiomeAt(g, 0, (centre.x>>4)*4 + 2, 319 >> 2, (centre.z>>4)*4 + 2);
+            int cid = chunkBiome(g, centre.x, centre.z);
             if (isOceanic(cid)) return 0;                 // spawn itself is water
             int64_t lim = (int64_t)c->within * c->within;
             int step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
@@ -2626,7 +2778,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 if ((int64_t)dx*dx + (int64_t)dz*dz > lim) continue;
                 int bx = centre.x + dx, bz = centre.z + dz;
                 total++;
-                if (isOceanic(getBiomeAt(g, 0, (bx>>4)*4 + 2, 319 >> 2, (bz>>4)*4 + 2))) ocean++;
+                if (isOceanic(chunkBiome(g, bx, bz))) ocean++;
             }
             if (total <= 0 || (int64_t)ocean * 100 < (int64_t)c->areaPct * total)
                 return 0;
@@ -2651,7 +2803,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 total++;   // counted before the gate: it is the denominator
                 int qx = (bx>>4)*4 + 2, qz = (bz>>4)*4 + 2;
                 if (!climateMayHold(q, worldSeed, k, qx, qz)) continue;
-                int id = getBiomeAt(g, 0, qx, 319 >> 2, qz);
+                int id = surfaceBiomeQ(g, qx, qz);
                 if (c->biomeIsSet ? c->biomeSet[id & 0xff] : id == c->biomeId) match++;
             }
             // Integer test without floating point: match/total >= pct/100.
@@ -2711,14 +2863,13 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
         }
 
         if (c->type == CT_LOOT) {
-            // Scan every viable instance in range and roll its loot; the FIRST
-            // one meeting the count wins. Checking only the nearest would
-            // reject seeds where a farther instance holds the item.
-            Pos centre = (c->parent >= 0) ? fixed->pos[c->parent] : (Pos){0,0};
-            if (c->parent == PARENT_SPAWN) {
-                if (!*haveSpawn) { *spawn = getSpawn(g); *haveSpawn = 1; }
-                centre = *spawn;
-            }
+            // Scan every instance in range that really generates and roll its
+            // loot; the FIRST one meeting the count wins. Checking only the
+            // nearest would reject seeds where a farther instance holds the
+            // item. A leaderboard ranked on this condition is the exception: it
+            // wants the BEST chest in range, so it rolls them all.
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
+            int wantMax = (q->rankIdx == k);
             StructureConfig sc;
             if (!getStructureConfig(c->structType, q->mc, &sc)) return 0;
             double span = sc.regionSize * 16.0;
@@ -2727,19 +2878,21 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             int r0z = (int)floor((centre.z - c->within) / span);
             int r1z = (int)floor((centre.z + c->within) / span);
             int64_t lim = (int64_t)c->within * c->within;
-            int hit = 0;
-            for (int rx = r0x; rx <= r1x && !hit; rx++)
-            for (int rz = r0z; rz <= r1z && !hit; rz++) {
+            int hit = 0, bestCnt = -1;
+            for (int rx = r0x; rx <= r1x && !(hit && !wantMax); rx++)
+            for (int rz = r0z; rz <= r1z && !(hit && !wantMax); rz++) {
                 Pos p;
                 if (!getStructurePos(c->structType, q->mc, s48, rx, rz, &p)) continue;
                 if (dmet(p, centre, c->metric) > lim) continue;
-                if (!isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
+                if (!generatesAt(q, c->structType, s48, worldSeed, g, p)) continue;
                 StructureVariant sv;
-                int biome = getBiomeAt(g, 0, (p.x>>4)*4+2, 319>>2, (p.z>>4)*4+2);
-                getVariant(&sv, c->structType, q->mc, s48, p.x, p.z, biome);
-                int cnt = lootCountItem(lc, q->mc, s48, c->structType,
+                int biome = chunkBiome(g, p.x, p.z);
+                getVariant(&sv, c->structType, q->mc, worldSeed, p.x, p.z, biome);
+                // The FULL world seed: 1.18+ chest seeds depend on all 64 bits.
+                int cnt = lootCountItem(lc, q->mc, worldSeed, c->structType,
                                         p.x, p.z, &sv, c->lootItem);
-                if (cnt >= c->lootMin) {
+                if (cnt >= c->lootMin && cnt > bestCnt) {
+                    bestCnt = cnt;
                     fixed->pos[k] = p;
                     fixed->lootCount[k] = cnt;
                     hit = 1;
@@ -2763,12 +2916,15 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             continue;
         }
 
-        // Spawn-relative: pass 1 only guaranteed this is near the ORIGIN.
-        // Resolve it properly now that the biome generator exists.
-        if (c->parent == PARENT_SPAWN && c->type == CT_STRUCTURE) {
-            if (!*haveSpawn) { *spawn = getSpawn(g); *haveSpawn = 1; }
+        // Spawn-relative, or measured from a parent pass 2 moved: pass 1 only
+        // guaranteed this is near where the parent USED to be. Re-find it
+        // around the true reference now that the biome generator exists.
+        if (c->type == CT_STRUCTURE && !isPopulationFeature(c->structType) &&
+            (c->parent == PARENT_SPAWN ||
+             (c->parent >= 0 && posFromPass2(q, c->parent)))) {
+            Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
             Pos p;
-            if (!refind(q, k, s48, *spawn, fixed, &p)) return 0;
+            if (!refind(q, k, s48, centre, fixed, &p)) return 0;
             fixed->pos[k] = p;
         }
 
@@ -2796,7 +2952,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                     (c->geodeSize > 0 || c->reqCracked != 0 ||
                      (q->rankIdx == k && rankMetric(q) == RANK_SIZE))) {
                     StructureVariant sv;
-                    int biome = getBiomeAt(g, 0, (p.x>>4)*4+2, 319>>2, (p.z>>4)*4+2);
+                    int biome = chunkBiome(g, p.x, p.z);
                     if (!getVariant(&sv, Geode, q->mc, worldSeed, p.x, p.z, biome)) continue;
                     if (c->reqCracked > 0 && !sv.cracked) continue;
                     if (c->reqCracked < 0 &&  sv.cracked) continue;
@@ -2812,7 +2968,7 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
         }
 
         if (c->type == CT_STRUCTURE) {
-            Pos p = (c->parent == PARENT_SPAWN) ? fixed->pos[k] : m->pos[k];
+            Pos p = fixed->pos[k];     // pass 1's, or re-found just above
             if (!isViableStructurePos(c->structType, g, p.x, p.z, 0))
                 return 0;
             // Terrain rules the engine does not model (1.18+). Runs after the
@@ -2825,8 +2981,8 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 // a buried portal is a 50/50 coin flip; a zombie village, an
                 // igloo basement, and a giant portal are likewise fixed draws.
                 StructureVariant sv;
-                int biome = getBiomeAt(g, 0, (p.x>>4)*4+2, 319>>2, (p.z>>4)*4+2);
-                getVariant(&sv, c->structType, q->mc, s48, p.x, p.z, biome);
+                int biome = chunkBiome(g, p.x, p.z);
+                getVariant(&sv, c->structType, q->mc, worldSeed, p.x, p.z, biome);
                 if (c->surfaceOnly  && sv.underground) return 0;
                 if (c->reqAbandoned && !sv.abandoned)  return 0;
                 if (c->reqBasement  && !sv.basement)   return 0;
@@ -2848,7 +3004,10 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                     mapApproxHeight(&y, NULL, g, &sn, cx >> 2, cz >> 2, 1, 1);
                     surf = (int)y;
                 }
-                if (surf < SEA_LEVEL) return 0;
+                // Dry means the top block is at or above the waterline: water
+                // fills y<=62, so a top block AT 62 has air over it. Comparing
+                // against 63 rejected exactly the beach chests at the waterline.
+                if (surf < SEA_LEVEL_Y) return 0;
             }
             if (c->caveBelow > 0) {
                 // Sample a few columns across the footprint, not just the
@@ -2910,23 +3069,41 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             Pos centre = condCentre(q, k, m, fixed, haveSpawn, spawn, g);
             int64_t lim = (int64_t)c->within * c->within;
             int step = c->scanStep > 0 ? c->scanStep : SCAN_FINE;
+            // Sample points, at 1:4 ("quart") biome resolution. "fast" and
+            // "fine" take chunk centres -- every 4th chunk, or every chunk --
+            // which is where structure viability samples too; "exact" takes
+            // every quart. The DISTANCE is tested on the point actually
+            // sampled. It used to be tested on a lattice point and the biome
+            // read at that point's chunk centre, up to ~11 blocks further out,
+            // so "within 16" could match at 24; and "exact"'s 4-block lattice
+            // landed 16 times on the same chunk centre, paying 16x for
+            // nothing.
+            int qstep = step >= 16 ? (step / 16) * 4 : 1;   // in quarts
+            int qoff  = step >= 16 ? 2 : 0;                 // chunk-centre quart
+            int q0x = (int)floor((centre.x - c->within) / (step >= 16 ? 16.0 : 4.0));
+            int q0z = (int)floor((centre.z - c->within) / (step >= 16 ? 16.0 : 4.0));
+            int q1x = (int)floor((centre.x + c->within) / (step >= 16 ? 16.0 : 4.0));
+            int q1z = (int)floor((centre.z + c->within) / (step >= 16 ? 16.0 : 4.0));
+            if (step >= 16) { q0x *= 4; q0z *= 4; q1x *= 4; q1z *= 4; }
             // A leaf biome only needs presence, so stop at the first hit. A
             // biome that is a PARENT records the match nearest its own centre --
             // the representative point a child ("biome B within D of A") is then
             // measured from, so a large biome's far corner doesn't anchor it.
             int hit = 0; Pos best = centre; int64_t bestd = lim + 1;
-            for (int dx = -c->within; dx <= c->within; dx += step) {
-                for (int dz = -c->within; dz <= c->within; dz += step) {
-                    int64_t d = (int64_t)dx*dx + (int64_t)dz*dz;
+            for (int qxb = q0x; qxb <= q1x; qxb += qstep) {
+                for (int qzb = q0z; qzb <= q1z; qzb += qstep) {
+                    int qx = qxb + qoff, qz = qzb + qoff;
+                    // The block at the centre of the sampled quart.
+                    int bx = qx * 4 + 2, bz = qz * 4 + 2;
+                    int64_t dx = bx - centre.x, dz = bz - centre.z;
+                    int64_t d = dx*dx + dz*dz;
                     if (d > lim) continue;
-                    int bx = centre.x + dx, bz = centre.z + dz;
                     // surface sampling: biomes are 3D since 1.18; a y=63 probe
                     // lands in cave biomes. 319>>2 is what viability checks use.
-                    int qx = (bx>>4)*4 + 2, qz = (bz>>4)*4 + 2;
                     // Temperature first: a third of the cost, and where it says
                     // no the full six-noise lookup cannot say yes.
                     if (!climateMayHold(q, worldSeed, k, qx, qz)) continue;
-                    int id = getBiomeAt(g, 0, qx, 319 >> 2, qz);
+                    int id = surfaceBiomeQ(g, qx, qz);
                     if (!(c->biomeIsSet ? c->biomeSet[id & 0xff] : id == c->biomeId)) continue;
                     hit = 1;
                     if (d < bestd) { bestd = d; best = (Pos){bx, bz}; }
@@ -2935,7 +3112,9 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                 if (hit && !c->isParent) break;
             }
             if (!hit) return 0;
-            fixed->pos[k] = best;   // where the biome was matched (for output/children)
+            // The sampled point itself, so checkbiome at this position reads
+            // the same quart and re-verifies it exactly.
+            fixed->pos[k] = best;
         }
     }
     return 1;
