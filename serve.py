@@ -20,8 +20,12 @@ Endpoints (all POST bodies are JSON):
     GET  /api/assets      -> lists which structure/item icons the user has added
     GET  /assets/<path>   -> static image files (user-provided graphics)
     POST /api/ask         -> natural language -> query JSON (needs ANTHROPIC_API_KEY)
-    POST /api/gemini      -> natural language -> query JSON via Google Gemini
-                             (key from the request body or GEMINI_API_KEY)
+    POST /api/gemini      -> natural language -> query JSON. "provider":"gemini"
+                             (default, key from the body or GEMINI_API_KEY) or
+                             "compatible" for any OpenAI chat-completions API --
+                             Groq, OpenAI, OpenRouter, DeepSeek, local Ollama --
+                             with "base" and "model" (key: body or AI_API_KEY).
+                             The route keeps its name so saved links still work.
     POST /api/hunt        -> open-ended search: batch after batch, advancing
                              FIND_OFFSET, until satisfied or stopped. Returns a
                              job id immediately; poll /api/hunt/status, end with
@@ -46,6 +50,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 import webbrowser
@@ -594,6 +599,25 @@ say so in notes rather than promising a spawn-adjacent result. "of":"origin"
 (0,0) is exact and is the better default when the user just means "near the
 middle of the world".
 
+COOL SPAWNS. "I spawn in/on <thing>" is one of the most-asked shapes and it is
+already expressible -- it is just "of":"spawn" with a SMALL within. Recipes:
+  spawn in an ancient city   {"id":"ac","structure":"ancient_city","within":48,"of":"spawn"}
+  spawn in a village         {"id":"v","structure":"village","within":48,"of":"spawn"}
+  spawn inside a stronghold  {"id":"sh","stronghold":true,"within":112,"of":"spawn"}
+      112 because a stronghold sprawls that far from its start, so anything
+      inside that radius is over some part of it. Do NOT use "structure":
+      "stronghold" -- a stronghold has no region position and is rejected.
+  spawn on deepslate emerald {"id":"em","ore":"emerald","deepslate":true,
+                              "count":4,"within":16,"of":"spawn"}
+  village inside an ancient city
+      {"id":"vac","overlap":["village","ancient_city"],"within":200,"of":"origin"}
+      Verified against 6 published seeds: 5 reproduce exactly. Ancient cities
+      need the deep_dark biome, checked at the city's own Y, not the surface.
+Keep "within" small (16-112) or the answer stops meaning "at spawn". Say in
+notes that spawn is an estimate -- see the paragraph above -- and that a
+structure at spawn is UNDER it when the structure is underground (an ancient
+city sits near y=-50, so you spawn above it and dig down).
+
 "metric" chooses how "within" measures, and it matters more than it looks:
   omit it (default "euclidean") -- a DISC. Right for plain distance: "a village
       within 200 blocks", "near spawn".
@@ -659,11 +683,100 @@ Condition types (use EXACTLY these keys):
     vein", "diamonds in one spot"), which is far rarer than a scattered total.
     "exposed":true -> only count ore with a non-solid neighbour in real terrain,
     i.e. ore visible in a cave wall. 1.18+ overworld only, SLOW, radius <= 64.
+    "deepslate":true -> count only blocks below y=0, which is what makes them
+    DEEPSLATE ore. Deepslate emerald/diamond/etc is NOT a separate material and
+    there is no "deepslate_emerald" to pass as <material>: it is the same ore
+    wearing whatever stone it replaced, so the band decides the block form.
+    Use it for "deepslate emerald ore", "deepslate diamonds". 1.18+ only.
+    "y_min":N,"y_max":M -> an explicit inclusive Y band instead, when the user
+    names depths ("diamonds below y=-50").
+    SPAWN: `"of":"spawn"` with a small "within" (16 is the spawn chunk) is how
+    you answer "I spawn on/next to <ore>" -- e.g. spawning on deepslate emerald:
+      {"id":"em","ore":"emerald","deepslate":true,"count":4,"within":16,"of":"spawn"}
+    Be honest in notes that this means the ore is in the spawn chunk at that
+    depth, not that the player is standing on the block; spawn is a surface
+    point and deepslate is below y=0, so it is under them, not beneath a foot.
+- Exposed stronghold: {"id","stronghold":"exposed"|"shallow"|true,"within","of"
+    [,"max_depth":N][,"land":false]}
+    THE KEY IS "stronghold". Writing {"exposed":true} instead is wrong and the
+    engine rejects it -- "exposed" is a buried-treasure modifier, not a
+    condition. Copy this shape exactly, INCLUDING the version:
+      {"version":"1.17","conditions":[
+        {"id":"sh","stronghold":"exposed","within":3000,"of":"origin"}]}
+    A stronghold whose roof comes up to the surface. Use for "exposed
+    stronghold", "surface stronghold", "a stronghold you can see", "a stronghold
+    right under the grass". "exposed" = max_depth 0 (it breaks the surface),
+    "shallow" = max_depth 4, true = any stronghold at all.
+    max_depth is measured PER PIECE against the ground over that piece, not as a
+    bare Y: y=60 is a metre down on a plain and buried inside a mountain, and
+    only one of those is the find. The reported /tp points at the shallowest
+    piece, which can be 100 blocks from the stronghold's centre.
+    "land":false also allows sea-floor ones. Dry land is the DEFAULT because
+    most strongholds reaching the surface do so on an ocean floor -- verified: a
+    hit at roof y=51 had water directly on 466 of its 546 roof columns.
+    VERSION: PRE-1.18 ONLY. From 1.18 moveBelowSeaLevel starts the structure 64
+    blocks lower, so the roof can never exceed y=52 while the ground stays near
+    y=63 -- an exposed stronghold does not exist there, and the query refuses
+    the version rather than searching for something impossible. You MUST put
+    "version":"1.17" in the query you return -- not merely mention 1.17 in
+    notes -- whenever the request is for an exposed/surface/shallow stronghold,
+    or for a stronghold inside ANY structure (a mansion, a village, a monument,
+    whichever they name), UNLESS the user named a version themselves. The version the system prompt gives you is the one the page has
+    selected, and for this request it is the wrong one; overriding it is
+    expected here and the server accepts it. Say in notes that you changed it.
+    ACCURACY: checked against end portal frames on a real 1.16.5 server, the
+    height was exact for 15 of 15 strongholds with roofs at or below y=52, but
+    only 2 of 3 above it -- and an exposed one is always above it. Say that a
+    hit is a candidate worth checking, not a certainty.
+    COST: walks the stronghold rings with the biome generator, ~1 ms per world
+    seed, thousands of times slower than a structure condition. There is no
+    48-bit prefilter for it, so every seed pays. Keep "within" <= 3000.
 - Structure overlap: {"id","overlap":[<structure A>,<structure B>],"within","of"[,"pad":P]}
     the two structures' footprints MEET -- "a ruined portal inside a village", "a
     village generated on top of a shipwreck", "two structures colliding". "pad"
     adds slack in blocks (use ~16 for "practically touching"). Footprints are
     nominal boxes, so a hit is a strong candidate, not a proof.
+    STRONGHOLD is allowed here and ONLY here (it has no region position, so it
+    cannot be used as a plain "structure" condition). Use it for "a stronghold
+    inside a mansion", "a stronghold generated into a village", "an exposed
+    stronghold". It is tested against the stronghold's REAL piece boxes, not a
+    nominal square, because a stronghold is 112 blocks of corridor in every
+    direction and a square that size would match almost anything nearby.
+      {"id":"sm","overlap":["stronghold","mansion"],"within":3000,"of":"origin"}
+    "max_depth":D is how you say EXPOSED, and it is the one you almost always
+    want: it measures the GROUND OVER the piece that meets the partner, so D=0
+    means that piece breaks the surface and D=4 means a few blocks of dirt over
+    it. Dry land is assumed (add "land":false to allow a river or sea floor).
+      {"id":"sv","overlap":["stronghold","village"],"within":3000,"of":"origin",
+       "max_depth":0,"version":"1.17"}
+    is "an exposed stronghold inside a village" -- use exactly this shape.
+    DO NOT reach for min_roof_y to mean exposed. It is only a Y threshold with
+    no terrain in it, and the two genuinely disagree: a search for
+    min_roof_y=55 in a village returned strongholds sitting under 7 to 13 blocks
+    of ground, and the one that got walked to in game was buried under four.
+    A roof at y=60 is at the surface on a plain and deep inside a hill.
+    "min_roof_y":N additionally requires the piece that meets the partner to
+    reach y=N or above -- a cruder filter, useful only to say "somewhere high
+    up" when you do not care about the ground. A stronghold
+    roof above y=53 only happens when the stronghold is unusually tall, so N in
+    the 55-62 range is a genuinely rare find; omit it for "a stronghold under a
+    mansion" and use it for "a stronghold exposed in a mansion".
+    VERSION, AND THIS IS NOT OPTIONAL: min_roof_y is subject to the SAME 1.18
+    cutoff as the standalone stronghold condition above. From 1.18 the roof can
+    never exceed y=52, and the engine REFUSES min_roof_y>52 with a hard query
+    error -- the search does not run at all and the user sees nothing. So
+    whenever you set min_roof_y above 52 you MUST also put "version":"1.17" in
+    the query you return, exactly as for the standalone condition, and say in
+    notes that you changed it. This applies to EVERY partner, not just mansion:
+    "an exposed stronghold inside a village", "a surface stronghold in a
+    monument", any of them. Do not lower N to 52 to get past the error instead
+    -- at 1.18+ y=52 is the ceiling, only about 1 stronghold in 180 reaches it,
+    and it is still ~11 blocks under a y=63 surface, so it is not exposed and
+    the search runs essentially forever. Change the version, not the number.
+    COST: this walks the stronghold rings with the biome generator, ~1 ms per
+    world seed, so it is thousands of times slower than an ordinary structure
+    condition. Keep "within" at 3000 or less and expect a long search when
+    min_roof_y is set.
     COMPOSING IT: hang other conditions off the STRUCTURE, not off the overlap.
     An overlap reports one position between the two footprints, so
     "outpost within 48 of ov" asks for an outpost near that midpoint and can be
@@ -847,27 +960,13 @@ def _vocab_for(version: str) -> dict:
     return json.loads(out)
 
 
-def api_gemini(body) -> dict:
-    """Natural language -> query JSON via Google's Gemini API.
-
-    The key comes from the request (the UI stores it in the browser) or the
-    GEMINI_API_KEY env var. We call Gemini server-side so the browser never has
-    to deal with CORS, and force JSON output via responseMimeType.
-    """
-    text = str(body.get("text", "")).strip()
-    if not text:
-        raise Failure("say what you're looking for")
-    key = str(body.get("key", "")).strip() or os.environ.get("GEMINI_API_KEY", "")
-    if not key:
-        raise Failure("no Gemini API key yet. Open settings (the dot by the search "
-                      "box) and paste one -- get a free key at "
-                      "https://aistudio.google.com/apikey")
-    v = check_version(str(body.get("version", "1.21")))
-    vocab = _vocab_for(v)
+def _ai_gemini(body, text, system, key):
+    """Ask Gemini for the query JSON. Returns the raw model text."""
+    # The model is settable from the page now. It was pinned to GEMINI_MODEL,
+    # so when that alias stopped resolving the only escape was an environment
+    # variable and a server restart -- while the UI kept saying "check your key",
+    # which was the one thing that did not need checking.
     model = re.sub(r"[^A-Za-z0-9._-]", "", str(body.get("model", "")) or GEMINI_MODEL)
-    system = (AI_SCHEMA + "\n\nMinecraft version: " + vocab["version"]
-              + "\n\nValid structures: " + ", ".join(vocab["structures"])
-              + "\n\nValid biomes: " + ", ".join(vocab["biomes"]))
     payload = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": text}]}],
@@ -875,12 +974,88 @@ def api_gemini(body) -> dict:
     }
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
            f":generateContent?key={quote(key, safe='')}")
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
+
+    # A DEADLINE for the whole call, not a timeout per attempt.
+    #
+    # Retry-then-try-alternatives multiplied the worst case instead of bounding
+    # it: a stalled service could hold the request for a retry plus three
+    # fallbacks at 45s each, and the page just sat there. The budget below caps
+    # the lot, and each attempt gets whatever is left rather than a fixed slice.
+    # 150s for the whole call, and a generous slice for the FIRST attempt.
+    #
+    # The first cut of this budgeted 55s total and capped each attempt at 30s,
+    # which quietly made Gemini stricter than the compatible provider's 120s --
+    # so a slow-but-working Gemini was cut off and reported as "the service is
+    # struggling" when it had simply not finished. The system prompt is ~5.9k
+    # tokens (the schema is what makes the planner accurate, so it stays), and a
+    # loaded free tier can chew on that for well over half a minute.
+    deadline = time.monotonic() + 150.0
+
+    def _remaining():
+        return deadline - time.monotonic()
+
+    def _post():
+        left = _remaining()
+        if left < 5.0:
+            raise Failure("Gemini did not answer within the time budget. The "
+                          "service is slow or overloaded right now -- this is "
+                          "not your key. Try again, or use the OpenAI-compatible "
+                          "provider in settings.")
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "seed-finder/1.0"}, method="POST")
+        # TimeoutError is NOT a URLError. A read that stalls after the connection
+        # is made raises it bare, so the except clauses below never saw it and it
+        # escaped as an unhandled 500 reading "TimeoutError: The read operation
+        # timed out" -- true, and useless.
+        try:
+            with urllib.request.urlopen(req, timeout=min(left, 90.0)) as resp:
+                return json.loads(resp.read())
+        except TimeoutError:
+            raise Failure("Gemini did not answer within 90s. Your key is fine "
+                          "-- the request reached Google and it is taking too "
+                          "long, which the free tier does under load. Try again, "
+                          "pin a specific model instead of gemini-flash-latest "
+                          "(that alias points at the busiest build), or use the "
+                          "OpenAI-compatible provider.")
+
+    used_model = model
     try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            data = json.loads(resp.read())
+        try:
+            data = _post()
+        except urllib.error.HTTPError as first:
+            # 503 is Google saying the MODEL is busy, not that anything here is
+            # wrong -- the request authenticated to get that far. These spikes
+            # are short, so one retry turns most of them into a normal answer
+            # instead of an error the reader has to interpret.
+            if first.code not in (503, 429):
+                raise
+            time.sleep(min(2.5, max(0.0, _remaining() - 6.0)))
+            try:
+                data = _post()
+            except urllib.error.HTTPError as second:
+                # Still saturated. The load is per MODEL, so another model on the
+                # same key usually answers immediately -- and the alternative to
+                # trying one is telling the user to go and pick one by hand,
+                # which is the same work done more slowly and with a dead end in
+                # the middle. gemini-flash-latest is an alias onto whichever
+                # build is current, which is also the busiest.
+                if second.code != 503:
+                    raise
+                for alt in _gemini_alternatives(key, model)[:3]:
+                    if _remaining() < 15.0:
+                        raise second
+                    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+                           f"{alt}:generateContent?key={quote(key, safe='')}")
+                    try:
+                        data = _post()
+                        used_model = alt
+                        break
+                    except urllib.error.HTTPError:
+                        continue
+                else:
+                    raise second
     except urllib.error.HTTPError as e:
         raw = e.read().decode(errors="replace")
         msg = raw
@@ -890,6 +1065,22 @@ def api_gemini(body) -> dict:
             pass
         if e.code in (400, 403) and re.search(r"api.?key|permission|invalid", msg, re.I):
             raise Failure(f"Gemini rejected the key ({e.code}). Check it in settings. [{msg}]")
+        # A retired model alias fails here too, and reads exactly like a dead
+        # key unless the message says which it was.
+        if e.code == 404:
+            raise Failure(f"Gemini has no model {model!r} ({e.code}). This is NOT a "
+                          f"key problem -- set the model in settings, or switch "
+                          f"provider. [{msg[:200]}]")
+        if e.code == 503:
+            raise Failure(f"Gemini's {model!r} is overloaded (503) and a retry did "
+                          f"not clear it. YOUR KEY IS FINE -- a 503 means the "
+                          f"request got through and Google is out of capacity for "
+                          f"that model. Wait a minute, or set a different model in "
+                          f"settings (Test connection lists what your key can use).")
+        if e.code == 429:
+            raise Failure(f"Gemini rate-limited this key (429) and a retry did not "
+                          f"clear it. The key is valid -- this is the free tier's "
+                          f"per-minute cap. Wait a moment and ask again.")
         raise Failure(f"Gemini error {e.code}: {msg}")
     except urllib.error.URLError as e:
         raise Failure(f"could not reach Gemini ({e.reason}). Check your connection.")
@@ -897,7 +1088,10 @@ def api_gemini(body) -> dict:
     try:
         cand = data["candidates"][0]
         parts = cand["content"]["parts"]
-        answer = "".join(p.get("text", "") for p in parts)
+        # The model that ANSWERED, which after a 503 fallback is not the one
+        # that was asked for. Substituting silently would leave the user reading
+        # output from a model their settings say they are not using.
+        return "".join(p.get("text", "") for p in parts), used_model
     except (KeyError, IndexError):
         reason = ""
         try:
@@ -905,6 +1099,310 @@ def api_gemini(body) -> dict:
         except Exception:  # noqa: BLE001
             reason = (data.get("promptFeedback") or {}).get("blockReason", "")
         raise Failure(f"Gemini returned no query{f' ({reason})' if reason else ''}. Try rephrasing.")
+
+
+# Base URLs people actually paste, normalised. A provider's docs give the root
+# ("https://api.groq.com/openai/v1") but the habit is to paste the full endpoint,
+# and ".../v1/chat/completions/chat/completions" is a 404 whose message says
+# nothing about the real mistake.
+def _chat_url(base: str) -> str:
+    base = base.strip().rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    return base + "/chat/completions"
+
+
+def _ai_compatible(body, text, system, key):
+    """Ask an OpenAI-compatible endpoint. Returns the raw model text.
+
+    Groq, OpenAI, OpenRouter, DeepSeek, Together and a local Ollama all take the
+    same POST, so the provider is only a base URL and a model name.
+    """
+    base = str(body.get("base", "")).strip()
+    if not base:
+        raise Failure("no API base URL. Open settings and set one -- "
+                      "https://api.groq.com/openai/v1 for Groq, "
+                      "https://api.openai.com/v1 for OpenAI, or "
+                      "http://localhost:11434/v1 for a local Ollama.")
+    if not base.startswith(("http://", "https://")):
+        raise Failure(f"the API base URL must start with http:// or https:// (got {base!r})")
+    model = str(body.get("model", "")).strip()
+    if not model:
+        raise Failure("no model name. Open settings and set one -- e.g. "
+                      "llama-3.3-70b-versatile on Groq, gpt-4o-mini on OpenAI.")
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": text}],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    # A real User-Agent, because urllib's default is not one.
+    #
+    # Groq sits behind Cloudflare, which answers "Python-urllib/3.x" with error
+    # code 1010 and a 403 -- indistinguishable, from here, from a rejected key.
+    # Tested: with the default UA a bogus key returns "error code: 1010"; with
+    # this one the same request comes back as a proper 401 and a JSON message
+    # about the key. Without it a VALID key would have failed too, and the
+    # message would have sent the user to re-check the one thing that was fine.
+    headers = {"Content-Type": "application/json",
+               "User-Agent": "seed-finder/1.0"}
+    if key:
+        headers["Authorization"] = "Bearer " + key     # a local Ollama needs none
+
+    def post(pl):
+        req = urllib.request.Request(_chat_url(base), data=json.dumps(pl).encode(),
+                                     headers=headers, method="POST")
+        # Same trap as the Gemini path: a stalled read raises TimeoutError, which
+        # is not a URLError and would otherwise surface as a raw 500.
+        # 120s, because FREE models queue.
+        #
+        # This was 45s, which is a reasonable number for an API and the wrong one
+        # for this. Measured on OpenRouter's free tier: a query that returns
+        # correctly took 44.3 seconds end to end -- inside the limit by seven
+        # tenths of a second. The same request a minute later, with the queue
+        # slightly longer, is a read timeout and looks like a broken key.
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return json.loads(resp.read())
+        except TimeoutError:
+            raise Failure(f"{base} did not answer within 120s. Free-tier models "
+                          f"queue and can take a minute or more; a paid or "
+                          f"smaller model responds in seconds. Your key is fine "
+                          f"-- nothing here is misconfigured.")
+
+    try:
+        data = post(payload)
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(errors="replace")
+        msg = raw
+        try:
+            msg = json.loads(raw)["error"]["message"]
+        except Exception:  # noqa: BLE001
+            pass
+        # response_format is not universal; several compatible servers reject it.
+        # The answer is pulled out with a regex either way, so losing the whole
+        # request over a formatting hint would be silly.
+        if e.code in (400, 404, 422) and re.search(r"response_format|json_object", msg, re.I):
+            payload.pop("response_format", None)
+            try:
+                data = post(payload)
+            except urllib.error.HTTPError as e2:
+                raise Failure(f"AI error {e2.code}: "
+                              f"{e2.read().decode(errors='replace')[:300]}")
+        elif e.code in (401, 403):
+            raise Failure(f"the endpoint rejected the key ({e.code}). Check it in "
+                          f"settings. [{msg[:200]}]")
+        elif e.code == 404:
+            raise Failure(f"404 from {_chat_url(base)} -- check the base URL, and "
+                          f"that the model {model!r} exists there. [{msg[:200]}]")
+        elif e.code == 429:
+            raise Failure(f"the provider rate-limited this key (429). [{msg[:200]}]")
+        else:
+            raise Failure(f"AI error {e.code}: {msg[:300]}")
+    except urllib.error.URLError as e:
+        raise Failure(f"could not reach {base} ({e.reason}). Check the URL and "
+                      f"your connection.")
+
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise Failure("the endpoint returned no message -- check the model name.")
+
+
+def _gemini_models(key):
+    """Model ids this key may call generateContent on. [] if the list fails.
+
+    Shared by the diagnostic and the 503 fallback so the two can never disagree
+    about what is available -- a "try one of these" list that does not match
+    what the retry actually tries would be worse than no list.
+    """
+    url = ("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key="
+           + quote(key, safe=""))
+    req = urllib.request.Request(url, headers={"User-Agent": "seed-finder/1.0"},
+                                 method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for m in data.get("models", []):
+        if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+            continue
+        name = m.get("name", "").split("/")[-1]
+        if name:
+            out.append(name)
+    return out
+
+
+def _gemini_alternatives(key, failed):
+    """Models worth retrying after a 503, best first.
+
+    Preferring flash keeps the planner cheap and fast, which is what this job
+    wants; the rest follow so a fallback still exists when flash as a whole is
+    the thing under load. Experimental and preview builds sort last -- they are
+    the most likely to be overloaded in the first place.
+    """
+    names = [n for n in _gemini_models(key) if n != failed]
+
+    def rank(n):
+        return (0 if "flash" in n else 1,
+                1 if ("exp" in n or "preview" in n) else 0,
+                0 if "latest" not in n else 1,
+                len(n))
+    return sorted(names, key=rank)
+
+
+def api_aitest(body) -> dict:
+    """Is the key good, and does the model exist? Answered separately.
+
+    "My key stopped working" covers at least three different faults, and the
+    generateContent call cannot tell them apart: a revoked key, an exhausted
+    quota and a RETIRED MODEL ALIAS all surface as a failed request. The last
+    one is the cruel case -- the key is perfect and no amount of re-signing up
+    will help.
+
+    Listing models answers both questions at once. The list call is free, it
+    needs only the key, and a model missing from the result is proof rather
+    than a hypothesis.
+    """
+    provider = str(body.get("provider", "")).strip().lower() or "gemini"
+    key = (str(body.get("key", "")).strip()
+           or os.environ.get("GEMINI_API_KEY" if provider == "gemini" else "AI_API_KEY", ""))
+    if provider == "gemini":
+        if not key:
+            raise Failure("no key to test -- paste one first")
+        # Google answers a key from another service with "API key not valid",
+        # the same words it uses for a revoked one -- so the advice that follows
+        # is "make a new key", and a new key cannot fix the wrong key being sent.
+        # The prefix settles it before the request leaves.
+        if key.startswith("sk-"):
+            return {"ok": False, "key_ok": False,
+                    "verdict": "That is an OpenAI/OpenRouter key (it starts "
+                               "'sk-'), not a Google one, and Google will reject "
+                               "it as invalid however many times you re-issue it. "
+                               "Either switch the provider to OpenAI-compatible, "
+                               "or paste a Google key -- those start 'AIza'.",
+                    "detail": ""}
+        # Deliberately NOT checking for an "AIza" prefix.
+        #
+        # That check was here and it rejected a perfectly good key: AI Studio
+        # also issues keys beginning "AQ.", and hardcoding one vendor's format
+        # meant the diagnostic confidently told a user their working key was not
+        # a Gemini key at all. Only "sk-" is worth refusing, because that prefix
+        # belongs to a different vendor and cannot be a Google key. Anything
+        # else goes to Google, which is the authority on whether it is valid.
+        want = str(body.get("model", "")).strip() or GEMINI_MODEL
+        url = ("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key="
+               + quote(key, safe=""))
+        headers = {"User-Agent": "seed-finder/1.0"}
+    else:
+        base = str(body.get("base", "")).strip()
+        if not base:
+            raise Failure("set the API base URL first")
+        want = str(body.get("model", "")).strip()
+        url = base.rstrip("/") + "/models"
+        headers = {"User-Agent": "seed-finder/1.0"}
+        if key:
+            headers["Authorization"] = "Bearer " + key
+
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+    except TimeoutError:
+        raise Failure("the provider did not answer in 30s. That is the service "
+                      "being slow, not a bad key -- try the test again.")
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(errors="replace")
+        msg = raw
+        try:
+            msg = json.loads(raw)["error"]["message"]
+        except Exception:  # noqa: BLE001
+            pass
+        if e.code in (400, 401, 403):
+            return {"ok": False, "key_ok": False,
+                    "verdict": f"The key was REJECTED ({e.code}). It is revoked, "
+                               f"restricted, or from a different project. A new key "
+                               f"will fix this.",
+                    "detail": msg[:300]}
+        if e.code == 429:
+            return {"ok": False, "key_ok": True,
+                    "verdict": "The key is VALID but rate-limited or out of quota "
+                               "(429). Nothing is broken -- wait for the window to "
+                               "reset, or use a key from another project.",
+                    "detail": msg[:300]}
+        return {"ok": False, "key_ok": None,
+                "verdict": f"Unexpected {e.code} from the provider.", "detail": msg[:300]}
+    except urllib.error.URLError as e:
+        raise Failure(f"could not reach the provider ({e.reason}). Check your connection.")
+
+    # Gemini returns models/<id>; an OpenAI-compatible list returns data[].id
+    if provider == "gemini":
+        names = [m.get("name", "").split("/")[-1] for m in data.get("models", [])
+                 if "generateContent" in (m.get("supportedGenerationMethods") or [])]
+    else:
+        names = [m.get("id", "") for m in (data.get("data") or [])]
+    names = [n for n in names if n]
+
+    if want and want not in names:
+        near = [n for n in names if "flash" in n or "mini" in n][:6] or names[:6]
+        return {"ok": False, "key_ok": True, "models": names[:60], "suggest": near,
+                "verdict": f"The key WORKS -- this is not a key problem. But the "
+                           f"model {want!r} is not in the {len(names)} this key can "
+                           f"use, so every request 404s. Pick one of the suggested "
+                           f"models below and save it.",
+                "detail": ""}
+    return {"ok": True, "key_ok": True, "models": names[:60], "suggest": [],
+            "verdict": f"Key works and {want!r} is available "
+                       f"({len(names)} models usable).", "detail": ""}
+
+
+def api_gemini(body) -> dict:
+    """Natural language -> query JSON, via Gemini or any OpenAI-compatible API.
+
+    The key comes from the request (the UI stores it in the browser) or the
+    GEMINI_API_KEY env var. We call Gemini server-side so the browser never has
+    to deal with CORS, and force JSON output via responseMimeType.
+    """
+    text = str(body.get("text", "")).strip()
+    if not text:
+        raise Failure("say what you're looking for")
+    # Which service turns the sentence into a query.
+    #
+    # This was Gemini and nothing else, with the endpoint written into the
+    # function -- so one signup page and one quota stood between the chat box
+    # and working at all, and a dead key left no second option. Everything
+    # except Gemini speaks the OpenAI chat-completions shape, so a single
+    # alternative branch covers Groq, OpenAI, OpenRouter, DeepSeek, Together and
+    # a local Ollama. The provider is just a base URL.
+    provider = str(body.get("provider", "")).strip().lower() or "gemini"
+    if provider not in ("gemini", "compatible"):
+        raise Failure(f"unknown provider {provider!r} -- use 'gemini' or 'compatible'")
+    key = (str(body.get("key", "")).strip()
+           or os.environ.get("GEMINI_API_KEY" if provider == "gemini" else "AI_API_KEY", ""))
+    if not key and provider == "gemini":
+        raise Failure("no Gemini API key yet. Open settings (the dot by the search "
+                      "box) and paste one -- get a free key at "
+                      "https://aistudio.google.com/apikey")
+    v = check_version(str(body.get("version", "1.21")))
+    vocab = _vocab_for(v)
+    system = (AI_SCHEMA + "\n\nMinecraft version: " + vocab["version"]
+              + "\n\nValid structures: " + ", ".join(vocab["structures"])
+              + "\n\nValid biomes: " + ", ".join(vocab["biomes"]))
+
+    # Both providers return TEXT, and everything after this point -- the JSON
+    # extraction, the condition whitelist, the version override -- is shared.
+    # Giving each provider its own parser would mean two places for a malformed
+    # answer to slip through, and only one of them ever exercised.
+    switched = ""
+    if provider == "compatible":
+        answer = _ai_compatible(body, text, system, key)
+    else:
+        answer, used_model = _ai_gemini(body, text, system, key)
+        if used_model and used_model != (str(body.get("model", "")).strip() or GEMINI_MODEL):
+            switched = used_model
 
     m = re.search(r"\{.*\}", answer, re.S)
     if not m:
@@ -993,7 +1491,12 @@ def api_gemini(body) -> dict:
         q["rank"] = {"of": rank["of"],
                      "by": rank.get("by", "auto"),
                      "top": int(rank.get("top", 10) or 10)}
-    return {"query": q, "notes": obj.get("notes", "")}
+    notes = obj.get("notes", "")
+    if switched:
+        # Say it in the line the user actually reads, not only the server log.
+        notes = (f"[the model you set was overloaded, so {switched} answered "
+                 f"instead] " + notes).strip()
+    return {"query": q, "notes": notes}
 
 
 def api_villagesmiths(body) -> dict:
@@ -1706,6 +2209,7 @@ def api_hunt_stop(body) -> dict:
 ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/search": api_search, "/api/describe": api_describe,
           "/api/ask": api_ask, "/api/gemini": api_gemini,
+          "/api/aitest": api_aitest,
           "/api/villagesmiths": api_villagesmiths,
           "/api/exposedtreasure": api_exposedtreasure,
           "/api/casingtreasure": api_casingtreasure,
