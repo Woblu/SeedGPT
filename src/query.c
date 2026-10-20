@@ -3040,12 +3040,15 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
             int r1z = (int)floor((centre.z + c->within) / span);
             int64_t lim = (int64_t)c->within * c->within, best = INT64_MAX;
             Pos bp = {0,0}; int found = 0; int bestSize = 0;
+            // A leaderboard on geode size wants the BIGGEST geode in range;
+            // otherwise the nearest qualifying one is the match.
+            int bySize = (q->rankIdx == k && rankMetric(q) == RANK_SIZE);
             for (int rx = r0x; rx <= r1x; rx++)
             for (int rz = r0z; rz <= r1z; rz++) {
                 Pos p;
                 if (!getStructurePos(c->structType, q->mc, worldSeed, rx, rz, &p)) continue;
                 int64_t d = dmet(p, centre, c->metric);
-                if (d > lim || d >= best) continue;
+                if (d > lim || (!bySize && d >= best)) continue;
                 if (!isViableStructurePos(c->structType, g, p.x, p.z, 0)) continue;
                 if (c->structType == Geode &&
                     (c->geodeSize > 0 || c->reqCracked != 0 ||
@@ -3056,6 +3059,9 @@ static int stage2Dim(const Query *q, Generator *g, int dim, uint64_t worldSeed,
                     if (c->reqCracked > 0 && !sv.cracked) continue;
                     if (c->reqCracked < 0 &&  sv.cracked) continue;
                     if (sv.size < c->geodeSize) continue;
+                    // Ranked by size: keep the biggest (nearest among equals).
+                    if (bySize && found && (sv.size < bestSize ||
+                                            (sv.size == bestSize && d >= best))) continue;
                     bestSize = sv.size;
                 }
                 best = d; bp = p; found = 1;
