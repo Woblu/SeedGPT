@@ -108,5 +108,21 @@ echo "stronghold accurate-Y patch applied"
 # stronghold loot may shift with it. The validated paths are 1.16.5.
 git -C cubiomes apply ../patches/stronghold-1-17-filler-corridor.patch
 echo "stronghold 1.17 filler-corridor patch applied"
+
+# generateRegion / generateNetherRegion memoise noise columns in a W x H grid of
+# cells (W along x, H along z) but index it as relCellX * W + relCellZ, which is
+# only right when W == H. A region wider than it is tall then writes past the
+# end of the malloc'd buffer; one taller than wide makes two cells share a slot,
+# and since the bitset marks the slot filled, the second cell silently reuses
+# the first one's noise and comes back with the wrong heights.
+#
+# Every caller upstream passes square regions, which is why it never shows
+# there. exactFootprint does not: its region is the chunk span of
+# [centre +- within] on each axis, which is rectangular whenever the centre is
+# not chunk-aligned -- within=20 at (0,8) is 4 x 3 chunks, and writes cell 284
+# of a 221-cell buffer. Exact terrain height, exposed ore, cave_below and the
+# stronghold depth all go through it. The fix is the stride: relCellX * H.
+git -C cubiomes apply ../patches/terrainnoise-region-stride.patch
+echo "terrainnoise region-stride patch applied"
 echo
 echo "next: ./build.sh tools/find.c   then   ./test.sh"
