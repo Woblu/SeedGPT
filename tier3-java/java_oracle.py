@@ -39,8 +39,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # and will not boot on 21 -- so pinning either one here would quietly make every
 # pre-1.18 question unanswerable.
 JAR = os.environ.get("MC_SERVER_JAR") or os.path.join(HERE, "server.jar")
-JAVA = os.environ.get("MC_JAVA") or (
-    os.environ.get("JAVA_HOME", r"C:\Program Files\Java\jdk-21") + r"\bin\java.exe")
+# Joined portably: appending "\bin\java.exe" to JAVA_HOME produced a path that
+# does not exist anywhere but Windows, even with JAVA_HOME set correctly.
+JAVA = os.environ.get("MC_JAVA") or os.path.join(
+    os.environ.get("JAVA_HOME", r"C:\Program Files\Java\jdk-21"),
+    "bin", "java.exe" if os.name == "nt" else "java")
 
 _LIVE = []
 
