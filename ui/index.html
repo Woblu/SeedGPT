@@ -3123,7 +3123,59 @@
       wrap.append(lg);
       c.append(wrap);
 
-      const p = el('pre'); p.textContent = d.raw; c.append(p);
+      // The world as a table: every structure type, nearest first, each row
+      // with map, copy and /tp -- instead of a block of text to copy
+      // coordinates out of. The text stays available below.
+      const w = d.world;
+      if (w) {
+        const head = el('div', 'note');
+        head.append(document.createTextNode(
+          `Java ${w.version} · spawn x=${w.spawn.x} z=${w.spawn.z} in ${pretty(w.spawn.biome)} · `
+          + `structure seed ${w.structure_seed} · ${w.structures.length} structures within ${w.radius}  `));
+        const om = el('button', 'tiny', '🗺 interactive map'); om.type = 'button';
+        om.onclick = () => mapView(seed, { cx: w.spawn.x, cz: w.spawn.z, radius: Math.min(20000, w.radius) });
+        const st = el('button', 'tiny', '/tp spawn'); st.type = 'button';
+        st.onclick = () => copyText(st, tpCommand(w.spawn.x, w.spawn.z, 'overworld'));
+        head.append(om, st);
+        c.append(head);
+        const byType = {};
+        w.structures.forEach(x => (byType[x.type] = byType[x.type] || []).push(x));
+        const types = Object.keys(byType).sort((a, b) => byType[a][0].dist - byType[b][0].dist);
+        const t = el('table');
+        const rowFor = x => {
+          const tr = el('tr');
+          const td = el('td');
+          const link = el('button', 'coord', `x=${x.x}  z=${x.z}`); link.type = 'button';
+          link.title = 'show this on the map';
+          link.onclick = () => mapView(seed, { cx: x.x, cz: x.z, radius: 600 });
+          const cp = el('button', 'tiny', '⧉'); cp.type = 'button';
+          cp.setAttribute('aria-label', `copy coordinates ${x.x} ${x.z}`);
+          cp.onclick = () => copyText(cp, `${x.x} ${x.z}`);
+          const tp = el('button', 'tiny', '/tp'); tp.type = 'button';
+          tp.onclick = () => copyText(tp, tpCommand(x.x, x.z, 'overworld'));
+          td.append(link, cp, tp);
+          tr.append(idCell('structure', x.type, pretty(x.type)), td,
+                    el('td', 'd', `${x.dist} from spawn · ${pretty(x.biome)}${x.note ? ' · ' + x.note : ''}`));
+          return tr;
+        };
+        types.forEach(ty => {
+          const list = byType[ty];
+          list.slice(0, 3).forEach(x => t.append(rowFor(x)));
+          if (list.length > 3) {
+            const tr = el('tr'), td = el('td');
+            td.colSpan = 3;
+            const more = el('button', 'tiny', `+ ${list.length - 3} more ${pretty(ty).toLowerCase()}`);
+            more.type = 'button';
+            more.onclick = () => { const rows = list.slice(3).map(rowFor); tr.replaceWith(...rows); };
+            td.append(more); tr.append(td); t.append(tr);
+          }
+        });
+        c.append(t);
+      }
+      const det = el('details');
+      det.append(el('summary', null, 'as text'));
+      const p = el('pre'); p.textContent = d.raw; det.append(p);
+      c.append(det);
       out.append(c);
       const back = el('button','tiny','← back to results');
       back.onclick = showLastResults;

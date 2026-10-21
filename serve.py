@@ -723,16 +723,23 @@ def api_check(body) -> dict:
 def api_describe(body) -> dict:
     seed = java_seed(body.get("seed", ""))
     v = check_version(str(body.get("version", "1.21")))
-    radius = int(body.get("radius", 2000))
+    radius = max(200, min(20000, int(body.get("radius", 2000))))
     # The world preset travels with the seed: describing a Large Biomes result
     # against the default generator would list biomes that are not there.
-    args = [tool("describe"), seed, v, str(radius)]
-    if body.get("large_biomes"):
-        args.append("large")
+    args = [tool("describe"), seed, v, str(radius), "large" if body.get("large_biomes") else "-"]
     rc, out, err = run(args, TIMEOUTS["describe"])
     if rc != 0:
         raise Failure(err.strip() or "describe failed")
-    return {"raw": out}
+    # The same answer as data, so the page can show a table with map links and
+    # /tp buttons instead of a block of text to copy coordinates out of.
+    rc2, js, err2 = run(args + ["json"], TIMEOUTS["describe"])
+    world = None
+    if rc2 == 0:
+        try:
+            world = json.loads(js)
+        except ValueError:
+            world = None
+    return {"raw": out, "world": world}
 
 
 def api_map(qs) -> bytes:
