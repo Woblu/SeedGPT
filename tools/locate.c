@@ -14,6 +14,7 @@
 #include "query.h"
 #include "generator.h"
 #include "util.h"
+#include "seed.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,8 +80,12 @@ int main(int argc, char **argv)
 
     int radius = atoi(argv[4]);
 
-    int cx = (argc > 5 && argv[5][0] != '-') ? atoi(argv[5]) : 0;
-    int cz = (argc > 6 && argv[6][0] != '-') ? atoi(argv[6]) : 0;
+    // The centre is any integer, negative included; "--all" is the only flag.
+    // Testing for a leading '-' read every negative centre as a flag and
+    // silently searched around 0 instead.
+    int64_t cv;
+    int cx = (argc > 5 && parseJavaLong(argv[5], &cv)) ? (int)cv : 0;
+    int cz = (argc > 6 && parseJavaLong(argv[6], &cv)) ? (int)cv : 0;
     int skipViable = 0;
     for (int i = 5; i < argc; i++) if (!strcmp(argv[i], "--all")) skipViable = 1;
 

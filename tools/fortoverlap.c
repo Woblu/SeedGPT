@@ -21,6 +21,7 @@
 #include "finders.h"
 #include "generator.h"
 #include "util.h"
+#include "seed.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -139,12 +140,14 @@ int main(int argc, char **argv)
 
     int rank = 0, stdinMode = 0; uint64_t nseeds = 0;
     int regX = 0, regZ = 0;
+    int64_t rv;
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--rank") && i + 1 < argc) { rank = 1; nseeds = strtoull(argv[++i], NULL, 10); }
         else if (!strcmp(argv[i], "--stdin")) stdinMode = 1;
-        else if (argv[i][0] != '-' && !rank) {
-            if (regX == 0 && i == 3) regX = atoi(argv[i]);
-            else regZ = atoi(argv[i]);
+        // Region coordinates can be negative; a leading '-' is not a flag.
+        else if (!rank && parseJavaLong(argv[i], &rv)) {
+            if (i == 3) regX = (int)rv;
+            else regZ = (int)rv;
         }
     }
 
