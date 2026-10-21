@@ -98,6 +98,8 @@ static int g_hitstream = 0;   // FIND_HITSTREAM: print every hit, uncapped
 
 static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv);
 static void writeTsv(const Query *q, uint64_t ws, const Match *mm, FILE *tsv);
+static void jsonHit(const Query *q, uint64_t ws, const Match *mm, int haveScore, int score);
+static int g_json = 0;     // FIND_JSON: also print each hit as an @JSON line
 
 // In stream mode a hit is printed the moment it is found, in the same SEED
 // block the end-of-run report uses, so a reader can show it immediately and --
@@ -108,6 +110,7 @@ static void emitHit(const Query *q, uint64_t ws, const Match *m)
 {
     printf("SEED %" PRId64 "\n", (int64_t)ws);
     printHit(q, ws, m, NULL);
+    if (g_json) jsonHit(q, ws, m, 0, 0);
     fflush(stdout);
 }
 
@@ -520,6 +523,208 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
     printf("\n");
 }
 
+// ---- FIND_JSON: one machine-readable line per hit ------------------------
+//
+// The web server used to recover results by regex-matching the text above, one
+// pattern per line shape -- and every time a line's wording improved, a result
+// type silently vanished from the UI (stronghold rows were never parsed at all;
+// the overlap partner stopped parsing when its wording changed). With FIND_JSON
+// set, each hit is ALSO printed as "@JSON {...}" in the shape the server hands
+// the browser, built from the Match itself rather than from prose. Seeds are
+// strings: a 64-bit seed does not survive a JavaScript number.
+static void jstr(const char *s)
+{
+    putchar('"');
+    for (; *s; s++) {
+        unsigned char ch = (unsigned char)*s;
+        if (ch == '"' || ch == '\\') { putchar('\\'); putchar(ch); }
+        else if (ch < 0x20) printf("\\u%04x", ch);
+        else putchar(ch);
+    }
+    putchar('"');
+}
+
+static const char *refName(const Query *q, const Cond *cd, char *buf, size_t n)
+{
+    if (cd->parent == PARENT_SPAWN)   snprintf(buf, n, "spawn");
+    else if (cd->parent == PARENT_AT) snprintf(buf, n, "%d,%d", cd->atX, cd->atZ);
+    else if (cd->parent >= 0)         snprintf(buf, n, "%s", q->cond[cd->parent].id);
+    else                              snprintf(buf, n, "origin");
+    return buf;
+}
+
+static Pos refPos(const Query *q, const Cond *cd, const Match *mm)
+{
+    if (cd->parent == PARENT_SPAWN) return mm->haveSpawn ? mm->spawn : (Pos){0, 0};
+    if (cd->parent == PARENT_AT)    return (Pos){cd->atX, cd->atZ};
+    if (cd->parent >= 0)            return mm->pos[cd->parent];
+    return (Pos){0, 0};
+}
+
+static int dist2i(Pos a, Pos b)
+{
+    int64_t dx = (int64_t)a.x - b.x, dz = (int64_t)a.z - b.z;
+    return (int)sqrt((double)(dx * dx + dz * dz));
+}
+
+// Result kinds, one JSON array each, emitted kind by kind so arrays never
+// interleave. The keys are the ones the server's old regex parser produced.
+enum { K_PLACES, K_LOOT, K_SH, K_OVL, K_CAC, K_ORE, K_SLIME, K_HGT, K_AREA,
+       K_ISL, K_BIO, K_CLU, K_ABS, K_N, K_NONE = -1 };
+static const char *const KIND_KEY[K_N] = {
+    "places", "loot", "stronghold", "overlap", "cactus", "ore", "slime",
+    "height", "area", "island", "biome", "cluster", "absent" };
+
+static int kindOf(const Cond *cd)
+{
+    if (cd->negate) return K_ABS;
+    switch (cd->type) {
+    case CT_LOOT:        return K_LOOT;
+    case CT_STRONGHOLD:  return K_SH;
+    case CT_OVERLAP:     return K_OVL;
+    case CT_CACTUS:      return K_CAC;
+    case CT_ORE:         return K_ORE;
+    case CT_SLIME:       return K_SLIME;
+    case CT_HEIGHT:      return K_HGT;
+    case CT_BIOME_AREA:  return K_AREA;
+    case CT_ISLAND:      return K_ISL;
+    case CT_BIOME:       return K_BIO;
+    case CT_STRUCTURE:   return cd->structMin > 1 ? K_CLU : K_PLACES;
+    default:             return K_NONE;    // eyes: reported as "portal"
+    }
+}
+
+// One condition's entry, as a JSON object.
+static void jsonEntry(const Query *q, const Match *mm, int c)
+{
+    const Cond *cd = &q->cond[c];
+    Pos p = mm->pos[c];
+    char rb[48];
+    printf("{\"id\":"); jstr(cd->id);
+    switch (kindOf(cd)) {
+    case K_ABS:
+        printf(",\"within\":%d,\"of\":", cd->within); jstr(refName(q, cd, rb, sizeof rb));
+        break;
+    case K_LOOT: {
+        const char *it = cd->lootItem;
+        if (!strncmp(it, "minecraft:", 10)) it += 10;
+        printf(",\"x\":%d,\"z\":%d,\"count\":%d,\"item\":", p.x, p.z, mm->lootCount[c]);
+        jstr(it);
+        printf(",\"structure\":"); jstr(struct2str(cd->structType));
+        printf(",\"dim\":"); jstr(dimName(cd->dim));
+        break;
+    }
+    case K_SH: {
+        int d = mm->shDepth[c], surf = mm->shRoof[c] + d;
+        printf(",\"x\":%d,\"z\":%d,\"roof\":%d,\"state\":", p.x, p.z, mm->shRoof[c]);
+        jstr(d <= 0 ? "BREAKS THE SURFACE" : (d <= 4 ? "just under the surface" : "underground"));
+        printf(",\"tp\":{\"x\":%d,\"y\":%d,\"z\":%d},\"depth\":%d,\"where\":",
+               mm->partner[c].x, mm->shRoof[c] + 1, mm->partner[c].z, d > 0 ? d : 0);
+        jstr(surf < 62 ? "on the sea floor, water above it" : "on dry land");
+        printf(",\"tall\":%s", mm->shRoof[c] > 52 ? "true" : "false");
+        break;
+    }
+    case K_OVL:
+        printf(",\"x\":%d,\"z\":%d,\"structure\":", p.x, p.z);
+        jstr(struct2str(cd->structType));
+        printf(",\"x2\":%d,\"z2\":%d,\"structure2\":", mm->partner[c].x, mm->partner[c].z);
+        jstr(struct2str(cd->structType2));
+        printf(",\"gap\":%d,\"area\":%d,\"dim\":", dist2i(p, mm->partner[c]), mm->overlapArea[c]);
+        jstr(dimName(cd->dim));
+        break;
+    case K_CAC:
+        printf(",\"x\":%d,\"z\":%d,\"height\":%d,\"base_y\":%d",
+               p.x, p.z, mm->cactusTall[c], mm->cactusBase[c]);
+        break;
+    case K_ORE: {
+        int nm; const OreMaterial *tab = oreMaterials(&nm);
+        printf(",\"x\":%d,\"z\":%d,\"count\":%d,\"material\":", p.x, p.z, mm->oreCount[c]);
+        jstr(tab[cd->oreMat].name);
+        printf(",\"within\":%d", cd->within);
+        if (cd->oreExposed) printf(",\"exposed\":true");
+        if (mm->veinMax[c] > 0) printf(",\"vein\":%d", mm->veinMax[c]);
+        break;
+    }
+    case K_SLIME:
+        printf(",\"x\":%d,\"z\":%d,\"count\":%d,\"within\":%d",
+               p.x, p.z, mm->slimeCount[c], cd->within);
+        break;
+    case K_HGT:
+        printf(",\"x\":%d,\"z\":%d,\"peak\":%d,\"within\":%d,\"exact\":%s",
+               p.x, p.z, mm->peakHeight[c], cd->within, cd->exactTerrain ? "true" : "false");
+        if (cd->reliefMin > 0) printf(",\"relief\":%d", mm->peakDrop[c]);
+        break;
+    case K_AREA: case K_ISL: {
+        int tot = mm->areaTotal[c], hit = mm->areaCells[c];
+        int pct = tot > 0 ? (int)((int64_t)hit * 100 / tot) : 0;
+        printf(",\"x\":%d,\"z\":%d,\"pct\":%d,\"within\":%d", p.x, p.z, pct, cd->within);
+        if (cd->type == CT_BIOME_AREA) {
+            printf(",\"biome\":");
+            jstr(cd->biomeIsSet ? cd->biomeLabel : biome2str(q->mc, cd->biomeId));
+        }
+        break;
+    }
+    case K_BIO:
+        printf(",\"x\":%d,\"z\":%d,\"biome\":", p.x, p.z);
+        jstr(cd->biomeIsSet ? cd->biomeLabel : biome2str(q->mc, cd->biomeId));
+        printf(",\"dist\":%d,\"ref\":", dist2i(p, refPos(q, cd, mm)));
+        jstr(refName(q, cd, rb, sizeof rb));
+        printf(",\"dim\":"); jstr(dimName(cd->dim));
+        break;
+    case K_CLU:
+        printf(",\"x\":%d,\"z\":%d,\"count\":%d,\"structure\":", p.x, p.z, mm->structCount[c]);
+        jstr(struct2str(cd->structType));
+        if (cd->spread > 0) printf(",\"spread\":%d,\"tight\":true", cd->spread);
+        else printf(",\"within\":%d", cd->within);
+        printf(",\"dim\":"); jstr(dimName(cd->dim));
+        break;
+    case K_PLACES:
+        printf(",\"x\":%d,\"z\":%d,\"structure\":", p.x, p.z);
+        jstr(struct2str(cd->structType));
+        printf(",\"dim\":"); jstr(dimName(cd->dim));
+        printf(",\"dist\":%d,\"ref\":", dist2i(p, refPos(q, cd, mm)));
+        jstr(refName(q, cd, rb, sizeof rb));
+        if (cd->structType == Geode && mm->geodeSize[c] > 0) printf(",\"size\":%d", mm->geodeSize[c]);
+        if (mm->caveHeight[c] > 0) {
+            if (cd->floatVoid > 0)
+                printf(",\"floating\":{\"x\":%d,\"z\":%d,\"gap\":%d,\"underside\":%d}",
+                       mm->floatAt[c].x, mm->floatAt[c].z, mm->caveHeight[c], mm->floatCap[c]);
+            else
+                printf(",\"cave\":%d", mm->caveHeight[c]);
+        }
+        break;
+    default:
+        break;
+    }
+    putchar('}');
+}
+
+static void jsonHit(const Query *q, uint64_t ws, const Match *mm,
+                    int haveScore, int score)
+{
+    printf("@JSON {\"seed\":\"%" PRId64 "\"", (int64_t)ws);
+    if (haveScore) {
+        printf(",\"score\":%d,\"metric\":", score);
+        jstr(queryScoreLabel(q));
+    }
+    if (mm->haveSpawn) printf(",\"spawn\":{\"x\":%d,\"z\":%d}", mm->spawn.x, mm->spawn.z);
+    if (mm->haveEyes)
+        printf(",\"portal\":{\"x\":%d,\"z\":%d,\"eyes\":%d}",
+               mm->stronghold.x, mm->stronghold.z, mm->eyes);
+    for (int k = 0; k < K_N; k++) {
+        int any = 0;
+        for (int c = 0; c < q->n; c++) {
+            if (kindOf(&q->cond[c]) != k) continue;
+            printf(any ? "," : ",\"%s\":[", KIND_KEY[k]);
+            jsonEntry(q, mm, c);
+            any = 1;
+        }
+        if (any) putchar(']');
+        else if (k == K_PLACES) printf(",\"places\":[]");   // always present
+    }
+    printf("}\n");
+}
+
 // The machine-readable twin of a hit, for piping into verifiers.
 static void writeTsv(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
 {
@@ -620,6 +825,7 @@ int main(int argc, char **argv)
     if (bias)    { explainCompare(&q, samples, nthreads, stdout); free(json); return 0; }
     if (explain) { explainQuery(&q, samples, nthreads, stdout);   free(json); return 0; }
 
+    g_json = getenv("FIND_JSON") != NULL;
     if (seedmode) {
         Generator g;
         setupGenerator(&g, q.mc, queryGenFlags(&q));
@@ -641,6 +847,7 @@ int main(int argc, char **argv)
         } else {
             printf("YES -- this seed satisfies the query.\n\n");
             printHit(&q, oneseed, &m, NULL);
+            if (g_json) jsonHit(&q, oneseed, &m, 0, 0);
         }
         if (lc) lootCacheFree(lc);
         free(json);
@@ -804,6 +1011,7 @@ int main(int argc, char **argv)
             printf("SEED %" PRId64 "   %s = %d\n", (int64_t)g_rank[i].ws,
                    queryScoreLabel(&q), g_rank[i].score);
             printHit(&q, g_rank[i].ws, &g_rank[i].m, tsv);
+            if (g_json) jsonHit(&q, g_rank[i].ws, &g_rank[i].m, 1, g_rank[i].score);
         }
     } else {
         // Stream mode already printed each hit as it was found; printing them
@@ -814,6 +1022,7 @@ int main(int argc, char **argv)
                 if (g_stream && !g_hitstream) { writeTsv(&q, h->ws, &h->m, tsv); continue; }
                 printf("SEED %" PRId64 "\n", (int64_t)h->ws);
                 printHit(&q, h->ws, &h->m, tsv);
+                if (g_json) jsonHit(&q, h->ws, &h->m, 0, 0);
             }
     }
 

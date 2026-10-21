@@ -2671,10 +2671,16 @@
         const td = el('td', 'd', '—');
         row(idCell('structure', '', 'None: ' + a.id), td, `none within ${a.within} of ${a.of}`);
       });
-      (s.places || []).forEach(p => row(
-        idCell('structure', condName[p.id] || p.id, pretty(condName[p.id] || p.id)),
-        goCell(p.x, p.z, condName[p.id]),
-        p.dist + ' from ' + (p.ref || 'origin') + (p.size ? `, size ${p.size}` : '')));
+      (s.places || []).forEach(p => {
+        // The engine names the structure now; the builder lookup is the
+        // fallback for results from an older find.exe.
+        const nm = p.structure || condName[p.id] || p.id;
+        let detail = p.dist + ' from ' + (p.ref || 'origin') + (p.size ? `, size ${p.size}` : '');
+        if (p.cave) detail += `, ${p.cave}-block cave below`;
+        if (p.floating) detail += `, floating island at (${p.floating.x},${p.floating.z}): `
+                                + `${p.floating.gap}-block gap, underside y=${p.floating.underside}`;
+        row(idCell('structure', nm, pretty(nm)), goCell(p.x, p.z, nm), detail);
+      });
       if (t.childElementCount) box.append(t);
       c.append(box);
     });

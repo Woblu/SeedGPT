@@ -149,7 +149,40 @@ def _kill_tree(proc):
             pass
 
 
-def run(args, timeout, stdin=None):
+def find_env(extra=None):
+    """Environment for running find.exe: always ask for @JSON hit lines.
+
+    The JSON is built from the engine's own result structs, so a hit cannot
+    lose a field because its human-readable wording changed -- which is how
+    stronghold rows never reached the browser and overlap partners stopped
+    doing so. The text output is unchanged for people and other scripts.
+    """
+    env = dict(os.environ)
+    env["FIND_JSON"] = "1"
+    if extra:
+        env.update(extra)
+    return env
+
+
+def parse_hits(out: str) -> list:
+    """Hits from find output: the @JSON lines when present (any current
+    find.exe), else the regex parser below (an old binary)."""
+    hits = []
+    for line in out.splitlines():
+        if line.startswith("@JSON "):
+            try:
+                hits.append(json.loads(line[6:]))
+            except ValueError:
+                pass
+    return hits if hits else parse_seeds(out)
+
+
+def human(out: str) -> str:
+    """find output as a person should see it: without the @JSON twins."""
+    return "\n".join(l for l in out.splitlines() if not l.startswith("@JSON "))
+
+
+def run(args, timeout, stdin=None, env=None):
     """Run a tool. No shell, so query text can never become a command.
 
     On timeout the whole process TREE is killed. subprocess.run kills only the
@@ -159,7 +192,8 @@ def run(args, timeout, stdin=None):
     """
     p = subprocess.Popen([str(a) for a in args], stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, stdin=subprocess.PIPE if stdin else None,
-                         text=True, encoding="utf-8", errors="replace", cwd=str(ROOT))
+                         text=True, encoding="utf-8", errors="replace", cwd=str(ROOT),
+                         env=env)
     try:
         out, err = p.communicate(input=stdin, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -372,8 +406,11 @@ def parse_seeds(out: str) -> list:
                 {"id": m.group(1), "x": int(m.group(2)), "z": int(m.group(3)),
                  "structure": m.group(4)})
             continue
-        m = re.match(r"^\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+([a-z_]+), (\d+) blocks away,"
-                     r" (\d+) overlap", line)
+        # Both wordings: find once said "N blocks away, M overlap" and now says
+        # "N blocks origin-to-origin (...), M blocks of footprint overlap".
+        m = re.match(r"^\s+x=\s*(-?\d+) z=\s*(-?\d+)\s+([a-z_]+), (\d+) blocks "
+                     r"(?:away|origin-to-origin[^,]*), (\d+) (?:blocks of footprint )?overlap",
+                     line)
         if m and cur and cur.get("overlap"):
             cur["overlap"][-1].update(
                 {"x2": int(m.group(1)), "z2": int(m.group(2)), "structure2": m.group(3),
@@ -554,7 +591,8 @@ def api_lootitems(qs) -> dict:
 
 
 def _plan_or_fail(path, extra=(), timeout=None, key="plan"):
-    rc, out, err = run([tool("find"), path, *extra], timeout or TIMEOUTS[key])
+    rc, out, err = run([tool("find"), path, *extra], timeout or TIMEOUTS[key],
+                       env=find_env())
     # find.exe prints "query error:" / "plan error:" and exits non-zero.
     for marker in ("query error:", "plan error:"):
         if marker in out or marker in err:
@@ -570,7 +608,7 @@ def api_plan(body) -> dict:
         _, out, _ = _plan_or_fail(path, ["1", "1"])
     finally:
         drop_query(path)
-    return {"plan": parse_plan(out), "notes": parse_notes(out), "raw": out}
+    return {"plan": parse_plan(out), "notes": parse_notes(out), "raw": human(out)}
 
 
 def api_explain(body) -> dict:
@@ -582,7 +620,7 @@ def api_explain(body) -> dict:
     finally:
         drop_query(path)
     return {"plan": parse_plan(out), "explain": parse_explain(out),
-            "notes": parse_notes(out), "raw": out}
+            "notes": parse_notes(out), "raw": human(out)}
 
 
 def api_search(body) -> dict:
@@ -593,8 +631,8 @@ def api_search(body) -> dict:
                                   TIMEOUTS["search"], "search")
     finally:
         drop_query(path)
-    return {"plan": parse_plan(out), "seeds": parse_seeds(out),
-            "funnel": parse_funnel(out), "notes": parse_notes(out), "raw": out}
+    return {"plan": parse_plan(out), "seeds": parse_hits(out),
+            "funnel": parse_funnel(out), "notes": parse_notes(out), "raw": human(out)}
 
 
 def api_check(body) -> dict:
@@ -617,7 +655,8 @@ def api_check(body) -> dict:
     try:
         for s in seeds:
             ws = java_seed(s)
-            rc, out, err = run([tool("find"), path, "--seed", ws], TIMEOUTS["search"])
+            rc, out, err = run([tool("find"), path, "--seed", ws], TIMEOUTS["search"],
+                               env=find_env())
             for marker in ("query error:", "plan error:"):
                 if marker in out or marker in err:
                     raise Failure((out + err).split(marker, 1)[1].strip().splitlines()[0])
@@ -626,7 +665,7 @@ def api_check(body) -> dict:
             m = re.search(r"^NO -- (.+)$", out, re.M)
             if m:
                 why = m.group(1).strip()
-            hit = (parse_seeds("SEED " + ws + "\n" + out.split("YES", 1)[1])
+            hit = (parse_hits("SEED " + ws + "\n" + out.split("YES", 1)[1])
                    if verdict == "yes" and "YES" in out else [])
             results.append({"input": s, "seed": ws, "verdict": verdict,
                             "why": why, "hit": hit[0] if hit else None})
@@ -2303,7 +2342,7 @@ def _hunt_batches(job, path, batch, want, threads, secs, casing="", radius=10000
                 st["error"] = (f"stopped: no one checked on this hunt for "
                                f"{HUNT_IDLE_SECONDS // 60} minutes")
                 break
-        env = dict(os.environ)
+        env = find_env()
         env["FIND_OFFSET"] = str(off)
         env["FIND_SECONDS"] = str(secs)
         if uppers:
@@ -2389,7 +2428,7 @@ def _hunt_batches(job, path, batch, want, threads, secs, casing="", radius=10000
                     st["unknown"] = st.get("unknown", 0) + unknown
             found = confirmed
         else:
-            found = parse_seeds(out) or []
+            found = parse_hits(out) or []
         with HUNTS_LOCK:
             st = HUNTS.get(job)
             if not st:
@@ -2646,7 +2685,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": str(e)}); return
         rng = str(max(1, min(500_000_000, int(body.get("range", 3_000_000)))))
         threads = str(clamp_threads(body))
-        env = dict(os.environ); env["FIND_STREAM"] = "1"
+        env = find_env({"FIND_STREAM": "1"})
         # A time budget lets the caller say "look for ten minutes" instead of
         # guessing a seed count, which is the honest unit for a leaderboard:
         # how far a range gets you depends entirely on the query.
@@ -2705,7 +2744,7 @@ class Handler(BaseHTTPRequestHandler):
             _kill_tree(p)
         watchdog = threading.Timer(budget + 60, _watchdog_fire)
         watchdog.start()
-        buf, block, streamed = [], [], []
+        buf, streamed = [], []
         try:
             for line in p.stdout:
                 if line.startswith("@TICK "):
@@ -2716,21 +2755,17 @@ class Handler(BaseHTTPRequestHandler):
                     self._write_line(msg)
                     continue
                 buf.append(line)
-                # find prints each hit as a SEED block the moment it is found
-                # (FIND_STREAM), ending in a blank line. Forward each one as it
-                # completes: results appear while the scan runs, and survive a
-                # Stop -- before, they existed only in the final report.
-                if line.startswith("SEED "):
-                    block = [line]
-                elif block:
-                    if line.strip():
-                        block.append(line)
-                    else:
-                        hits = parse_seeds("".join(block))
-                        block = []
-                        if hits:
-                            streamed.append(hits[0])
-                            self._write_line({"hit": hits[0]})
+                # find prints each hit the moment it is found, as an @JSON
+                # line (FIND_JSON). Forward each one: results appear while the
+                # scan runs, and survive a Stop -- before, they existed only
+                # in the final report.
+                if line.startswith("@JSON "):
+                    try:
+                        hit = json.loads(line[6:])
+                    except ValueError:
+                        continue
+                    streamed.append(hit)
+                    self._write_line({"hit": hit})
         except (BrokenPipeError, ConnectionError, OSError):
             _kill_tree(p); return
         finally:
@@ -2770,11 +2805,11 @@ class Handler(BaseHTTPRequestHandler):
                 m = re.search(r"resume with FIND_OFFSET=(\d+)", out)
                 if m:
                     funnel["resume_offset"] = int(m.group(1))
-                seeds = parse_seeds(out) or streamed
+                seeds = parse_hits(out) or streamed
                 self._write_line({"done": {
                     "plan": parse_plan(out), "seeds": seeds,
                     "funnel": funnel, "notes": parse_notes(out),
-                    "raw": out}})
+                    "raw": human(out)}})
         except (BrokenPipeError, ConnectionError, OSError):
             return
 

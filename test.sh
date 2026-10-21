@@ -1550,6 +1550,30 @@ FIND_SECONDS=2 ./build/find.exe /tmp/sc_test/cov.json 500000000 8 2>/dev/null | 
   && ok "a time-budgeted run reports a gap-free resume offset" \
   || bad "no resume offset after a budgeted run" ""
 
+# FIND_JSON: every hit is also one @JSON line, built from the engine's result
+# structs. Several kinds interleaved in one query, and a leaderboard, must all
+# come out as valid JSON with string seeds -- the server reads these, not the
+# prose, so a broken line is a lost result.
+printf '{"version":"1.21","conditions":[{"id":"m","structure":"mansion","within":800},{"id":"c","loot":{"structure":"desert_pyramid","item":"gold_ingot","count":1},"within":2500},{"id":"v","structure":"village","within":700,"of":"m"},{"id":"s","slime":2,"within":96}]}\n' > /tmp/sc_test/js1.json
+printf '{"version":"1.21","conditions":[{"id":"g","structure":"geode","within":200}],"rank":{"of":"g","by":"size","top":3}}\n' > /tmp/sc_test/js2.json
+jres=$( { FIND_JSON=1 FIND_SECONDS=8 ./build/find.exe /tmp/sc_test/js1.json 200000 8 2>/dev/null; \
+          FIND_JSON=1 FIND_SECONDS=4 ./build/find.exe /tmp/sc_test/js2.json 400000000 8 2>/dev/null; } | python -c "
+import sys, json
+n = bad = 0
+for l in sys.stdin:
+    if not l.startswith('@JSON '): continue
+    n += 1
+    try:
+        o = json.loads(l[6:])
+        assert isinstance(o['seed'], str) and 'places' in o
+    except Exception:
+        bad += 1
+print(n, bad)")
+jn=${jres% *}; jb=${jres#* }
+[ "$jn" -ge 4 ] && [ "$jb" -eq 0 ] \
+  && ok "FIND_JSON hits are valid JSON with string seeds ($jn lines, mixed kinds + leaderboard)" \
+  || bad "FIND_JSON output invalid" "lines=$jn invalid=$jb"
+
 # The web server must refuse other origins and non-JSON posts (CSRF / DNS
 # rebinding), and still accept the UI's own requests.
 RUIPORT=8792
