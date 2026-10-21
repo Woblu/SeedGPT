@@ -111,7 +111,8 @@ int main(int argc, char **argv)
             continue;
         }
         if (best >= 0 && d >= best) continue;
-        if (!isViableStructurePos(stype, &g, p.x, p.z, 0)) continue;
+        // The finder's own gate: the nearest structure that really generates.
+        if (!structureGenerates(mc, large ? LARGE_BIOMES : 0, seed, &g, stype, p)) continue;
         best = d; bp = p;
     }
     if (listing) return 0;

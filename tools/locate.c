@@ -11,6 +11,7 @@
 // since an unviable position has no blocks to probe and would waste a server
 // round-trip. --all skips that and prints raw placements.
 #include "finders.h"
+#include "query.h"
 #include "generator.h"
 #include "util.h"
 #include <stdio.h>
@@ -146,7 +147,9 @@ int main(int argc, char **argv)
         if (!getStructurePos(st, mc, seed & ((1ULL << 48) - 1), rx, rz, &p)) continue;
         int64_t dx = p.x - cx, dz = p.z - cz;
         if (dx*dx + dz*dz > lim) continue;
-        if (!skipViable && !isViableStructurePos(st, &g, p.x, p.z, 0)) continue;
+        // The finder's own gate (biome, exclusion zones, 1.18 terrain floor);
+        // --all still lists raw attempts.
+        if (!skipViable && !structureGenerates(mc, 0, seed, &g, st, p)) continue;
         printf("%d %d\n", p.x, p.z);
         n++;
     }

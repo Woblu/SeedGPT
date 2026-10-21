@@ -68,7 +68,9 @@ int main(int argc, char **argv)
             int64_t dx = (int64_t)p.x - spawn.x, dz = (int64_t)p.z - spawn.z;
             int64_t d2 = dx*dx + dz*dz;
             if (d2 > r2) continue;
-            if (!isViableStructurePos(type, &g, p.x, p.z, 0)) continue;   // filter to real ones
+            // The finder's own gate (biome, exclusion zones, 1.18 terrain floor),
+            // so describe never lists a structure a search would rule out.
+            if (!structureGenerates(mc, large ? LARGE_BIOMES : 0, seed, &g, type, p)) continue;
             found[nf].name = queryStructureName(i);
             found[nf].pos = p;
             found[nf].dist = (int)sqrt((double)d2);
