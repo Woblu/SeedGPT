@@ -2057,16 +2057,31 @@ static int tightCluster(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
     if (W > TIGHT_MAX_DIM) W = TIGHT_MAX_DIM;
     if (H > TIGHT_MAX_DIM) H = TIGHT_MAX_DIM;
 
+    // has[]: a placement attempt that passes the 48-bit rules (geometry).
+    // ok[]:  pass 2 only, computed on demand -- 0 unknown, 1 generates, 2 not.
+    //
+    // Pass 2 used to run the full biome+terrain gate on EVERY region of the
+    // window (up to 64x64 at ~5 us each, per sister seed) before looking at
+    // any cluster. Most regions are nowhere near one. A cluster's viable count
+    // can never exceed its geometric count, so an anchor whose geometric
+    // neighbours cannot reach structMin -- or cannot beat the best found so far
+    // -- is skipped without a single biome lookup, and a region's viability is
+    // computed at most once, only when a live anchor needs it. Anchors are
+    // still visited in grid order with the same strict ">", so the reported
+    // anchor and count are exactly those of the exhaustive version.
     static _Thread_local Pos  grid[TIGHT_MAX_DIM * TIGHT_MAX_DIM];
     static _Thread_local unsigned char has[TIGHT_MAX_DIM * TIGHT_MAX_DIM];
+    static _Thread_local unsigned char ok[TIGHT_MAX_DIM * TIGHT_MAX_DIM];
     for (int j = 0; j < H; j++)
     for (int i = 0; i < W; i++) {
-        int idx = j * W + i; has[idx] = 0;
+        int idx = j * W + i; has[idx] = 0; ok[idx] = 0;
         Pos p;
         if (!getStructurePos(c->structType, q->mc, s48, g0x + i, g0z + j, &p)) continue;
-        if (!generatesAt(q, c->structType, s48, worldSeed, g, p)) continue;
+        if (!placementAllowed(q->mc, s48, c->structType, p)) continue;
         grid[idx] = p; has[idx] = 1;
     }
+    #define TC_VIABLE(idx) (!g || (ok[idx] ? ok[idx] == 1 : \
+        (ok[idx] = generatesAt(q, c->structType, s48, worldSeed, g, grid[idx]) ? 1 : 2) == 1))
 
     int64_t spr2 = (int64_t)c->spread * c->spread;
     int64_t reach2 = (int64_t)reach * reach;
@@ -2075,14 +2090,26 @@ static int tightCluster(const Query *q, int k, uint64_t s48, uint64_t worldSeed,
     for (int i = wr; i < W - wr; i++) {
         int a = j * W + i;
         if (!has[a] || dmet(grid[a], centre, c->metric) > reach2) continue;
+        if (g) {
+            // Upper bound first: the geometric neighbours, no biome work.
+            int geo = 0;
+            for (int dj = -wr; dj <= wr; dj++)
+            for (int di = -wr; di <= wr; di++) {
+                int b = (j + dj) * W + (i + di);
+                if (has[b] && d2(grid[a], grid[b]) <= spr2) geo++;
+            }
+            if (geo < c->structMin || geo <= best) continue;
+            if (!TC_VIABLE(a)) continue;
+        }
         int cnt = 0;
         for (int dj = -wr; dj <= wr; dj++)
         for (int di = -wr; di <= wr; di++) {
             int b = (j + dj) * W + (i + di);
-            if (has[b] && d2(grid[a], grid[b]) <= spr2) cnt++;
+            if (has[b] && d2(grid[a], grid[b]) <= spr2 && TC_VIABLE(b)) cnt++;
         }
         if (cnt > best) { best = cnt; if (anchor) *anchor = grid[a]; }
     }
+    #undef TC_VIABLE
     return best;
 }
 
