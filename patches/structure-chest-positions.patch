@@ -1,0 +1,56 @@
+--- a/finders.c
++++ b/finders.c
+@@ -3956,10 +3956,29 @@
+         p->name = "TeDP";
+         p->pos = (Pos3) {minBlockX, 64, minBlockZ};
+         p->chestCount = 4;
+-        p->chestPoses[0] = (Pos) {minBlockX + 8, minBlockZ + 10};
+-        p->chestPoses[1] = (Pos) {minBlockX + 10, minBlockZ + 8};
+-        p->chestPoses[2] = (Pos) {minBlockX + 10, minBlockZ + 12};
+-        p->chestPoses[3] = (Pos) {minBlockX + 12, minBlockZ + 10};
++        {
++            // The chests are filled north, east, south, west in the PIECE's
++            // frame, and the piece faces a random way -- the structure RNG's
++            // first nextInt(4), over NORTH, EAST, SOUTH, WEST. Its facing maps
++            // that frame onto the world (east and west swap x and z, north
++            // flips z), so the i-th loot seed lands on a different chest per
++            // facing. A fixed order paired the right seeds with the wrong
++            // chests for three of the four facings. Offsets from the corner:
++            // north (10,8), east (12,10), south (10,12), west (8,10).
++            static const int OFF[4][2] = { {10, 8}, {12, 10}, {10, 12}, {8, 10} };
++            static const int ORDER[4][4] = {
++                {2, 1, 0, 3},   // facing north: S E N W
++                {3, 2, 1, 0},   // facing east:  W S E N
++                {0, 1, 2, 3},   // facing south: N E S W
++                {1, 2, 3, 0},   // facing west:  E S W N
++            };
++            uint64_t frng = chunkGenerateRnd(seed, minBlockX >> 4, minBlockZ >> 4);
++            int facing = nextInt(&frng, 4);
++            for (int i = 0; i < 4; i++) {
++                const int d = ORDER[facing][i];
++                p->chestPoses[i] = (Pos) {minBlockX + OFF[d][0], minBlockZ + OFF[d][1]};
++            }
++        }
+         // chests generate in the same chunk as structure
+         uint64_t populationSeed = getPopulationSeed(mc, seed, minBlockX, minBlockZ);
+         CREATE_RANDOM_SOURCE(rnd, legacy);
+@@ -4048,11 +4067,15 @@
+         p->chestCount = 1;
+         p->lootTables[0] = "pillager_outpost";
+         int chestPosX, chestPosZ;
++        // The watchtower template's chest is at (9, 14, 10), rotated about the
++        // piece origin (Rotation ordinal: none, cw90, 180, ccw90). (10, 10)
++        // put it one block off on every rotation -- never across a chunk
++        // border, so the loot seed was right and only the position wrong.
+         switch (sv->rotation) {
+-        case 0: chestPosX = p->pos.x + 10; chestPosZ = p->pos.z + 10; break; // 0
+-        case 1: chestPosX = p->pos.x - 10; chestPosZ = p->pos.z + 10; break; // 90
+-        case 2: chestPosX = p->pos.x - 10; chestPosZ = p->pos.z - 10; break; // 180
+-        case 3: chestPosX = p->pos.x + 10; chestPosZ = p->pos.z - 10; break; // 270
++        case 0: chestPosX = p->pos.x + 9;  chestPosZ = p->pos.z + 10; break; // 0
++        case 1: chestPosX = p->pos.x - 10; chestPosZ = p->pos.z + 9;  break; // 90
++        case 2: chestPosX = p->pos.x - 9;  chestPosZ = p->pos.z - 10; break; // 180
++        case 3: chestPosX = p->pos.x + 10; chestPosZ = p->pos.z - 9;  break; // 270
+         default: UNREACHABLE();
+         }
+         p->chestPoses[0] = (Pos) {chestPosX, chestPosZ};

@@ -1593,6 +1593,28 @@ done
   && ok "the map marks only pyramids/temples/mansions that generate ($mk_n checked)" \
   || bad "the map marks a structure the terrain rule forbids" "checked=$mk_n phantom=$mk_bad"
 
+# Chest loot pinned to a real 1.21.1 server (tier3-java/loot_server_1.21.1.txt,
+# recorded with tier3-java/check_loot_seed.py): each chest's position, loot
+# seed and items through checkloot -- covering the 64-bit seed, the ocean
+# shipwreck salt, the 1.21 enchant list, the goat horn draw and the chest
+# positions -- and the engine's own count for the ocean wreck, which the
+# beached salt used to get wrong (6 carrots, not 8).
+ls_exp=$(grep '^chest' tier3-java/loot_server_1.21.1.txt)
+ls_got=$(for t in "desert_pyramid 1184 144" "outpost 320 256" "shipwreck -1008 880" "shipwreck -608 880"; do
+  read -r lst lx lz <<< "$t"
+  ./build/checkloot.exe -7311924356716553218 "$lst" "$lx" "$lz" 1.21.1 --chests | grep '^chest' | tr -d '\r'
+done)
+[ -n "$ls_exp" ] && [ "$ls_exp" = "$ls_got" ] \
+  && ok "loot matches a real 1.21.1 server chest by chest ($(echo "$ls_exp" | wc -l) chests: seed, position, items)" \
+  || bad "loot differs from the real 1.21.1 server" "$(diff <(echo "$ls_exp") <(echo "$ls_got") | head -4)"
+sw_v=""
+for n in 8 9; do
+  printf '{"version":"1.21.1","conditions":[{"id":"w","loot":{"structure":"shipwreck","item":"carrot","count":%d},"within":60,"of":"-608,880"}]}\n' "$n" > /tmp/sc_test/sw.json
+  sw_v="$sw_v $(./build/find.exe /tmp/sc_test/sw.json --seed -7311924356716553218 2>/dev/null | tr -d '\r' | grep -oE '^(YES|NO)' | head -1)"
+done
+[ "$sw_v" = " YES NO" ] && ok "engine loot: the ocean shipwreck the server checked holds exactly 8 carrots" \
+  || bad "engine loot count for the ocean shipwreck" "carrot>=8, >=9 gave:$sw_v (want YES NO)"
+
 # map.c renders on several threads and, from 1.19.3, skips the biome search for
 # strongholds that cannot be in view. Neither may change a pixel or a marker:
 # the threaded picture must equal the single-threaded one (1.18+ noise and a

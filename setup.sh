@@ -136,5 +136,31 @@ echo "stronghold 1.17 filler-corridor patch applied"
 # stronghold depth all go through it. The fix is the stride: relCellX * H.
 git -C cubiomes apply ../patches/terrainnoise-region-stride.patch
 echo "terrainnoise region-stride patch applied"
+
+# Two loot-table fixes, applied as a table is loaded (on a private copy: the
+# compiled tables are static and shared). Both were found by comparing chests
+# on a real 1.21.1 server (tier3-java/check_loot_seed.py) and both shift every
+# roll after the item they touch, so they change more than one item:
+#  - From 1.21 every vanilla enchant_randomly without its own enchantment list
+#    says "options": "#minecraft:on_random_loot". The library serves the first
+#    1.21.x releases with tables compiled from 1.20, which build the 1.20
+#    default list instead: a different enchantment for the same roll, and a
+#    skipped level roll when it has one level. A desert pyramid chest held an
+#    emerald where the 1.20 table rolled an enchanted golden apple.
+#  - An outpost goat horn's set_instrument draws one nextInt(4) for its sound,
+#    and the compiled tables leave the function out (1.19+): an outpost chest
+#    got two sentry trims the real one did not.
+git -C cubiomes apply ../patches/loot-fixups.patch
+echo "loot-table fixes applied"
+
+# Chest POSITIONS (the loot seeds were right): a desert pyramid fills its four
+# chests in an order that depends on the piece's random facing, which upstream
+# ignored, pairing three of four seeds with the wrong chest; and the outpost
+# watchtower's chest is at template (9, 14, 10), not (10, _, 10), so the
+# reported chest was one block off. Both checked on a real 1.21.1 server by
+# tier3-java/check_loot_seed.py: every chest now holds the seed predicted for
+# it, where it was predicted.
+git -C cubiomes apply ../patches/structure-chest-positions.patch
+echo "structure chest-position patch applied"
 echo
 echo "next: ./build.sh tools/find.c   then   ./test.sh"

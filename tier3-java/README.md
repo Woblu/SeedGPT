@@ -95,6 +95,28 @@ function, not patching a caller. Until then anything block-exact -- height and
 relief records, `cave_below`, cactus columns -- should be confirmed against this
 oracle before it is claimed, which is what confirm_cactus.py is for.
 
+## check_loot_seed.py — chest loot, chest by chest
+
+```sh
+python check_loot_seed.py <seed> 1.21.1 desert_pyramid <x> <z> [shipwreck <x> <z> ...]
+```
+
+A chest a structure places is empty until something opens it: it stores a
+`LootTable` and a `LootTableSeed`, and the items are rolled from those on first
+access. This boots one throwaway world, finds each chest `checkloot --chests`
+predicts, reads its table and seed, makes the server roll the loot without
+moving anything (copying slot 0 onto itself reads the slot, which unpacks the
+chest), and compares item totals and enchantments. Chests are matched by seed,
+so a seed at the wrong chest is reported as that rather than as a mismatch.
+
+Its first run (2026-10-21, seed -7311924356716553218, above 2^48) confirmed the
+64-bit loot seed fix and found four more problems: ocean shipwrecks rolled with
+the beached salt, early 1.21.x tables drawing enchantments from the 1.20 list,
+goat horns skipping their sound roll, and wrong chest positions for desert
+pyramids and outposts. After the fixes all 10 chests match on seed, position
+and items; `loot_server_1.21.1.txt` records them and `test.sh` holds the engine
+to it.
+
 ## Two things cubiomes cannot answer, and now something can
 
 Both of these are the same shape: a question about the *finished world* rather

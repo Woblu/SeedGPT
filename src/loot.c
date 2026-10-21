@@ -220,9 +220,13 @@ int lootCountItem(LootCache *lc, int mc, uint64_t seed, int structType,
         return rpCountItem(lc, mc, seed, blockX, blockZ, sv, item);
 
     StructureSaltConfig ss;
-    // Loot placement uses a decoration salt config; the biome argument only
-    // matters for the position salt (already resolved), so -1 is fine here.
-    if (!getStructureSaltConfig(structType, mc, -1, &ss)) return -1;
+    // The decoration salt can depend on the biome: from 1.18 an ocean
+    // shipwreck and a beached one are separate structures with separate
+    // decoration indices, and biome -1 reads as "not oceanic", so every wreck
+    // got the beached salt and every ocean wreck's chests the wrong loot seeds
+    // (a real 1.21.1 server: 3/3 chests right on a beached wreck, 0/2 on an
+    // ocean one). getVariant keeps the biome for exactly this.
+    if (!getStructureSaltConfig(structType, mc, sv ? sv->biome : -1, &ss)) return -1;
 
     Piece *pieces = lc->pieces;
     if (!pieces) return -1;

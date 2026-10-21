@@ -534,8 +534,40 @@ that seeds each chest is built with Xoroshiro from the whole world seed, so two
 sister seeds with identical structures roll different chests. Until 2026-10-20
 the search (and `checkloot`, which agreed with it) rolled 1.18+ chests from the
 48-bit structure seed — the chests of a different world. Pre-1.18 is unaffected:
-Java's LCG drops the upper bits anyway. The fixed path has not yet been checked
-against a real 1.18+ server; confirm a find in game before relying on it.
+Java's LCG drops the upper bits anyway.
+
+**Checked chest by chest on a real 1.21.1 server** (2026-10-21,
+`tier3-java/check_loot_seed.py`, world seed -7311924356716553218, above 2⁴⁸):
+a desert pyramid (4 chests), an outpost (1) and two shipwrecks (5) — every
+chest holds the `LootTableSeed` predicted from the full seed, at the predicted
+position, and the items the server rolls from it are the predicted items,
+enchantments included: 10/10. None held the old 48-bit prediction. Getting
+there took four more fixes, three of them in the loot library cubiomes carries
+(`patches/loot-fixups.patch`, `patches/structure-chest-positions.patch`):
+
+- **Ocean shipwrecks rolled with the beached salt.** From 1.18 the two are
+  separate structures with separate decoration indices, chosen by biome, and
+  the loot code passed no biome — which reads as "beached". Every ocean wreck's
+  chests were another world's; both chests of the ocean wreck checked were.
+- **Enchantments in early 1.21.x.** 1.21 tables draw `enchant_randomly` from
+  `#minecraft:on_random_loot`; the library served the first 1.21.x releases
+  (to 1.21.4, 1.21.5, 1.21.8 or 1.21.10 depending on the table) with 1.20
+  tables and the 1.20 list. A different enchantment,
+  and with a one-level enchantment a skipped level roll, so the rest of the
+  chest drifted (an emerald, not an enchanted golden apple).
+- **Goat horns** (outposts, 1.19+) draw one random number for their sound; the
+  library left it out, so everything after a horn drifted (two sentry trims
+  that were not there).
+- **Chest positions**: a desert pyramid's four seeds were paired with the wrong
+  chests for three of its four facings, and the outpost chest was reported one
+  block off. Counts were unaffected (they sum the structure); per-chest output
+  was not.
+
+Not yet checked on a server: jungle temples, igloos, fortresses, bastions, ruined
+portals (cross-checked against MCUtils/FeatureUtils only), versions other than
+1.21.1, and the 1.20-and-earlier `enchant_randomly` list — read from 1.20's
+code, a book there can roll mending and the curses, which the library's default
+list leaves out; that needs a 1.20 server to settle before it is changed.
 
 Rolling a chest is ~5 us, cheap next to the ~42 us structure viability check,
 so a loot search costs about the same as a plain structure search. What makes a
@@ -1366,7 +1398,7 @@ check was made; others are expected to follow the same code but were not run.
 | buried treasure exposure / casing | real 1.21.1 generator; bedrock casing on a real 1.16.5 server | 1.16.5, 1.21.1 |
 | stronghold heights | real 1.16.5 server (15/15 below y=52) | 1.16.5 (1.17 patch: published finds only) |
 | ruined portal chest seed + chest offset | MCUtils / FeatureUtils | 1.17.1 |
-| chest loot, 1.18+ | engine only. Rolled from the full 64-bit seed since 2026-10-20 (it was the 48-bit structure seed before, i.e. another world). **Confirm one on a real 1.18+ server before relying on it** | — |
+| chest loot, 1.18+ | real 1.21.1 server, chest by chest: loot table seed, position and items, 10/10 (desert pyramid, outpost, ocean + beached shipwreck) after the fixes in [Chest loot](#chest-loot). Other structure types and versions: engine only | 1.21.1 |
 | biome conditions, 1.17 and earlier | engine only. Before 2026-10-20 they matched nothing (a NULL layer lookup); fixed and covered by tests | — |
 | Bedrock | biomes match Java (13/15 points); structures do NOT (0/14) | BDS 1.26 |
 
@@ -1425,6 +1457,8 @@ caps at 1.21 — it cannot generate current worlds), and **not** `cubiomes-viewe
 | `stronghold-accurate-y` | real stronghold piece heights (upstream pins Y=64) |
 | `stronghold-1-17-filler-corridor` | the 1.17 corridor rule (see Strongholds) |
 | `terrainnoise-region-stride` | `generateRegion` indexed its noise cache by width instead of height: rectangular regions overflowed or returned wrong heights. `tools/checkregion` is the check. Upstream bug |
+| `loot-fixups` | early 1.21.x tables drew `enchant_randomly` from the 1.20 list, not `#minecraft:on_random_loot`; goat horns skipped their sound roll. Both shift every later roll in the chest. Found and checked on a real 1.21.1 server (see Chest loot) |
+| `structure-chest-positions` | desert pyramid seeds paired with the wrong chests for three of four facings; outpost chest one block off. Checked on a real 1.21.1 server |
 
 On Windows `setup.sh` also writes `cubiomes/compat/sys/time.h` (clang there
 targets `x86_64-pc-windows-msvc`, which has no POSIX headers); elsewhere it does

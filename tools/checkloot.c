@@ -1,6 +1,11 @@
 // checkloot -- recompute the loot at a structure for one seed, independently of
 // the search path. Given seed + structure type + block coords, it re-locates
 // the piece, re-rolls every chest, and prints the item totals.
+//
+// --chests also prints one line per chest -- `chest X Z TABLE SEED: items` --
+// with the loot-table seed as the signed long a real world stores in the
+// chest's LootTableSeed tag, so a server can confirm it chest by chest
+// (tier3-java/check_loot_seed.py does).
 #include "finders.h"
 #include "generator.h"
 #include "util.h"
@@ -24,8 +29,10 @@ int main(int argc, char **argv)
     int mc = (argc > 5) ? str2mc(argv[5]) : MC_1_21;
     const char *want = (argc > 6) ? argv[6] : NULL;
     if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
-    const char *wantEnch = NULL; int wantEnchLvl = 1;
+    if (want && !strncmp(want, "--", 2)) want = NULL;     // a flag, not an item
+    const char *wantEnch = NULL; int wantEnchLvl = 1, perChest = 0;
     for (int a = 1; a < argc; a++) {
+        if (!strcmp(argv[a], "--chests")) perChest = 1;
         if (strcmp(argv[a], "--ench") || a + 1 >= argc) continue;
         wantEnch = argv[a + 1];
         if (a + 2 < argc) { int v = atoi(argv[a + 2]); if (v > 0) wantEnchLvl = v; }
@@ -52,7 +59,9 @@ int main(int argc, char **argv)
     int biome = chunkBiome(&g, bx, bz);
     getVariant(&sv, type, mc, seed, bx, bz, biome);
     StructureSaltConfig ss;
-    if (!getStructureSaltConfig(type, mc, -1, &ss)) { fprintf(stderr, "no salt\n"); return 1; }
+    // sv.biome, not -1: from 1.18 the ocean and beached shipwrecks have their
+    // own decoration salts, and -1 reads as beached (see src/loot.c).
+    if (!getStructureSaltConfig(type, mc, sv.biome, &ss)) { fprintf(stderr, "no salt\n"); return 1; }
 
     // Fortresses run to a few hundred pieces (largest seen: 257 over a 3.6M
     // sample), so this buffer is sized for them, not for the handful the small
@@ -80,6 +89,26 @@ int main(int argc, char **argv)
         if (!t || !init_loot_table_name(&ctx, t, mc) || !ctx) continue;
         set_loot_seed(ctx, pieces[i].lootSeeds[c]);
         generate_loot(ctx);
+        if (perChest) {
+            // Named as the game names the result: enchant_randomly turns a
+            // book into an enchanted_book, and the enchantments ride along as
+            // {name:level,...} so a server can be compared item for item.
+            printf("chest %d %d %s %lld:", pieces[i].chestPoses[c].x, pieces[i].chestPoses[c].z,
+                   t, (long long)pieces[i].lootSeeds[c]);
+            for (int k = 0; k < ctx->generated_item_count; k++) {
+                const ItemStack *is = &ctx->generated_items[k];
+                const char *nm = get_item_name(ctx, is->item);
+                if (is->enchantment_count > 0 && !strcmp(nm, "minecraft:book"))
+                    nm = "minecraft:enchanted_book";
+                printf(" %dx%s", is->count, nm);
+                for (int e = 0; e < is->enchantment_count && e < 16; e++) {
+                    const char *en = get_enchantment_name(is->enchantments[e].enchantment);
+                    printf("%s%s:%d", e ? "," : "{", en ? en : "unknown", is->enchantments[e].level);
+                }
+                if (is->enchantment_count > 0) printf("}");
+            }
+            printf("\n");
+        }
         for (int k = 0; k < ctx->generated_item_count; k++) {
             const char *nm = get_item_name(ctx, ctx->generated_items[k].item);
             int j; for (j = 0; j < na; j++) if (!strcmp(agg[j].name, nm)) break;
