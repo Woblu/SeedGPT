@@ -651,6 +651,19 @@
     </section>
 
     <section>
+      <h2>Check my seeds</h2>
+      <label for="checkSeeds">seeds — one per line; numbers or text, read the way Minecraft reads them</label>
+      <textarea id="checkSeeds" rows="4" spellcheck="false"
+        placeholder="-4172144997902289642&#10;12345&#10;my cool seed"></textarea>
+      <div class="btnrow">
+        <button id="checkBtn">Check against these conditions</button>
+      </div>
+      <div class="hint">Instead of searching, tests the seeds you already have —
+        a friend's world, a server, another finder's list (up to 100,000) — and
+        shows which have everything above, with the coordinates.</div>
+    </section>
+
+    <section>
       <h2>World version</h2>
       <select id="version">
         <option>26.2</option><option>26.1</option>
@@ -2833,6 +2846,47 @@
   }
 
   $('#searchBtn').onclick = () => { if (!guard()) return; closeDrawer(); runSearch(buildQuery()); };
+
+  // Check a list of seeds against the builder's conditions (/api/check).
+  $('#checkBtn').onclick = async () => {
+    if (!guard()) return;
+    const text = $('#checkSeeds').value.trim();
+    if (!text) { toast('paste some seeds first'); $('#checkSeeds').focus(); return; }
+    const query = buildQuery();
+    busy('checking your seeds…');
+    const btn = $('#checkBtn'); btn.disabled = true;
+    try {
+      const d = await post('/api/check', { query, seeds: text,
+                                           threads: +$('#threads').value || 16 });
+      shownQuery = query;
+      out.innerHTML = '';
+      out.append(understoodCard(query));
+      out.append(statsCard('Seed check', [
+        ['checked', String(d.checked)],
+        ['have it', String(d.matched), d.matched ? 'good' : 'warn'],
+        ['do not', String(d.checked - d.matched)],
+      ]));
+      const yes = d.results.filter(r => r.verdict === 'yes' && r.hit);
+      if (yes.length) out.append(seedsCard(yes.map(r => r.hit), `These ${yes.length} have it`));
+      const no = d.results.filter(r => r.verdict !== 'yes');
+      if (no.length) {
+        const c = el('div', 'card');
+        c.append(el('h3', null, `These ${no.length} do not`));
+        const t = el('table');
+        no.slice(0, 500).forEach(r => {
+          const tr = el('tr');
+          const label = r.input === r.seed ? r.seed : `${r.input} → ${r.seed}`;
+          tr.append(el('td', 'id', label), el('td', 'd', r.why || r.verdict));
+          t.append(tr);
+        });
+        c.append(t);
+        if (no.length > 500) c.append(el('div', 'hint', `…and ${no.length - 500} more.`));
+        out.append(c);
+      }
+      announce(`${d.matched} of ${d.checked} seeds have it`);
+    } catch (e) { fail(e.message); }
+    finally { btn.disabled = false; }
+  };
 
   const MARKERS = [
     ['mansion','#FF4646'], ['village','#FFD23C'], ['monument','#50BEFF'],

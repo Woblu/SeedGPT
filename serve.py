@@ -635,43 +635,88 @@ def api_search(body) -> dict:
             "funnel": parse_funnel(out), "notes": parse_notes(out), "raw": human(out)}
 
 
+def _seed_items(raw) -> list:
+    """Seeds from what a person pastes.
+
+    One per line, or comma/semicolon separated. A line of space-separated
+    NUMBERS is several seeds; any other line is one seed, kept whole -- "my
+    cool seed" is a valid text seed (Minecraft hashes it), and splitting it on
+    spaces would check three different worlds.
+    """
+    if isinstance(raw, list):
+        items = [str(s) for s in raw]
+    elif isinstance(raw, str):
+        items = []
+        for line in raw.splitlines():
+            for part in re.split(r"[,;]", line):
+                part = part.strip()
+                if not part or part.startswith("#"):
+                    continue
+                words = part.split()
+                if len(words) > 1 and all(re.fullmatch(r"[+-]?\d+", w) for w in words):
+                    items.extend(words)
+                else:
+                    items.append(part)
+    else:
+        raise Failure("'seeds' must be a list, or text with one seed per line")
+    return [s.strip() for s in items if s.strip()]
+
+
 def api_check(body) -> dict:
-    """Does each of these seeds satisfy the query? (find --seed, per seed)
+    """Which of these seeds satisfy the query? (find --seeds, one process)
 
     The question most of verifying a known find comes down to -- "does THIS
-    seed have it" -- had no endpoint; the only path was to search for it. Seeds
-    may be numbers or text, read the way Minecraft reads them.
+    seed have it", or "which of my seeds do" -- had no endpoint; the only path
+    was to search for it. Seeds may be numbers or text, read the way Minecraft
+    reads them, and up to 100,000 are checked in one multithreaded run.
     """
-    raw = body.get("seeds")
-    if isinstance(raw, str):
-        raw = re.split(r"[\s,;]+", raw.strip())
-    if not isinstance(raw, list):
-        raise Failure("'seeds' must be a list (or a comma/space separated string)")
-    seeds = [str(s).strip() for s in raw if str(s).strip()][:200]
+    seeds = _seed_items(body.get("seeds"))
     if not seeds:
         raise Failure("give at least one seed")
+    if len(seeds) > 100_000:
+        raise Failure(f"{len(seeds)} seeds is more than the 100,000 one check takes")
+    for s in seeds:
+        if "\n" in s or "\r" in s or len(s) > 200:
+            raise Failure("a seed is one line of at most 200 characters")
+        # "#" opens a comment in find's list format, so a text seed starting
+        # with one cannot be passed; refuse rather than skip it silently.
+        if s.startswith("#"):
+            raise Failure(f"a seed cannot start with '#': {s!r}")
     path = write_query(body)
-    results = []
+    QUERY_DIR.mkdir(parents=True, exist_ok=True)
+    fd, lst = tempfile.mkstemp(prefix="seeds_", suffix=".txt", dir=str(QUERY_DIR))
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("".join(s + "\n" for s in seeds))
     try:
-        for s in seeds:
-            ws = java_seed(s)
-            rc, out, err = run([tool("find"), path, "--seed", ws], TIMEOUTS["search"],
-                               env=find_env())
-            for marker in ("query error:", "plan error:"):
-                if marker in out or marker in err:
-                    raise Failure((out + err).split(marker, 1)[1].strip().splitlines()[0])
-            verdict = "yes" if rc == 0 else ("no" if rc == 3 else "error")
-            why = ""
-            m = re.search(r"^NO -- (.+)$", out, re.M)
-            if m:
-                why = m.group(1).strip()
-            hit = (parse_hits("SEED " + ws + "\n" + out.split("YES", 1)[1])
-                   if verdict == "yes" and "YES" in out else [])
-            results.append({"input": s, "seed": ws, "verdict": verdict,
-                            "why": why, "hit": hit[0] if hit else None})
+        rc, out, err = run([tool("find"), path, "--seeds", lst, str(clamp_threads(body))],
+                           max(TIMEOUTS["search"], 900), env=find_env())
     finally:
         drop_query(path)
+        drop_query(lst)
+    for marker in ("query error:", "plan error:"):
+        if marker in out or marker in err:
+            raise Failure((out + err).split(marker, 1)[1].strip().splitlines()[0])
+    if rc not in (0, 3):
+        raise Failure(f"find.exe failed (exit {rc}): " + " / ".join(err.strip().splitlines()[-2:]))
+    # Each @CHECK line is followed, for a yes, by that seed's @JSON hit.
+    results, last = [], None
+    for line in out.splitlines():
+        if line.startswith("@CHECK "):
+            try:
+                last = json.loads(line[7:])
+            except ValueError:
+                last = None
+                continue
+            last["hit"] = None
+            results.append(last)
+        elif line.startswith("@JSON ") and last is not None and last.get("verdict") == "yes":
+            try:
+                last["hit"] = json.loads(line[6:])
+            except ValueError:
+                pass
+    results.sort(key=lambda r: r.get("index", 0))
     return {"results": results,
+            "checked": len(results),
             "matched": sum(1 for r in results if r["verdict"] == "yes")}
 
 

@@ -100,6 +100,8 @@ static void printHit(const Query *q, uint64_t ws, const Match *mm, FILE *tsv);
 static void writeTsv(const Query *q, uint64_t ws, const Match *mm, FILE *tsv);
 static void jsonHit(const Query *q, uint64_t ws, const Match *mm, int haveScore, int score);
 static int g_json = 0;     // FIND_JSON: also print each hit as an @JSON line
+static char *slurp(const char *path);
+static int checkSeedList(const Query *q, const char *path, int nthreads);
 
 // In stream mode a hit is printed the moment it is found, in the same SEED
 // block the end-of-run report uses, so a reader can show it immediately and --
@@ -725,6 +727,82 @@ static void jsonHit(const Query *q, uint64_t ws, const Match *mm,
     printf("}\n");
 }
 
+// ---- --seeds FILE: check a list of seeds ---------------------------------
+//
+// "Which of MY seeds have this?" -- a list from a friend, a server, another
+// finder's export. One process, all threads, instead of one process per seed.
+// Per seed: "@CHECK {...}" with the verdict, then (for a yes) the hit exactly
+// as a search prints it. Results come in completion order; "index" is the
+// seed's position in the list (blank lines and #comments are skipped), so a
+// reader can restore the input order.
+typedef struct {
+    const Query *q;
+    char **lines;
+    int n;
+    volatile LONG next;
+    volatile LONG yes;
+} SeedList;
+
+static DWORD WINAPI seedListWorker(LPVOID arg)
+{
+    SeedList *sl = (SeedList *)arg;
+    const Query *q = sl->q;
+    Generator g;
+    setupGenerator(&g, q->mc, queryGenFlags(q));
+    LootCache *lc = lootCacheNew();
+    for (;;) {
+        LONG i = InterlockedIncrement(&sl->next) - 1;
+        if (i >= sl->n) break;
+        uint64_t ws;
+        if (!parseWorldSeed(sl->lines[i], &ws)) continue;
+        Match m;
+        int s1 = queryStage1(q, ws & ((1ULL << 48) - 1), &m);
+        int s2 = s1 && queryStage2(q, &g, ws, &m, lc);
+        if (s2) InterlockedIncrement(&sl->yes);
+        EnterCriticalSection(&g_lock);
+        printf("@CHECK {\"index\":%ld,\"input\":", (long)i);
+        jstr(sl->lines[i]);
+        printf(",\"seed\":\"%" PRId64 "\",\"verdict\":\"%s\",\"why\":", (int64_t)ws,
+               s2 ? "yes" : "no");
+        jstr(s2 ? "" : !s1 ? "the structures this query needs are not placed in this seed"
+                           : "placed, but a biome, viability, terrain or loot condition fails");
+        printf("}\n");
+        if (s2) {
+            printf("SEED %" PRId64 "\n", (int64_t)ws);
+            printHit(q, ws, &m, NULL);
+            if (g_json) jsonHit(q, ws, &m, 0, 0);
+        }
+        fflush(stdout);
+        LeaveCriticalSection(&g_lock);
+    }
+    if (lc) lootCacheFree(lc);
+    return 0;
+}
+
+static int checkSeedList(const Query *q, const char *path, int nthreads)
+{
+    char *text = slurp(path);
+    if (!text) { fprintf(stderr, "cannot read %s\n", path); return 2; }
+    int cap = 1024, n = 0;
+    char **lines = malloc(sizeof(char *) * cap);
+    for (char *ln = strtok(text, "\r\n"); ln; ln = strtok(NULL, "\r\n")) {
+        while (*ln == ' ' || *ln == '\t') ln++;
+        if (!*ln || *ln == '#') continue;              // blank lines and comments
+        if (n == cap) { cap *= 2; lines = realloc(lines, sizeof(char *) * cap); }
+        lines[n++] = ln;
+        if (n >= 1000000) break;
+    }
+    SeedList sl = { q, lines, n, 0, 0 };
+    InitializeCriticalSection(&g_lock);
+    HANDLE th[64];
+    for (int i = 0; i < nthreads; i++) th[i] = CreateThread(NULL, 0, seedListWorker, &sl, 0, NULL);
+    WaitForMultipleObjects(nthreads, th, TRUE, INFINITE);
+    for (int i = 0; i < nthreads; i++) CloseHandle(th[i]);
+    printf("--- checked %d seeds: %ld satisfy the query ---\n", n, (long)sl.yes);
+    free(lines); free(text);
+    return sl.yes ? 0 : 3;
+}
+
 // The machine-readable twin of a hit, for piping into verifiers.
 static void writeTsv(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
 {
@@ -773,6 +851,8 @@ int main(int argc, char **argv)
     // what verifying a known find consists of -- had no path through this tool
     // at all, and the alternative was to search for it, which is absurd.
     int seedmode = (argc > 3) && !strcmp(argv[2], "--seed");
+    // --seeds FILE [threads]: check every seed in a list (checkSeedList).
+    int listmode = (argc > 3) && !strcmp(argv[2], "--seeds");
     uint64_t oneseed = 0;
     // The seed exactly as Minecraft reads it: a number if it is a valid long,
     // otherwise the hash of the text (src/seed.h).
@@ -782,7 +862,7 @@ int main(int argc, char **argv)
     }
     uint64_t range   = (argc > 2 && !explain && !bias && !seedmode) ? strtoull(argv[2], NULL, 10) : 5000000;
     uint64_t samples = ((explain || bias) && argc > 3) ? strtoull(argv[3], NULL, 10) : 200000;
-    int nthreads = (explain || bias) ? ((argc > 4) ? atoi(argv[4]) : 16)
+    int nthreads = (explain || bias || listmode) ? ((argc > 4) ? atoi(argv[4]) : 16)
                                      : ((argc > 3) ? atoi(argv[3]) : 16);
     // 0 divided the range by zero; more than 64 (MAXIMUM_WAIT_OBJECTS) made the
     // wait return at once and the results were read while workers still ran.
@@ -826,6 +906,11 @@ int main(int argc, char **argv)
     if (explain) { explainQuery(&q, samples, nthreads, stdout);   free(json); return 0; }
 
     g_json = getenv("FIND_JSON") != NULL;
+    if (listmode) {
+        int rc = checkSeedList(&q, argv[3], nthreads);
+        free(json);
+        return rc;
+    }
     if (seedmode) {
         Generator g;
         setupGenerator(&g, q.mc, queryGenFlags(&q));

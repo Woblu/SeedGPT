@@ -1611,6 +1611,20 @@ else
   bad "LcgCheck.java does not compile" "$(head -3 /tmp/sc_test/lcg_jc.txt)"
 fi
 
+# find --seeds: a list checked in one process. A seed the search just found
+# must come back "yes", a text seed must be hashed the Minecraft way, and
+# comments/blank lines must be skipped.
+printf '{"version":"1.21","conditions":[{"id":"m","structure":"mansion","within":800},{"id":"v","structure":"village","within":600,"of":"m"}]}\n' > /tmp/sc_test/sl.json
+sl_seed=$(./build/find.exe /tmp/sc_test/sl.json 200000 8 2>/dev/null | awk '/^SEED/{print $2; exit}')
+printf '# a comment\n%s\n\nglacier\n12345\n' "$sl_seed" > /tmp/sc_test/sl.txt
+sl_out=$(FIND_JSON=1 ./build/find.exe /tmp/sc_test/sl.json --seeds /tmp/sc_test/sl.txt 4 2>/dev/null)
+sl_n=$(echo "$sl_out" | grep -c '^@CHECK')
+sl_yes=$(echo "$sl_out" | grep '^@CHECK' | grep -c "\"seed\":\"$sl_seed\",\"verdict\":\"yes\"")
+sl_hash=$(echo "$sl_out" | grep -c '"input":"glacier","seed":"108181935"')
+[ -n "$sl_seed" ] && [ "$sl_n" -eq 3 ] && [ "$sl_yes" -eq 1 ] && [ "$sl_hash" -eq 1 ] \
+  && ok "find --seeds checks a list (found seed: yes; text seed hashed; comment skipped)" \
+  || bad "find --seeds" "seed=$sl_seed checks=$sl_n yes=$sl_yes hashed=$sl_hash"
+
 # The web server must refuse other origins and non-JSON posts (CSRF / DNS
 # rebinding), and still accept the UI's own requests.
 RUIPORT=8792
