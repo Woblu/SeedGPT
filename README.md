@@ -120,6 +120,17 @@ copies a teleport that works from any dimension (`/execute in …`).
 
 Conveniences for real use:
 
+- **Check my seeds** (Build drawer): paste seeds you already have — a friend's
+  world, a server, another finder's list, up to 100,000 — and see which of them
+  have every condition, with full result rows, and why the others fail.
+- **The map** marks landmarks (and strongholds) as buttons: click one for its
+  coordinates, a /tp and "centre here"; an "in view" row counts each type. It
+  marks only structures that really generate — the same gate as a search.
+- **Describe** shows a seed as a table: spawn, then every structure type nearest
+  first, each with map, copy and /tp, the biome, and whether a ruined portal is
+  buried.
+- **History** re-runs the query a prompt produced, exactly and without another
+  AI call.
 - **Share** (on every result) copies a link with the query encoded in the URL
   hash — the *exact* query, including fields the builder cannot show. Opening it
   on any local instance rebuilds it — the server is loopback-only, so you share
@@ -157,6 +168,10 @@ Or write the query yourself:
 ./build/find.exe queries/mansion-village.json --explain    # will this ever finish?
 ./build/find.exe queries/mansion-village.json --bias       # is scanning from 0 representative?
 ./build/find.exe queries/mansion-village.json --seed glacier   # does THIS seed have it?
+./build/find.exe queries/mansion-village.json --seeds my-seeds.txt 16   # which of these do?
+
+./build/describe.exe <seed> 26.2 4000 - json      # what is in this seed, as JSON
+./build/map.exe <seed> 26.2 3000 64 markers 0 0 -  # the landmarks a map marks, as JSON
 ```
 
 Environment knobs: `FIND_SECONDS` (time budget), `FIND_OFFSET` (where to start —
@@ -164,8 +179,14 @@ every run prints `covered : indices a..b -- resume with FIND_OFFSET=b`, a
 gap-free resume point, because threads take interleaved indices),
 `FIND_UPPERS` (sister seeds tried per structure seed, default 64, visited as a
 permutation so N tries are N different worlds), `FIND_STREAM` (print each hit
-as it is found), `FIND_TSV` (machine-readable hits). Several machines can split
-one range by giving each its own `FIND_OFFSET` block.
+as it is found), `FIND_JSON` (also print each hit as one `@JSON {...}` line,
+built from the engine's result structs — what the web server reads),
+`FIND_TSV` (machine-readable hits for the verifiers). Several machines can
+split one range by giving each its own `FIND_OFFSET` block.
+
+`--seeds FILE` reads one seed per line (numbers or text; blank lines and
+`#comments` skipped), checks them on every thread, and prints per seed an
+`@CHECK {...}` verdict followed, for a yes, by the hit.
 
 **Seeds are read the way Minecraft reads them.** If the text is a valid signed
 64-bit number it is that seed; otherwise the seed is the text's Java
@@ -533,15 +554,18 @@ fail-to-generate caveat above still applies to the *portal* — but the chest
 contents, if it generates, are exact. Add `"surface": true` to a structure
 condition to skip the buried ones.)
 
-### Loot generation is single-threaded
+### Loot and threads
 
 cubiomes' loot contexts are **singletons** — `init_*()` returns `&staticContext`,
 so every worker thread shares one context per table and `generate_loot` mutates
-its RNG state and output buffer in place. Concurrent rolls therefore race, which
-silently made loot counts depend on thread timing. `src/loot.c` serialises the
-roll+read with a small spinlock; the ~5 µs roll is a tiny fraction of the
-per-seed cost and the biome/structure work stays parallel, so throughput is
-unaffected in practice.
+its RNG state and output buffer in place. Concurrent rolls therefore raced,
+which silently made loot counts depend on thread timing; a global lock around
+every roll fixed that by serialising all loot work. What a roll writes is small
+and all inside the struct (`prng_state`, `generated_items[27]`) while the tables
+it reads are constant, so `src/loot.c` now gives each thread a private copy of
+each context and rolls without a lock; only the first `init_*` call, which
+builds the shared tables, is serialised. A 16-thread search's chests re-roll
+identically single-threaded.
 
 ### The nether pair
 
@@ -1412,6 +1436,7 @@ src/platform.h        Win32 threads/atomics/clocks, or their POSIX equivalents
 src/seed.h            seed text -> seed, the way Minecraft parses it
 src/biomeat.h         the surface-biome lookup, correct on every version
 src/terrain.{h,c}     exact 1.18+ surface heights (generateRegion, world Y)
+src/lcg.h             java.util.Random forwards and backwards (reversal primitives)
 src/ore.{h,c}         ore density, veins, exposure, Y bands
 src/loot.{h,c}        loot-table cache + item counting (full 64-bit seed)
 src/cactus.{h,c}      cactus height simulation
@@ -1426,6 +1451,8 @@ tools/nearest.c       the Java /locate: nearest structure or biome to a point
 tools/locate.c        every instance of a structure in a radius
 tools/check*.c        re-derive one result through a separate path (see Verification)
 tools/checkregion.c   generateRegion: rectangular regions vs 1x1 (patch check)
+tools/lcgcheck.c      src/lcg.h self-checks + a table LcgCheck.java reproduces
+tools/LcgCheck.java   the same table from the real java.util.Random
 tools/xval.c          cubiomes side of the cross-validation
 tools/XVal.java       independent JDK reference
 tools/Verify.java     re-verify individual seeds against the JDK reference
