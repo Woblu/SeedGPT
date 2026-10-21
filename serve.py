@@ -754,18 +754,24 @@ def api_map(qs) -> bytes:
     dim = (qs.get("dim") or ["overworld"])[0]
     if dim not in ("overworld", "nether", "end"):
         raise Failure(f"unknown dimension {dim!r}")
+    # marks=0: biomes only. The interactive map draws clickable markers from
+    # /api/markers over the picture; baking them in too computed every
+    # structure twice per view.
+    marks = (qs.get("marks") or ["1"])[0] not in ("0", "false")
     out = ROOT / "build" / "tmp"
     out.mkdir(parents=True, exist_ok=True)
     # Write to a file rather than piping: PNG bytes through a pipe are easy to
     # corrupt, and a path keeps the failure mode obvious. Unique name per tile so
     # concurrent pan/zoom requests don't clobber each other.
-    dest = out / f"map_{abs(hash((seed, v, radius, px, cx, cz, large, dim))):x}.png"
+    dest = out / f"map_{abs(hash((seed, v, radius, px, cx, cz, large, dim, marks))):x}.png"
     margs = [tool("map"), seed, v, str(radius), str(px), dest, str(cx), str(cz)]
     # Positional up to cz; the tail flags are order-independent keywords, so a
     # nether map without large biomes still needs a placeholder in that slot.
     margs.append("large" if large else "-")
     if dim != "overworld":
         margs.append(dim)
+    if not marks:
+        margs.append("nomarkers")
     rc, _, err = run(margs, TIMEOUTS["map"])
     if rc != 0 or not dest.exists():
         raise Failure(err.strip() or "map render failed")

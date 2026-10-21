@@ -1896,10 +1896,20 @@
     ['ancient city','#BE6EFF'], ['outpost','#FF8C28'], ['desert pyramid','#FAF0A0'],
     ['jungle temple','#78DC78'], ['swamp hut','#966EC8'], ['igloo','#E6F5FF'],
   ];
+  // What each dimension's map marks, and in which colour -- map.c's STYLE
+  // table. Keyed below by the "type" /api/markers reports.
+  const DIM_MARKERS = {
+    overworld: [...MARKERS, ['stronghold', '#F0F0F0']],
+    nether: [['fortress', '#DC3C3C'], ['bastion', '#785AA0']],
+    end: [['end city', '#D2C878']],
+  };
+  const MARK_COLOR = Object.fromEntries(Object.values(DIM_MARKERS).flat()
+    .map(([n, c]) => [n.replace(/ /g, '_'), c]));
 
   // Interactive pan/zoom biome map (Chunkbase-style). Drag pans (re-fetches a
-  // re-centred tile from map.exe), wheel zooms (changes radius), click reads
-  // out block coordinates. Structure markers are baked into the PNG by map.c.
+  // re-centred view from map.exe), wheel zooms (changes radius), click reads
+  // out block coordinates. The picture is biomes only; structures are real
+  // buttons drawn over it from /api/markers, so they can be clicked and read.
   // opts: {cx, cz, dim} -- opening a map ON a result is the whole point of
   // having one, so every result row can call this with its own coordinates.
   function mapView(seed, opts) {
@@ -1928,7 +1938,11 @@
         if (dim === d) return;
         const f = (dim === 'nether' ? 8 : 1) / (d === 'nether' ? 8 : 1);
         cx = Math.round(cx * f); cz = Math.round(cz * f);
-        dim = d; syncDim(); load();
+        dim = d; syncDim(); drawLegend();
+        // The old picture is another dimension: nothing to preview with.
+        shown = null; markView = null; img.removeAttribute('src');
+        layer.innerHTML = '';
+        load();
       };
       dimBtns[d] = b; bar.append(b);
     });
@@ -1950,20 +1964,25 @@
     read.style.cssText = 'position:absolute;left:6px;bottom:6px;font-family:var(--mono);'
       + 'font-size:11px;background:rgba(0,0,0,.6);color:#fff;padding:2px 6px;'
       + 'pointer-events:none;display:none';
-    // Clickable markers, drawn over the baked-in ones from the same list
-    // (/api/markers). Real buttons: reachable by keyboard, announced by name.
+    // Clickable markers from /api/markers -- the same list, through the same
+    // "does it really generate" gate, map.c would have baked into the picture.
+    // Real buttons: reachable by keyboard, announced by name.
     const layer = el('div');
     layer.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     vp.append(img, layer, read); card.append(vp);
 
     const lg = el('div', 'legend');
-    (typeof MARKERS !== 'undefined' ? MARKERS : []).forEach(([nm, col]) => {
-      const sp = el('span'), sw = el('i'); sw.style.background = col;
-      sp.append(sw, document.createTextNode(pretty(nm))); lg.append(sp);
-    });
-    { const sp = el('span'), sw = el('i'); sw.style.background = '#F0F0F0';
-      sp.append(sw, document.createTextNode('Stronghold')); lg.append(sp); }
-    const sc = el('span'); sc.append(document.createTextNode('✛ spawn')); lg.append(sc);
+    function drawLegend() {
+      lg.innerHTML = '';
+      DIM_MARKERS[dim].forEach(([nm, col]) => {
+        const sp = el('span'), sw = el('i'); sw.style.background = col;
+        sp.append(sw, document.createTextNode(pretty(nm))); lg.append(sp);
+      });
+      if (dim === 'overworld') {
+        const sc = el('span'); sc.append(document.createTextNode('✛ spawn')); lg.append(sc);
+      }
+    }
+    drawLegend();
     card.append(lg);
     card.append(el('div', 'hint', 'Drag to pan · scroll to zoom · click a marker for its coordinates and /tp.'));
     const pick = el('div', 'note'); pick.hidden = true;
@@ -1973,24 +1992,45 @@
     back.onclick = showLastResults;
     card.append(back); out.append(card);
 
-    // Every pan or zoom renders a whole PNG on the server, so requests are
+    // Every pan or zoom renders a whole view on the server, so requests are
     // debounced (a fast wheel spin used to queue a dozen renders, all but the
-    // last wasted), and the view says when it is loading or failed.
-    let loadTimer = null;
-    img.onload  = () => { info.textContent = `${dim} · centre ${cx}, ${cz}  ·  ±${radius} blocks`; };
+    // last wasted), and the view says when it is loading or failed. Until the
+    // new picture arrives the old one stays up, moved and scaled to where its
+    // ground now sits: a drag keeps what was dragged instead of snapping back
+    // for a second, and a zoom previews at once. The markers do the same.
+    let loadTimer = null, pending = null, shown = null, markView = null;
+    const status = () => `${dim} · centre ${cx}, ${cz}  ·  ±${radius} blocks`;
+    img.onload  = () => { shown = pending; place(); info.textContent = status(); };
     img.onerror = () => { info.textContent = 'map render failed — try again, or zoom out'; };
+    // Put a picture of view `w` where its ground is in the live view.
+    function fit(node, w, lx, lz, lr) {
+      if (!w) { node.style.transform = ''; return; }
+      const rw = vp.getBoundingClientRect().width || PX;
+      const s = w.radius / lr;
+      const ox = (w.cx - lx) / (2 * lr) * rw, oz = (w.cz - lz) / (2 * lr) * rw;
+      node.style.transform = (s === 1 && !ox && !oz) ? '' : `translate(${ox}px,${oz}px) scale(${s})`;
+    }
+    function place(lx = cx, lz = cz, lr = radius) {
+      fit(img, shown, lx, lz, lr); fit(layer, markView, lx, lz, lr);
+    }
     function load() {
       clearTimeout(loadTimer);
-      info.textContent = `loading ${dim} · centre ${cx}, ${cz}  ·  ±${radius} blocks…`;
+      place();
+      info.textContent = `loading ${status()}…`;
       loadTimer = setTimeout(() => {
         const common = `seed=${encodeURIComponent(seed)}&v=${encodeURIComponent(v)}`
           + (largeBiomes() ? '&large=1' : '')
           + (dim !== 'overworld' ? `&dim=${dim}` : '')
           + `&r=${radius}&cx=${cx}&cz=${cz}`;
-        img.src = `/api/map?${common}&px=${PX}`;
+        const url = `/api/map?${common}&px=${PX}&marks=0`;
+        pending = { cx, cz, radius };
+        // Back to the picture already up (zoom in, then out): no new load
+        // event would come to settle it.
+        if (img.getAttribute('src') === url) { shown = pending; place(); info.textContent = status(); }
+        else img.src = url;
         const view = { cx, cz, radius, dim, tok: ++markTok };
         fetch(`/api/markers?${common}`).then(r => r.ok ? r.json() : null)
-          .then(d => { if (d && view.tok === markTok) drawMarkers(d, view); })
+          .then(d => { if (d && view.tok === markTok) { markView = view; drawMarkers(d, view); place(); } })
           .catch(() => {});
       }, 180);
     }
@@ -2006,9 +2046,15 @@
         const b = el('button');
         const label = `${pretty(m.type)} at ${m.x}, ${m.z}`;
         b.type = 'button'; b.title = label; b.setAttribute('aria-label', label);
-        b.style.cssText = 'position:absolute;width:16px;height:16px;padding:0;'
-          + 'transform:translate(-50%,-50%);border-radius:50%;border:2px solid rgba(255,255,255,.85);'
-          + 'background:rgba(0,0,0,.15);cursor:pointer;pointer-events:auto;'
+        // A structure is a filled square in its legend colour; spawn stays a
+        // ring around the crosshair the picture draws.
+        const col = MARK_COLOR[m.type];
+        b.style.cssText = 'position:absolute;padding:0;transform:translate(-50%,-50%);'
+          + 'cursor:pointer;pointer-events:auto;'
+          + (col ? `width:12px;height:12px;border-radius:2px;background:${col};`
+                   + 'border:2px solid rgba(0,0,0,.7);box-shadow:0 0 0 1px rgba(255,255,255,.5);'
+                 : 'width:16px;height:16px;border-radius:50%;background:transparent;'
+                   + 'border:2px solid rgba(255,255,255,.85);')
           + `left:${((m.x - (view.cx - view.radius)) / span) * 100}%;`
           + `top:${((m.z - (view.cz - view.radius)) / span) * 100}%`;
         b.onpointerdown = e => e.stopPropagation();    // a click, not a drag
@@ -2059,13 +2105,18 @@
       }
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
-      img.style.transform = layer.style.transform = `translate(${dx}px,${dy}px)`; };
+      const rw = vp.getBoundingClientRect().width || PX, span = 2 * radius;
+      place(cx - dx / rw * span, cz - dy / rw * span); };
     vp.onpointerleave = () => { if (!drag) read.style.display = 'none'; };
     vp.onpointerup = e => { if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = null;
-      vp.style.cursor = 'grab'; img.style.transform = layer.style.transform = '';
+      vp.style.cursor = 'grab';
       if (moved) { const rw = vp.getBoundingClientRect().width || PX, span = 2 * radius;
-        cx -= Math.round(dx / rw * span); cz -= Math.round(dy / rw * span); load(); } };
+        cx -= Math.round(dx / rw * span); cz -= Math.round(dy / rw * span); load(); }
+      else place(); };
+    // A touch the browser takes over (scroll, gesture) ends the drag without
+    // a pointerup: put the view back rather than leave it half-dragged.
+    vp.onpointercancel = () => { drag = null; vp.style.cursor = 'grab'; place(); };
     // Zoom about the cursor, the way every map does: the point under the
     // pointer stays put instead of everything rushing to the centre.
     vp.onwheel = e => { e.preventDefault();

@@ -125,7 +125,9 @@ Conveniences for real use:
   have every condition, with full result rows, and why the others fail.
 - **The map** marks landmarks (and strongholds) as buttons: click one for its
   coordinates, a /tp and "centre here"; an "in view" row counts each type. It
-  marks only structures that really generate — the same gate as a search.
+  marks only structures that really generate — the same gate as a search. A
+  drag or zoom moves the current picture at once and swaps in the new render
+  when it lands (a few hundred milliseconds: renders are multi-threaded).
 - **Describe** shows a seed as a table: spawn, then every structure type nearest
   first, each with map, copy and /tp, the biome, and whether a ruined portal is
   buried.
@@ -182,7 +184,18 @@ permutation so N tries are N different worlds), `FIND_STREAM` (print each hit
 as it is found), `FIND_JSON` (also print each hit as one `@JSON {...}` line,
 built from the engine's result structs — what the web server reads),
 `FIND_TSV` (machine-readable hits for the verifiers). Several machines can
-split one range by giving each its own `FIND_OFFSET` block.
+split one range by giving each its own `FIND_OFFSET` block. `MAP_THREADS` sets
+how many threads a map render uses (default: every core, at most 8).
+
+```sh
+./build/popinvert.exe forward 1.16 37 -12 <world seed>   # a chunk's population seed
+./build/popinvert.exe 1.16 37 -12 <population seed>      # ...and back to structure seeds
+```
+
+`popinvert` lists every 48-bit structure seed that gives a chunk a population
+seed (the decoration RNG's seed: dungeons, ores, trees), for 1.8–1.17 — from
+1.18 that seed comes from all 64 bits through Xoroshiro and does not reverse.
+Add a salt (`index + 10000 * step` from 1.13) to start from a decorator seed.
 
 `--seeds FILE` reads one seed per line (numbers or text; blank lines and
 `#comments` skipped), checks them on every thread, and prints per seed an

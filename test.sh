@@ -1593,6 +1593,31 @@ done
   && ok "the map marks only pyramids/temples/mansions that generate ($mk_n checked)" \
   || bad "the map marks a structure the terrain rule forbids" "checked=$mk_n phantom=$mk_bad"
 
+# map.c renders on several threads and, from 1.19.3, skips the biome search for
+# strongholds that cannot be in view. Neither may change a pixel or a marker:
+# the threaded picture must equal the single-threaded one (1.18+ noise and a
+# layered version), and a view far from the origin must hold exactly the
+# strongholds locate finds walking every one in full -- around a NEGATIVE
+# centre, which locate used to read as a flag and replace with 0.
+mt_bad=""
+for mv in "1.21 700 -300" "1.16 -900 400"; do
+  read -r mver mcx mcz <<< "$mv"
+  ./build/map.exe 12345 "$mver" 3000 400 /tmp/sc_test/map_n.png "$mcx" "$mcz" - >/dev/null 2>&1
+  MAP_THREADS=1 ./build/map.exe 12345 "$mver" 3000 400 /tmp/sc_test/map_1.png "$mcx" "$mcz" - >/dev/null 2>&1
+  [ -s /tmp/sc_test/map_n.png ] && cmp -s /tmp/sc_test/map_n.png /tmp/sc_test/map_1.png || mt_bad="$mt_bad $mver"
+done
+[ -z "$mt_bad" ] && ok "map: threaded render is byte-identical to one thread (1.21, 1.16)" \
+  || bad "map: threaded render differs from one thread" "versions:$mt_bad"
+sh_map=$(./build/map.exe 12345 1.21 3000 64 markers 9000 -7000 - 2>/dev/null | python -c "
+import json, sys
+d = json.load(sys.stdin)
+print('\n'.join(f\"{m['x']},{m['z']}\" for m in d['markers'] if m['type'] == 'stronghold'))" | tr -d '\r' | sort | tr '\n' ' ')
+sh_loc=$(./build/locate.exe 12345 1.21 stronghold 4300 9000 -7000 2>/dev/null | tr -d '\r' \
+  | awk '$1 >= 6000 && $1 <= 12000 && $2 >= -10000 && $2 <= -4000 {print $1","$2}' | sort | tr '\n' ' ')
+[ -n "$sh_map" ] && [ "$sh_map" = "$sh_loc" ] \
+  && ok "map strongholds far from the origin match a full locate walk ($(echo $sh_map | wc -w) at 9000,-7000)" \
+  || bad "map strongholds differ from locate" "map=[$sh_map] locate=[$sh_loc]"
+
 # Reversal primitives (src/lcg.h, docs/reversal-roadmap.md milestone 1):
 # forwards and backwards steps, O(log n) skips, nextLong reversal -- checked
 # against the REAL java.util.Random, not against themselves.
