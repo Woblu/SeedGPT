@@ -1356,7 +1356,50 @@
     return (c.kind === 'structure' ? vocab.structures[c.name] : vocab.biomes[c.name]) || '';
   }
 
+  // Every edit re-renders all the cards, which used to drop keyboard focus to
+  // <body> after each keystroke-commit or select change -- the builder was
+  // unusable without a mouse. The wrapper remembers which control had focus
+  // (card position, then control position inside it) and puts it back, caret
+  // included, and gives unlabelled controls an accessible name from their
+  // title or the text beside them.
   function render() {
+    const box = $('#conds');
+    const ae = document.activeElement;
+    let keep = null;
+    if (ae && box.contains(ae)) {
+      const card = ae.closest('.cond');
+      const ctrls = card ? [...card.querySelectorAll('input,select,button,textarea')] : [];
+      keep = { ci: [...box.children].indexOf(card), fi: ctrls.indexOf(ae),
+               caret: (typeof ae.selectionStart === 'number') ? ae.selectionStart : null };
+    }
+    renderCards();
+    box.querySelectorAll('input,select,textarea').forEach(n => {
+      if (n.getAttribute('aria-label') || n.labels && n.labels.length) return;
+      const card = n.closest('.cond'), cid = card && card.querySelector('.cid');
+      const prefix = cid ? cid.textContent + ': ' : '';
+      const prev = n.previousElementSibling;
+      let name = n.title || (prev && prev.textContent) || '';
+      if (!name.trim() && n.tagName === 'SELECT' && n.querySelector('option[value="origin"]'))
+        name = 'measured from';
+      if (!name.trim() && card)
+        name = (card.classList[1] || 'condition') + (n.tagName === 'SELECT' ? ' type' : ' value');
+      n.setAttribute('aria-label', prefix + name.trim());
+    });
+    box.querySelectorAll('button.x').forEach(b => {
+      const card = b.closest('.cond'), id = card && card.querySelector('.cid');
+      if (!b.getAttribute('aria-label')) b.setAttribute('aria-label', 'remove condition ' + (id ? id.textContent : ''));
+    });
+    if (keep && keep.ci >= 0) {
+      const card = box.children[keep.ci];
+      const ctrls = card ? [...card.querySelectorAll('input,select,button,textarea')] : [];
+      const t = ctrls[keep.fi] || ctrls[0];
+      if (t) {
+        t.focus();
+        try { if (keep.caret !== null && t.setSelectionRange) t.setSelectionRange(keep.caret, keep.caret); } catch (_) {}
+      }
+    }
+  }
+  function renderCards() {
     const box = $('#conds'); box.innerHTML = '';
     // The leaderboard offers only conditions that measure something, so it has
     // to be re-derived whenever the condition list changes.
