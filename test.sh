@@ -1593,6 +1593,24 @@ done
   && ok "the map marks only pyramids/temples/mansions that generate ($mk_n checked)" \
   || bad "the map marks a structure the terrain rule forbids" "checked=$mk_n phantom=$mk_bad"
 
+# Reversal primitives (src/lcg.h, docs/reversal-roadmap.md milestone 1):
+# forwards and backwards steps, O(log n) skips, nextLong reversal -- checked
+# against the REAL java.util.Random, not against themselves.
+./build/lcgcheck.exe self >/tmp/sc_test/lcg_self.txt 2>&1 \
+  && ok "LCG primitives: step/back/skip/nextLong-reversal round trips ($(grep -oE '[0-9]+ failures' /tmp/sc_test/lcg_self.txt))" \
+  || bad "LCG self-check failed" "$(cat /tmp/sc_test/lcg_self.txt)"
+if javac -d "$JC" tools/LcgCheck.java 2>/tmp/sc_test/lcg_jc.txt; then
+  java --add-opens java.base/java.util=ALL-UNNAMED -cp "$JC" LcgCheck > /tmp/sc_test/lcg_java.txt 2>/dev/null
+  ./build/lcgcheck.exe table > /tmp/sc_test/lcg_c.txt
+  if [ -s /tmp/sc_test/lcg_java.txt ] && diff --strip-trailing-cr -q /tmp/sc_test/lcg_java.txt /tmp/sc_test/lcg_c.txt >/dev/null; then
+    ok "src/lcg.h matches java.util.Random ($(wc -l < /tmp/sc_test/lcg_c.txt) seeds, bounded nextInt incl. rejection, nextLong, state)"
+  else
+    bad "src/lcg.h disagrees with java.util.Random" "$(diff --strip-trailing-cr /tmp/sc_test/lcg_java.txt /tmp/sc_test/lcg_c.txt | head -3)"
+  fi
+else
+  bad "LcgCheck.java does not compile" "$(head -3 /tmp/sc_test/lcg_jc.txt)"
+fi
+
 # The web server must refuse other origins and non-JSON posts (CSRF / DNS
 # rebinding), and still accept the UI's own requests.
 RUIPORT=8792

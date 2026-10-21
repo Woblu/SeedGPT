@@ -1,7 +1,8 @@
 # Reversal: working backwards from the RNG
 
-Status: **plan**. Nothing here is built yet beyond what `src/invert.c` and
-`src/mitm.c` already do for structure placement.
+Status: milestone 1 **done** (`src/lcg.h`, checked against `java.util.Random`);
+the rest is plan. `src/invert.c` and `src/mitm.c` already reverse structure
+placement.
 
 ## Why this is the gap
 
@@ -50,10 +51,11 @@ Each one ends with a check against an independent reference, because every
 negative result in this project's history that was not checked turned out to
 be a bug.
 
-1. **LCG primitives** (`src/lcg.h`, small). Forward/backward steps, skip-n in
+1. **LCG primitives** (`src/lcg.h`, small) — **done.** Forward/backward steps, skip-n in
    O(log n), `nextLong` reversal (the 2^16-candidate inversion), `nextInt(bound)`
-   with the rejection loop. *Check:* exhaustive round-trips against
-   `java.util.Random` in a JDK harness like `tools/XVal.java`.
+   with the rejection loop. *Check:* `tools/lcgcheck self` (round trips, 0
+   failures) and `tools/lcgcheck table` vs `tools/LcgCheck.java` on the real
+   `java.util.Random` -- identical over 207 seeds; both run in `test.sh`.
 
 2. **Population-seed inversion, pre-1.18** (`src/popinvert.c`, medium). Given a
    chunk and a target population/decorator RNG state, list every 48-bit
