@@ -1422,7 +1422,9 @@ not, because it would shadow the real header.
 
 ```
 serve.py              local web UI server (loopback only, refuses other origins)
-ui/index.html         the UI (Minecraft GUI theme, emoji/PNG icon system)
+ai_prompt.py          the prompt that turns a sentence into a query (kept in step with query.c)
+ui/index.html         the UI's markup (Minecraft GUI theme)
+ui/app.css, app.js    its stylesheet and script, served from /ui/
 assets/               optional user-provided structure/item PNGs (see its README)
 ask.py                older command-line NL path (Anthropic); the web prompt is current
 build.sh              build: ./build.sh [all | tools/x.c]
@@ -1469,3 +1471,8 @@ queries/*.json        example queries
 packs/                a small resource pack (book-title rename), unrelated to search
 cubiomes/             the engine (git clone, not tracked)
 ```
+
+## License
+
+MIT — see `LICENSE`. The engine and libraries the build pulls in are MIT too;
+their notices are in `THIRD_PARTY_NOTICES.md`.
