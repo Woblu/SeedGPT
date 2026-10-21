@@ -61,7 +61,7 @@ int main(int argc, char **argv)
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     int mc = (argc > 2) ? str2mc(argv[2]) : MC_1_21;
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
 
     Generator g; setupGenerator(&g, mc, 0);
     applySeed(&g, DIM_OVERWORLD, seed);

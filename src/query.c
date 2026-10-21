@@ -505,7 +505,7 @@ int queryParse(Query *q, const char *json, char *err, size_t errlen)
     cJSON *jv = cJSON_GetObjectItem(root, "version");
     if (!jv || !cJSON_IsString(jv)) { snprintf(err, errlen, "missing \"version\""); goto done; }
     q->mc = str2mc(jv->valuestring);
-    if (q->mc < 0) { snprintf(err, errlen, "unknown version \"%s\"", jv->valuestring); goto done; }
+    if (q->mc <= MC_UNDEF) { snprintf(err, errlen, "unknown version \"%s\"", jv->valuestring); goto done; }
 
     // World preset. Large Biomes is the same generator at a different biome
     // scale, so it changes every biome-dependent answer -- and nothing else in

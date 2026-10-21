@@ -33,7 +33,7 @@ static const char *tablesFor(int type, const char **out)
 int main(int argc, char **argv)
 {
     int mc = (argc > 1) ? str2mc(argv[1]) : MC_1_21;
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
 
     printf("{\n  \"version\": \"%s\",\n  \"structures\": {", mc2str(mc));
     int firstS = 1;

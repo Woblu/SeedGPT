@@ -20,7 +20,7 @@ int main(int argc, char **argv)
 {
     int mc = (argc > 1) ? str2mc(argv[1]) : MC_1_21;
     int nseeds = (argc > 2) ? atoi(argv[2]) : 60;
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
 
     printf("MC %s -- isViableStructurePos pass rate over %d seeds\n\n",
            mc2str(mc), nseeds);

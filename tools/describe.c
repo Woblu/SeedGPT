@@ -36,7 +36,7 @@ int main(int argc, char **argv)
     if (argc < 2) { fprintf(stderr, "usage: describe <seed> [version] [radius] [large] [json]\n"); return 2; }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     int mc = (argc > 2) ? str2mc(argv[2]) : MC_1_21;
-    if (mc < 0) { fprintf(stderr, "unknown version %s\n", argv[2]); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version %s\n", argv[2]); return 2; }
     int radius = (argc > 3) ? atoi(argv[3]) : 2000;
     int large = 0, json = 0;
     for (int i = 4; i < argc; i++) {

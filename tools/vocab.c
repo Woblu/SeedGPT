@@ -15,7 +15,7 @@ int main(int argc, char **argv)
 {
     const char *ver = (argc > 1) ? argv[1] : "1.21";
     int mc = str2mc(ver);
-    if (mc < 0) { fprintf(stderr, "unknown version %s\n", ver); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version %s\n", ver); return 2; }
 
     printf("{\n  \"version\": \"%s\",\n", mc2str(mc));
 

@@ -25,7 +25,7 @@ int main(int argc, char **argv)
     const OreMaterial *mat = oreMaterialByName(argv[2]);
     if (!mat) { fprintf(stderr, "unknown material \"%s\"\n", argv[2]); return 2; }
     int mc = (argc > 3) ? str2mc(argv[3]) : MC_1_21;
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     int x = (argc > 4) ? atoi(argv[4]) : 0;
     int z = (argc > 5) ? atoi(argv[5]) : 0;
     int radius = (argc > 6) ? atoi(argv[6]) : 128;

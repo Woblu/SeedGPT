@@ -135,7 +135,7 @@ int main(int argc, char **argv)
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     int mc = str2mc(argv[2]);
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
 
     int rank = 0, stdinMode = 0; uint64_t nseeds = 0;
     int regX = 0, regZ = 0;

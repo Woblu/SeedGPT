@@ -34,7 +34,7 @@ int main(int argc, char **argv)
         return 2;
     }
     int mc = str2mc(argv[1]);
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     int nseeds = atoi(argv[2]);
     int large = (argc > 3 && !strcmp(argv[3], "large")) ? 1 : 0;
 

@@ -33,7 +33,7 @@ int main(int argc, char **argv)
     int st = name2struct(argv[2]);
     if (st < 0) { fprintf(stderr, "no variants for \"%s\"\n", argv[2]); return 2; }
     int mc = (argc > 3) ? str2mc(argv[3]) : MC_1_21;
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     if (argc < 7 || strcmp(argv[4], "--at")) {
         fprintf(stderr, "expected: --at <x> <z>\n"); return 2;
     }

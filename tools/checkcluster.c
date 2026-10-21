@@ -40,7 +40,7 @@ int main(int argc, char **argv)
     int st = name2struct(argv[2]);
     if (st < 0) { fprintf(stderr, "unknown structure \"%s\"\n", argv[2]); return 2; }
     int mc = str2mc(argv[3]);
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     int x = atoi(argv[4]), z = atoi(argv[5]);
     int radius = (argc > 6) ? atoi(argv[6]) : 800;
 

@@ -23,7 +23,7 @@ int main(int argc, char **argv)
     int bx = atoi(argv[3]), bz = atoi(argv[4]);
     int mc = (argc > 5) ? str2mc(argv[5]) : MC_1_21;
     const char *want = (argc > 6) ? argv[6] : NULL;
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     const char *wantEnch = NULL; int wantEnchLvl = 1;
     for (int a = 1; a < argc; a++) {
         if (strcmp(argv[a], "--ench") || a + 1 >= argc) continue;

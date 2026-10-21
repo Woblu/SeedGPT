@@ -244,6 +244,7 @@ int main(int argc, char **argv)
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     int mc     = (argc > 2) ? str2mc(argv[2]) : MC_1_21;
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     int radius = (argc > 3) ? atoi(argv[3]) : 2000;
     int px     = (argc > 4) ? atoi(argv[4]) : 512;
     const char *outpath = (argc > 5) ? argv[5] : NULL;
@@ -259,7 +260,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "nether")) dim = DIM_NETHER;
         else if (!strcmp(argv[i], "end")) dim = DIM_END;
     }
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     if (px < 64) px = 64;
     if (px > 2048) px = 2048;
 

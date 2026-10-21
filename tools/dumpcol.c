@@ -18,7 +18,7 @@ int main(int argc, char **argv)
     if (argc < 5) { fprintf(stderr, "usage: dumpcol <seed> <version> <x> <z>\n"); return 2; }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     int mc = str2mc(argv[2]);
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     int x = atoi(argv[3]), z = atoi(argv[4]);
 
     int top = 0;

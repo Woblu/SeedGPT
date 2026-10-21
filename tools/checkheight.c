@@ -19,7 +19,7 @@ int main(int argc, char **argv)
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     int mc = str2mc(argv[2]);
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     int x = atoi(argv[3]), z = atoi(argv[4]);
     int radius = (argc > 5) ? atoi(argv[5]) : 64;
     int step = 16;

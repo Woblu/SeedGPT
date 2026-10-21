@@ -37,7 +37,7 @@ int main(int argc, char **argv)
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     int mc = str2mc(argv[2]);
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     const char *kind = argv[3], *name = argv[4];
     int x = (argc > 5) ? atoi(argv[5]) : 0;
     int z = (argc > 6) ? atoi(argv[6]) : 0;

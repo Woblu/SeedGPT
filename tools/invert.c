@@ -147,7 +147,7 @@ int main(int argc, char **argv)
         return 2;
     }
     int mc = str2mc(argv[1]);
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     int st = -1;
     for (int i = 0; i < 64 && st < 0; i++) {
         const char *n = struct2str(i);

@@ -55,7 +55,7 @@ int main(int argc, char **argv)
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     int mc = str2mc(argv[2]);
-    if (mc < 0) { printf("ERROR unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { printf("ERROR unknown version\n"); return 2; }
 
     const char *nameA = argv[3], *nameB = argv[6];
     int ax = atoi(argv[4]), az = atoi(argv[5]);
