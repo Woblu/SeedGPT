@@ -1393,7 +1393,9 @@ check was made; others are expected to follow the same code but were not run.
   and would port to CUDA cleanly, but on every query here pass 1 is **0.0–0.2%**
   of runtime: pass 2 (biome generation) dominates and does not port. That changes
   for targets solved by reversing the RNG (dungeons, chest stacks), where the
-  whole filter is integer math — see `docs/reversal-roadmap.md`.
+  whole filter is integer math — see `docs/reversal-roadmap.md`. The first two
+  pieces exist: `src/lcg.h` and `popinvert` (a chunk's population seed back to
+  the structure seeds that give it, 1.8–1.17).
 
 ## Engine
 
@@ -1439,6 +1441,7 @@ src/seed.h            seed text -> seed, the way Minecraft parses it
 src/biomeat.h         the surface-biome lookup, correct on every version
 src/terrain.{h,c}     exact 1.18+ surface heights (generateRegion, world Y)
 src/lcg.h             java.util.Random forwards and backwards (reversal primitives)
+src/popinvert.{h,c}   a chunk's population seed -> the structure seeds behind it (<= 1.17)
 src/ore.{h,c}         ore density, veins, exposure, Y bands
 src/loot.{h,c}        loot-table cache + item counting (full 64-bit seed)
 src/cactus.{h,c}      cactus height simulation
@@ -1455,6 +1458,7 @@ tools/check*.c        re-derive one result through a separate path (see Verifica
 tools/checkregion.c   generateRegion: rectangular regions vs 1x1 (patch check)
 tools/lcgcheck.c      src/lcg.h self-checks + a table LcgCheck.java reproduces
 tools/LcgCheck.java   the same table from the real java.util.Random
+tools/popinvert.c     CLI for src/popinvert + its check (planted seeds, exhaustive cases)
 tools/xval.c          cubiomes side of the cross-validation
 tools/XVal.java       independent JDK reference
 tools/Verify.java     re-verify individual seeds against the JDK reference

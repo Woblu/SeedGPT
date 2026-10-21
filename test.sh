@@ -1611,6 +1611,32 @@ else
   bad "LcgCheck.java does not compile" "$(head -3 /tmp/sc_test/lcg_jc.txt)"
 fi
 
+# Population-seed inversion (milestone 2): planted seeds come back, every answer
+# gives the target through cubiomes' forward function, and the cases small
+# enough to brute-force list exactly the seeds brute force finds. Then one
+# round trip through the command line, a text seed on 1.12 included.
+./build/popinvert.exe self >/tmp/sc_test/pop_self.txt 2>&1 \
+  && ok "population seed inversion: $(grep -oE '^[0-9]+ inversions' /tmp/sc_test/pop_self.txt) planted and found; $(tail -1 /tmp/sc_test/pop_self.txt | sed 's/ (.*//')" \
+  || bad "population seed inversion self-check" "$(head -5 /tmp/sc_test/pop_self.txt)"
+pi_ok=1
+for pi_case in "1.16 37 -12 -4172144997902289642" "1.12 -5 9 glacier" "1.8 1000 -1000 12345"; do
+  read -r pv pcx pcz pseed <<< "$pi_case"
+  pi_pop=$(./build/popinvert.exe forward "$pv" "$pcx" "$pcz" "$pseed" | tr -d '\r')
+  pi_want=$(python -c "
+import sys
+s = sys.argv[1]
+try: v = int(s)
+except ValueError:
+    h = 0
+    for ch in s: h = (31 * h + ord(ch)) & 0xffffffff
+    v = h - (1 << 32) if h >= 1 << 31 else h
+print(v & ((1 << 48) - 1))" "$pseed")
+  ./build/popinvert.exe "$pv" "$pcx" "$pcz" "$pi_pop" 2>/dev/null | tr -d '\r' | grep -qx "$pi_want" || pi_ok=0
+done
+[ "$pi_ok" -eq 1 ] && ok "popinvert round trip: forward then back lists the world's structure seed (1.16, 1.12 text seed, 1.8)" \
+  || bad "popinvert round trip lost the seed"
+./build/popinvert.exe 1.18 0 0 1 >/dev/null 2>&1 && bad "popinvert accepted 1.18" || ok "popinvert refuses 1.18+ (Xoroshiro population seeds)"
+
 # find --seeds: a list checked in one process. A seed the search just found
 # must come back "yes", a text seed must be hashed the Minecraft way, and
 # comments/blank lines must be skipped.

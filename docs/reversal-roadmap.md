@@ -1,8 +1,8 @@
 # Reversal: working backwards from the RNG
 
-Status: milestone 1 **done** (`src/lcg.h`, checked against `java.util.Random`);
-the rest is plan. `src/invert.c` and `src/mitm.c` already reverse structure
-placement.
+Status: milestones 1 and 2 **done** (`src/lcg.h`, checked against
+`java.util.Random`; `src/popinvert.c`, checked against brute force); the rest is
+plan. `src/invert.c` and `src/mitm.c` already reverse structure placement.
 
 ## Why this is the gap
 
@@ -57,13 +57,24 @@ be a bug.
    failures) and `tools/lcgcheck table` vs `tools/LcgCheck.java` on the real
    `java.util.Random` -- identical over 207 seeds; both run in `test.sh`.
 
-2. **Population-seed inversion, pre-1.18** (`src/popinvert.c`, medium). Given a
-   chunk and a target population/decorator RNG state, list every 48-bit
-   structure seed that produces it (`pop = (x*a + z*b) ^ ws` with `a`, `b` drawn
-   from `ws` — the two-unknown problem TwoChunkCarverReversal solves by
-   Hensel lifting). *Check:* forward `getPopulationSeed` on every candidate, and
-   a completeness proof on small bit widths the way `tools/invert.c` does for
-   structure placement.
+2. **Population-seed inversion, pre-1.18** (`src/popinvert.c`) — **done.**
+   Given a chunk and its population seed (or a decorator seed and its salt),
+   list every 48-bit structure seed that produces it (`pop = (x*a + z*b) ^ ws`
+   with `a`, `b` drawn from `ws`). Solved from the bottom bit up: the low k bits
+   of `a` and `b` depend only on the low k+16 bits of the seed, so each guessed
+   seed bit can be tested against one more bit of `pop` and wrong branches die
+   at once. Both formulas: `| 1` from 1.13, and 1.12's `/ 2 * 2 + 1`, whose
+   low bits depend on the sign (guessed, and only for odd values). About 1 ms
+   per inversion from 1.13 (block coordinates share four zero bits); 15–65 ms
+   up to 1.12, where the 2^16 low bits are the floor of this method — Bolan's
+   closed-form solve for the middle 16 bits would remove most of that if bulk
+   inversion ever needs it. Usually 1–2 answers; up to ~100 on an axis at
+   multiples of 2^16, all real. *Check* (`popinvert self`, in `test.sh`):
+   planted seeds always come back, every answer gives the target through
+   cubiomes' `getPopulationSeed` (our forward function is checked against it
+   too), and 16 cases whose coordinates share 22–24 zero bits — which fixes
+   every answer's low bits, leaving few enough to brute-force all — list
+   exactly the seeds brute force finds, multi-answer cases included.
 
 3. **One decoration target, end to end** (medium–large). Dungeons are the
    community's most-wanted and the classic reversal target: per-chunk attempts,
