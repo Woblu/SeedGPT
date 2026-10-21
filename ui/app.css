@@ -1,0 +1,512 @@
+  /* ---- Minecraft GUI aesthetic -------------------------------------------
+     Beveled stone panels, item-slot cards, pixel-rendered icons. One committed
+     visual world -- a dark cave -- rather than a neutral document look, and
+     deliberately no light variant. ---------------------------------------- */
+  :root {
+    --bg0:      #15161a;
+    --bg1:      #1d1e24;
+    --stone:    #3b3d44;
+    --stone-lt: #55575f;
+    --stone-dk: #2a2b31;
+    --slot:     #191a1e;
+    --slot-edge:#0e0e12;
+    --ink:      #ECECEC;
+    --ink-soft: #B9BCC4;
+    --ink-faint:#A2A6AF;   /* >= 4.5:1 on --stone (was 2.8:1) */
+    --edge-lt:  rgba(255,255,255,.16);
+    --edge-dk:  rgba(0,0,0,.45);
+    --grass:    #6DBE45;   /* XP / grass green */
+    --grass-dk: #4E8F2E;
+    --dirt:     #8A5A3B;
+    --diamond:  #4DD0E1;
+    --gold:     #F5C542;
+    --redstone: #D64545;
+    --emerald:  #17C964;
+    --sky:      #7FB4E6;
+    --scan:     rgba(0,0,0,.05);
+    --tint:     rgba(15,16,20,.84);
+    --backdrop-url: none;   /* replaced by loadAssets() when assets/backdrop.png exists */
+    --lift-sm:  0 2px 8px rgba(0,0,0,.30);
+    --lift:     0 10px 34px rgba(0,0,0,.38);
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { image-rendering: pixelated; }
+  body {
+    margin: 0;
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    background:
+      repeating-linear-gradient(0deg,  var(--scan) 0 2px, transparent 2px 4px),
+      repeating-linear-gradient(90deg, var(--scan) 0 2px, transparent 2px 4px),
+      var(--bg0);
+    -webkit-font-smoothing: antialiased;
+  }
+  body.has-backdrop {
+    background:
+      linear-gradient(var(--tint), var(--tint)),
+      var(--backdrop-url) repeat;
+    background-size: auto, 512px;
+  }
+  b, strong { font-weight: 700; }
+  .hidden { display: none !important; }
+
+  /* Read by screen readers, invisible on screen: announces run progress and
+     results, which otherwise change silently. */
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  /* Which game this searches, always in view: the Bedrock oracle measured
+     structures as NOT matching Java, so a Java seed is not a Bedrock seed. */
+  .edition { margin-top: 8px; font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink-soft); display: flex; gap: 8px; align-items: center;
+    justify-content: center; flex-wrap: wrap; }
+  .edition b { color: var(--ink); }
+  .edition button { font-size: 11px; padding: 1px 7px; }
+  .understood { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    margin: 4px 0 10px; font-size: 12.5px; }
+  .understood .lbl { color: var(--ink-soft); font-family: var(--mono); font-size: 11px; }
+  .understood .cond { background: var(--slot); border: 1px solid var(--slot-edge);
+    padding: 2px 8px; font-family: var(--mono); font-size: 11.5px; }
+  .dimtag { font-family: var(--mono); font-size: 10.5px; padding: 0 5px; margin-right: 6px;
+    border: 1px solid currentColor; }
+  .dimtag.nether { color: #ff7a5c; } .dimtag.end { color: #c9a8ff; }
+  button.coord { background: none; border: none; padding: 0; color: inherit;
+    font: inherit; cursor: pointer; text-decoration: underline dotted; }
+  .next-steps { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  a { color: var(--diamond); }
+
+  ::-webkit-scrollbar { width: 11px; height: 11px; }
+  ::-webkit-scrollbar-track { background: var(--slot); }
+  ::-webkit-scrollbar-thumb {
+    background: var(--stone); border: 2px solid var(--slot);
+    box-shadow: inset 1px 1px 0 var(--edge-lt), inset -1px -1px 0 var(--edge-dk);
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--stone-lt); }
+
+  /* the pressable stone button -- the signature MC element */
+  .mcbtn, button {
+    font-family: var(--sans); font-size: 13px; font-weight: 600;
+    color: var(--ink);
+    background: linear-gradient(var(--stone-lt), var(--stone) 55%, var(--stone-dk));
+    border: 2px solid var(--slot-edge);
+    box-shadow: inset 2px 2px 0 var(--edge-lt), inset -2px -2px 0 var(--edge-dk);
+    padding: 8px 12px; cursor: pointer;
+    text-shadow: 1px 1px 0 rgba(0,0,0,.35);
+    transition: filter .08s, border-color .08s;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.12); border-color: var(--grass-dk); }
+  button:active:not(:disabled) {
+    box-shadow: inset -2px -2px 0 var(--edge-lt), inset 2px 2px 0 var(--edge-dk);
+    filter: brightness(.94);
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary {
+    background: linear-gradient(#7ed957, var(--grass) 55%, var(--grass-dk));
+    color: #10240a; text-shadow: 1px 1px 0 rgba(255,255,255,.2);
+  }
+  button.tiny { padding: 4px 8px; font-size: 11px; }
+  .btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+  input, select, textarea {
+    font-family: var(--sans); font-size: 13px; color: var(--ink);
+    background: var(--slot);
+    border: 2px solid;
+    border-color: var(--slot-edge) var(--stone-lt) var(--stone-lt) var(--slot-edge);
+    padding: 7px 9px; width: 100%;
+  }
+  input[type=number] { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  textarea { resize: vertical; min-height: 56px; line-height: 1.45; }
+  select { cursor: pointer; }
+  :focus-visible { outline: 3px solid var(--grass); outline-offset: 1px; }
+  code { font-family: var(--mono); font-size: .92em; background: var(--slot);
+         border: 1px solid var(--slot-edge); padding: 0 4px; }
+
+  h2 {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .1em;
+    color: var(--grass); margin: 0 0 9px;
+    display: flex; align-items: center; gap: 7px;
+  }
+  h2::before { content: ""; width: 8px; height: 8px; flex: none; background: var(--grass);
+               box-shadow: 2px 2px 0 var(--grass-dk); }
+  section + section { margin-top: 26px; }
+  label { display: block; font-size: 11px; color: var(--ink-soft); margin-bottom: 4px; }
+  .hint { font-size: 11px; color: var(--ink-faint); margin-top: 6px; line-height: 1.55; }
+  .col { padding: 18px; min-width: 0; }
+
+  /* ---- condition cards = item slots ---- */
+  .cond {
+    display: block; margin-bottom: 9px; padding: 10px;
+    background: var(--stone-dk);
+    border: 2px solid;
+    border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
+    border-left: 4px solid var(--grass);
+  }
+  .cond.biome { border-left-color: var(--emerald); }
+  .cond.eyes  { border-left-color: var(--diamond); }
+  .cond.loot  { border-left-color: var(--gold); }
+  .cond.ore   { border-left-color: var(--diamond); }
+  .cond.slime { border-left-color: var(--grass); }
+  .cond.area  { border-left-color: var(--emerald); }
+  .cond.height{ border-left-color: var(--stone-lt); }
+  .cond .top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .cond .ic { width: 22px; height: 22px; flex: none; }
+  .cond .cid {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    background: var(--slot); border: 1px solid var(--slot-edge);
+    padding: 2px 6px; color: var(--ink);
+  }
+  .cond .dim {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+  .cond .grid { display: grid; grid-template-columns: 1fr 76px; gap: 7px; }
+  .cond .grid.full { grid-template-columns: 1fr; }
+  .cond .x { margin-left: auto; }
+  .cond .chk {
+    display: flex; align-items: center; gap: 7px; margin-top: 9px;
+    font-size: 12px; color: var(--ink-soft); cursor: pointer;
+  }
+  .cond .chk input { width: auto; margin: 0; accent-color: var(--grass); }
+
+  .ic {
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 17px; line-height: 1; image-rendering: pixelated;
+    filter: drop-shadow(1px 1px 0 rgba(0,0,0,.4));
+  }
+  .ic img { width: 100%; height: 100%; image-rendering: pixelated; }
+
+  .empty {
+    border: 2px dashed var(--stone-lt); padding: 16px;
+    text-align: center; color: var(--ink-faint); font-size: 12px;
+  }
+
+  .tag-exp {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--diamond);
+    border: 1px solid var(--diamond); padding: 1px 5px; margin-left: 6px;
+    vertical-align: middle; white-space: nowrap;
+  }
+  .saved { display: flex; gap: 6px; margin-top: 6px; }
+  .saved button:first-child { flex: 1; min-width: 0; text-align: left;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .exportbar { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px; flex-wrap: wrap; }
+  .exportbar .exl {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+
+  /* ---- output panel ---- */
+  .card {
+    background: var(--stone);
+    border: 2px solid;
+    border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
+    box-shadow: inset 1px 1px 0 var(--edge-lt), var(--lift-sm);
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .card h3 {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .09em;
+    color: var(--ink-soft); margin: 0 0 12px;
+  }
+  .card p { margin: 0 0 10px; font-size: 13px; color: var(--ink-soft); }
+  .card p:last-child { margin-bottom: 0; }
+
+  .pass { margin-bottom: 14px; }
+  .pass:last-child { margin-bottom: 0; }
+  .pass .hd { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); margin-bottom: 7px; }
+  .step { display: flex; align-items: center; gap: 9px; margin-bottom: 5px; }
+  .step .n { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); width: 14px; flex: none; text-align: right; }
+  .step .d { font-size: 12.5px; flex: 1; min-width: 0; }
+  .step .bar { flex: none; width: 108px; height: 8px; background: var(--slot); border: 1px solid var(--slot-edge); overflow: hidden; }
+  .step .bar i { display: block; height: 100%; background: var(--grass); }
+  .step .bar i.slow { background: var(--redstone); }
+  .step .c { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); width: 72px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+
+  .note {
+    font-size: 12px; color: var(--ink-soft);
+    background: var(--stone-dk); border-left: 3px solid var(--grass);
+    padding: 9px 11px; margin-top: 10px;
+  }
+  .note.warn { border-left-color: var(--gold); }
+  .note.bad  { border-left-color: var(--redstone); }
+
+  .stats { display: flex; flex-wrap: wrap; gap: 18px; }
+  .stat .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); }
+  .stat .v { font-family: var(--mono); font-size: 18px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .stat .v.good { color: var(--grass); }
+  .stat .v.warn { color: var(--gold); }
+  .stat .v.bad  { color: var(--redstone); }
+
+  .funnel { height: 9px; background: var(--slot); border: 1px solid var(--slot-edge); overflow: hidden; margin: 12px 0 4px; }
+  .funnel i { display: block; height: 100%; background: var(--grass); }
+  .funnel-l { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
+
+  /* ---- seed = item entry ---- */
+  .seed {
+    display: block; margin-bottom: 8px; padding: 10px 12px;
+    background: var(--stone-dk);
+    border: 2px solid;
+    border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
+  }
+  .seed .n { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; flex-wrap: wrap; }
+  .seed .num {
+    font-family: var(--mono); font-size: 14px; font-weight: 700;
+    cursor: pointer; color: var(--diamond); border-bottom: 1px dashed var(--stone-lt);
+  }
+  .seed .num:hover { filter: brightness(1.2); border-bottom-color: var(--diamond); }
+  .seed table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11.5px; }
+  .seed td { padding: 2px 0; color: var(--ink-soft); font-variant-numeric: tabular-nums; vertical-align: middle; }
+  .seed td.id { color: var(--ink); width: 128px; }
+  .seed td.id .ic { width: 15px; height: 15px; font-size: 12px; margin-right: 5px; vertical-align: -2px; }
+  .seed td.d { text-align: right; color: var(--ink-faint); }
+
+  pre {
+    font-family: var(--mono); font-size: 11px; line-height: 1.55;
+    background: var(--slot); border: 1px solid var(--slot-edge);
+    padding: 11px; overflow-x: auto; margin: 0; white-space: pre; color: var(--ink-soft);
+  }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; font-size: 11px; color: var(--ink-faint); font-family: var(--mono); user-select: none; }
+  summary:hover { color: var(--grass); }
+  details[open] summary { margin-bottom: 8px; }
+
+  .busy { color: var(--ink-soft); font-size: 12.5px; display: flex; align-items: center; gap: 9px; }
+  .busy::before {
+    content: ""; width: 14px; height: 14px;
+    background: var(--grass);
+    box-shadow: 4px 0 0 var(--stone-dk), 0 4px 0 var(--stone-dk);
+    animation: mcspin .6s steps(4) infinite;
+  }
+  @keyframes mcspin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .busy::before { animation: none; } }
+
+  .err {
+    border: 2px solid var(--redstone); padding: 10px 12px;
+    font-size: 12.5px; background: var(--stone-dk);
+  }
+  .err b { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--redstone); margin-bottom: 3px; }
+
+  /* ---- map ---- */
+  .map { margin-bottom: 12px; }
+  .map img {
+    display: block; width: 100%; max-width: 560px; height: auto;
+    border: 3px solid var(--slot-edge); image-rendering: pixelated;
+    box-shadow: inset 0 0 0 1px var(--stone-lt);
+  }
+  .legend { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 9px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
+  .legend span { display: flex; align-items: center; gap: 5px; }
+  .legend i { width: 10px; height: 10px; border: 1px solid rgba(0,0,0,.5); }
+  .mapctl { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; flex-wrap: wrap; }
+  .mapctl label { margin: 0; font-size: 11px; }
+  .mapctl select { width: auto; padding: 4px 7px; font-size: 12px; }
+
+  /* ---- toasts ------------------------------------------------------------
+     They used to be prepended into the results column, which on the landing
+     screen is empty and far below the fold -- so the message meant to explain
+     a refusal was never seen. They float over the page now. ---------------- */
+  .toasts { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center;
+    pointer-events: none; width: min(520px, 92vw); }
+  .toasts .note { margin: 0; width: 100%; background: var(--stone);
+    border: 2px solid var(--slot-edge); border-left: 4px solid var(--gold);
+    box-shadow: var(--lift); animation: toastin .18s ease; }
+  .toasts .note.bad  { border-left-color: var(--redstone); }
+  .toasts .note.good { border-left-color: var(--grass); }
+  @keyframes toastin { from { opacity: 0; transform: translateY(8px); } }
+  @media (prefers-reduced-motion: reduce) { .toasts .note { animation: none; } }
+
+  /* ---- app shell: history sidebar + main --------------------------------- */
+  .app { display: flex; min-height: 100vh; }
+  /* Off-canvas: collapsed by default, slides in from the left via the menu. */
+  .sidebar { flex: none; width: 264px; background: var(--stone-dk);
+    border-right: 2px solid var(--slot-edge); display: flex; flex-direction: column;
+    padding: 14px 12px; position: fixed; left: 0; top: 0; height: 100vh; z-index: 65;
+    transform: translateX(-100%); transition: transform .2s ease;
+    box-shadow: 6px 0 26px rgba(0,0,0,.4); }
+  .app.sb-open .sidebar { transform: none; }
+  .side-brand { font-size: 17px; font-weight: 800; display: flex; align-items: center;
+    gap: 8px; padding: 4px 6px 12px; }
+  .side-brand .logo { font-size: 20px; }
+  .newbtn { width: 100%; justify-content: center; margin-bottom: 14px; }
+  .side-label { font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-faint); padding: 0 6px 6px;
+    display: flex; align-items: center; gap: 6px; }
+  .side-label .spacer { flex: 1; }
+  .side-label button { font-size: 10px; padding: 2px 6px; background: none;
+    border: 0; box-shadow: none; text-shadow: none; color: var(--ink-faint);
+    font-family: var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+  .side-label button:hover:not(:disabled) { color: var(--redstone); filter: none; }
+  .history { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+  .hist-row { display: flex; align-items: stretch; }
+  .hist-item { display: block; flex: 1; min-width: 0; text-align: left; font-size: 12.5px;
+    padding: 8px 10px; background: transparent; border: 1px solid transparent;
+    box-shadow: none; text-shadow: none; color: var(--ink-soft); font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hist-row:hover .hist-item { background: var(--slot); border-color: var(--slot-edge); }
+  .hist-del { flex: none; width: 26px; padding: 0; background: transparent;
+    border: 1px solid transparent; box-shadow: none; text-shadow: none;
+    color: var(--ink-faint); font-size: 12px; opacity: 0; }
+  .hist-row:hover .hist-del { opacity: 1; }
+  /* Hidden-until-hover meant touch and keyboard users never saw it. */
+  .hist-row:focus-within .hist-del { opacity: 1; }
+  @media (hover: none) { .hist-del { opacity: .7; } }
+  .hist-del:hover:not(:disabled) { color: var(--redstone); filter: none; border-color: transparent; }
+  .hist-empty { font-size: 12px; color: var(--ink-faint); padding: 6px; }
+  .side-foot { padding: 10px 6px 2px; border-top: 1px solid var(--slot-edge);
+    font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  /* ---- top bar ----------------------------------------------------------
+     Was one lone menu glyph on an empty strip, with everything else in the app
+     hidden behind a gear that reads as "preferences". It now carries the
+     identity and three named doors: build, tools, settings. --------------- */
+  .topbar { position: sticky; top: 0; z-index: 40;
+    display: flex; align-items: center; gap: 8px; padding: 9px 14px;
+    background: linear-gradient(var(--stone-lt), var(--stone));
+    border-bottom: 3px solid var(--slot-edge);
+    box-shadow: inset 0 2px 0 var(--edge-lt), 0 2px 10px rgba(0,0,0,.22); }
+  .topbar .brand { display: flex; align-items: center; gap: 8px; font-weight: 800;
+    font-size: 15px; letter-spacing: .01em; margin-left: 2px; }
+  .topbar .brand img { width: 20px; height: 20px; object-fit: contain; image-rendering: pixelated; }
+  .topbar .spacer { flex: 1; }
+  .topbar button { padding: 6px 10px; font-size: 12px; }
+  .topbar .icon-only { width: 32px; padding: 6px 0; text-align: center; }
+  @media (max-width: 760px) { .topbar .lbl { display: none; } .topbar .brand { font-size: 14px; } }
+
+  /* ---- chat-style hero + prompt ---------------------------------------- */
+  /* Landing: prompt sits low on the page. After a search the hero collapses
+     to the top so results fill in below, ChatGPT-style. */
+  .hero { flex: 1 0 auto; min-height: 0; display: flex; flex-direction: column;
+    justify-content: center; align-items: center; padding: 0 20px 8vh;
+    transition: padding .25s ease; }
+  .main.searched .hero { flex: 0 0 auto; justify-content: flex-start; padding: 18px 20px 12px; }
+  .main.searched .hero-sub, .main.searched .hero-logo,
+  .main.searched .chips, .main.searched .setup { display: none; }
+  .hero-inner { width: 100%; max-width: 680px; text-align: center; }
+  .hero-logo { margin: 0 auto 14px; line-height: 1; font-size: 52px; }
+  .hero-logo img { width: 92px; height: 92px; object-fit: contain;
+    image-rendering: pixelated; display: block; margin: 0 auto;
+    filter: drop-shadow(0 3px 7px rgba(0,0,0,.45)); }
+  .hero-title { font-size: 32px; font-weight: 800; letter-spacing: .01em; }
+  .hero-sub { margin: 10px auto 22px; max-width: 540px; color: var(--ink-soft); font-size: 14.5px; }
+  .prompt { display: flex; align-items: flex-end; gap: 7px;
+    background: var(--slot); border: 2px solid var(--slot-edge); border-radius: 22px;
+    padding: 6px 8px; box-shadow: var(--lift); text-align: left;
+    transition: border-color .12s, box-shadow .12s; }
+  .prompt:focus-within { border-color: var(--grass); box-shadow: var(--lift), 0 0 0 3px rgba(109,190,69,.18); }
+  .prompt textarea { flex: 1; border: 0; background: transparent; resize: none;
+    color: var(--ink); font-family: inherit; font-size: 16px; line-height: 1.5;
+    padding: 7px 6px; min-height: 0; height: auto; max-height: 180px;
+    overflow-y: hidden; outline: none; display: block; }
+  .prompt textarea::placeholder { color: var(--ink-faint); }
+  .iconbtn { flex: none; width: 34px; height: 34px; border-radius: 50%; padding: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 16px;
+    box-shadow: none; border-width: 2px; }
+  .iconbtn.go { background: linear-gradient(#7ed957, var(--grass) 55%, var(--grass-dk)); color: #10240a; }
+  .iconbtn:disabled { opacity: .5; }
+  .ai-note { margin-top: 14px; font-size: 12.5px; color: var(--ink-soft); min-height: 1em; }
+  .ai-note.err { color: #ff7a7a; }
+
+  /* Example prompts. The box used to be blank with a blank placeholder, so the
+     one thing a first-time visitor needed -- what can I even ask? -- was the
+     one thing the screen never said. */
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; margin-top: 18px; }
+  .chips .chl { width: 100%; font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 2px; }
+  .chip { font-size: 12px; font-weight: 500; padding: 6px 11px; border-radius: 999px;
+    color: var(--ink-soft); background: var(--stone-dk);
+    border: 1px solid var(--stone-lt); box-shadow: none; text-shadow: none; }
+  .chip:hover:not(:disabled) { color: var(--ink); border-color: var(--grass); filter: none; }
+  .chip:active:not(:disabled) { box-shadow: none; }
+
+  /* First run: the prompt needs an AI key, and the old build only said so after
+     you had typed a question and pressed enter. */
+  .setup { margin-top: 18px; display: flex; align-items: center; gap: 10px;
+    text-align: left; font-size: 12.5px; color: var(--ink-soft);
+    background: var(--stone-dk); border: 2px solid var(--slot-edge);
+    border-left: 4px solid var(--gold); padding: 10px 12px; }
+  .setup .t { flex: 1; min-width: 0; }
+  .setup b { color: var(--ink); }
+
+  /* ---- live seed scroll ------------------------------------------------- */
+  .scroll { max-width: 860px; margin: 0 auto 20px; padding: 0 20px; width: 100%; }
+  .scroll-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+  .scroll-head .dot { width: 9px; height: 9px; border-radius: 50%; flex: none;
+    background: var(--grass); animation: sfpulse 1s infinite; }
+  @keyframes sfpulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+  /* Stop sits at the far end of the scan header: always in view while a search
+     runs, never competing with the prompt's own send button. */
+  .scroll-head .stop { margin-left: auto; }
+  .scroll-track { height: 132px; overflow: hidden; border: 2px solid var(--slot-edge);
+    background: var(--slot); border-radius: 12px; padding: 8px 14px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.75; color: var(--ink-faint);
+    display: flex; flex-direction: column; justify-content: flex-end; }
+  @media (prefers-reduced-motion: reduce) { .scroll-head .dot { animation: none; } }
+  /* flex:none so rows keep their line height instead of being squeezed to
+     nothing once the track fills (which left it looking empty). */
+  .scroll-track .s { flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .scroll-track .s.hit { color: var(--grass); font-weight: 700; }
+
+  .results-wrap { max-width: 860px; margin: 0 auto; padding: 0 20px 70px; width: 100%; }
+  .results-wrap .col { display: block; padding: 0; }
+
+  /* ---- drawer: build / tools / settings ---------------------------------
+     One 14-section scroll used to hold the API key, the query builder and ten
+     separate engines in a single undifferentiated column. Tabs split it into
+     three things a person can hold in their head at once. ----------------- */
+  .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(500px, 96vw);
+    display: flex; flex-direction: column;
+    background: var(--stone); border-left: 3px solid var(--slot-edge);
+    box-shadow: -10px 0 40px rgba(0,0,0,.45); z-index: 60;
+    transition: transform .2s ease; }
+  /* display stays flex: the drawer leaves by sliding, not by vanishing. */
+  .drawer.hidden { display: flex !important; transform: translateX(103%); }
+  .drawer-head { flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 13px 16px; background: linear-gradient(var(--stone-lt), var(--stone));
+    border-bottom: 2px solid var(--slot-edge); box-shadow: inset 0 2px 0 var(--edge-lt); }
+  .drawer-head b { font-size: 14px; }
+  .drawer-head .spacer { flex: 1; }
+  .tabs { flex: none; display: flex; padding: 0 10px;
+    background: var(--stone-dk); border-bottom: 2px solid var(--slot-edge); }
+  .tab { flex: 1; background: none; border: 0; box-shadow: none; text-shadow: none;
+    color: var(--ink-faint); font-size: 12.5px; font-weight: 700; padding: 10px 6px;
+    border-bottom: 3px solid transparent; }
+  .tab:hover:not(:disabled) { color: var(--ink); filter: none; border-color: var(--stone-lt); }
+  .tab.on { color: var(--grass); border-bottom-color: var(--grass); }
+  .tab .sub { display: block; font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: .05em; text-transform: uppercase; opacity: .75;
+    font-weight: 400; margin-top: 3px; }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 16px 16px 60px; }
+  .tabpane { display: none; }
+  .tabpane.on { display: block; }
+  .pane-intro { font-size: 12.5px; color: var(--ink-soft); margin: 0 0 18px;
+    padding-left: 10px; border-left: 3px solid var(--stone-lt); line-height: 1.55; }
+
+  /* A specialist engine, folded shut until asked for. Ten of these open at once
+     was the drawer's real problem -- every one of them carries a paragraph. */
+  .tool { margin: 0 0 9px; border: 2px solid;
+    border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
+    background: var(--stone-dk); }
+  .tool > summary { list-style: none; cursor: pointer; padding: 11px 12px;
+    font-family: var(--sans); font-size: 13.5px; font-weight: 700; color: var(--ink);
+    display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; margin: 0; }
+  .tool > summary::-webkit-details-marker { display: none; }
+  .tool > summary::before { content: "\25B8"; flex: none; color: var(--ink-faint);
+    font-size: 11px; }
+  .tool[open] > summary::before { content: "\25BE"; color: var(--grass); }
+  .tool > summary:hover { background: var(--stone); color: var(--ink); }
+  .tool[open] > summary { border-bottom: 1px solid var(--slot-edge); }
+  .tool .what { flex-basis: 100%; font-size: 11.5px; font-weight: 400;
+    color: var(--ink-faint); padding-left: 18px; line-height: 1.45; }
+  .tool .body { padding: 12px; }
+  .tool .body > .hint:first-child { margin-top: 0; }
+  .tool .why { margin-top: 0; margin-bottom: 10px; }
+  .tool .why > summary { font-size: 10.5px; }
+
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 55; }
