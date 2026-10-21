@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
@@ -160,6 +161,81 @@ static void crosshair(unsigned char *px, int w, int h, int cx, int cy)
     }
 }
 
+// Landmarks only. Trial chambers and ruined portals are dense enough (30+
+// inside 2000 blocks) that marking them buries everything else.
+static const struct { const char *n; int rr, gg, bb; } STYLE[] = {
+    {"mansion",       255,  70,  70}, {"village",        255, 210,  60},
+    {"monument",       80, 190, 255}, {"ancient_city",   190, 110, 255},
+    {"outpost",       255, 140,  40}, {"desert_pyramid", 250, 240, 160},
+    {"jungle_temple", 120, 220, 120}, {"swamp_hut",      150, 110, 200},
+    {"igloo",         230, 245, 255},
+    // nether + end landmarks, drawn when those dimensions are shown
+    {"fortress",      220,  60,  60}, {"bastion",        120,  90, 160},
+    {"end_city",      210, 200, 120},
+};
+#define NSTYLE ((int)(sizeof STYLE / sizeof STYLE[0]))
+
+// Every landmark in the square [c +- radius]: drawn into img when img is set,
+// printed as JSON objects when `first` is set. Each attempt goes through
+// structureGenerates -- the finder's own gate -- so the map shows exactly the
+// structures a search would accept, not every biome-viable attempt.
+static void forEachMarker(Generator *g, int mc, uint32_t gflags, uint64_t seed, int dim,
+                          int cx, int cz, int radius,
+                          unsigned char *img, int w, int h, int span, int *first)
+{
+    #define MX(bx) (int)(((double)((bx) - (cx - radius)) / span) * w)
+    #define MZ(bz) (int)(((double)((bz) - (cz - radius)) / span) * h)
+    for (int i = 0; i < queryStructureCount(); i++) {
+        const char *name = queryStructureName(i);
+        int type = queryStructureType(i);
+        StructureConfig sc;
+        if (!getStructureConfig(type, mc, &sc)) continue;
+        if (sc.dim != dim) continue;
+
+        int si = -1;
+        for (int k = 0; k < NSTYLE; k++) if (!strcmp(STYLE[k].n, name)) si = k;
+        if (si < 0) continue;               // only mark the notable ones
+
+        double sp = sc.regionSize * 16.0;
+        int rx0 = (int)floor((cx - radius) / sp), rx1 = (int)floor((cx + radius) / sp);
+        int rz0 = (int)floor((cz - radius) / sp), rz1 = (int)floor((cz + radius) / sp);
+        for (int rx = rx0; rx <= rx1; rx++)
+        for (int rz = rz0; rz <= rz1; rz++) {
+            Pos p;
+            if (!getStructurePos(type, mc, seed, rx, rz, &p)) continue;
+            if (p.x < cx-radius || p.x > cx+radius || p.z < cz-radius || p.z > cz+radius) continue;
+            if (!structureGenerates(mc, gflags, seed, g, type, p)) continue;
+            if (img) marker(img, w, h, MX(p.x), MZ(p.z), 4,
+                            STYLE[si].rr, STYLE[si].gg, STYLE[si].bb);
+            if (first) {
+                printf("%s{\"type\":\"%s\",\"x\":%d,\"z\":%d}", *first ? "" : ",", name, p.x, p.z);
+                *first = 0;
+            }
+        }
+    }
+    // Strongholds: ring-placed, not on the region grid, and the structure
+    // people most often want to find on a map. Walk the rings until they are
+    // past every point of the view.
+    if (dim == DIM_OVERWORLD) {
+        StrongholdIter sh;
+        initFirstStronghold(&sh, mc, seed);
+        double cdist = sqrt((double)cx * cx + (double)cz * cz);
+        while (nextStronghold(&sh, g) > 0) {
+            Pos p = sh.pos;
+            if (p.x >= cx-radius && p.x <= cx+radius && p.z >= cz-radius && p.z <= cz+radius) {
+                if (img) marker(img, w, h, MX(p.x), MZ(p.z), 4, 240, 240, 240);
+                if (first) {
+                    printf("%s{\"type\":\"stronghold\",\"x\":%d,\"z\":%d}", *first ? "" : ",", p.x, p.z);
+                    *first = 0;
+                }
+            }
+            if (sh.dist * 16.0 > cdist + radius * 2.0 + 2048.0) break;
+        }
+    }
+    #undef MX
+    #undef MZ
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
@@ -188,8 +264,26 @@ int main(int argc, char **argv)
     if (px > 2048) px = 2048;
 
     Generator g;
-    setupGenerator(&g, mc, large ? LARGE_BIOMES : 0);
+    uint32_t gflags = large ? LARGE_BIOMES : 0;
+    setupGenerator(&g, mc, gflags);
     applySeed(&g, dim, seed);
+
+    // out.png == "markers": print the structures this map would mark, as JSON,
+    // and draw nothing. The PNG bakes its markers in, so a browser could see
+    // them but not click them or read their coordinates; this is the same list
+    // as data. Biome generation is skipped -- it is most of a render's cost.
+    if (outpath && !strcmp(outpath, "markers")) {
+        printf("{\"markers\":[");
+        int first = 1;
+        forEachMarker(&g, mc, gflags, seed, dim, cx, cz, radius, NULL, 0, 0, 0, &first);
+        printf("]");
+        if (dim == DIM_OVERWORLD) {
+            Pos sp = getSpawn(&g);
+            printf(",\"spawn\":{\"x\":%d,\"z\":%d}", sp.x, sp.z);
+        }
+        printf("}\n");
+        return 0;
+    }
 
     // One biome cell per output pixel. scale must be a valid cubiomes scale,
     // so pick the coarsest that still fills the image.
@@ -221,45 +315,8 @@ int main(int argc, char **argv)
     #define PX(bx) (int)(((double)((bx) - (cx - radius)) / span) * w)
     #define PZ(bz) (int)(((double)((bz) - (cz - radius)) / span) * h)
 
-    // Structures, drawn over the biomes.
-    // Landmarks only. Trial chambers and ruined portals are dense enough
-    // (30+ inside 2000 blocks) that marking them buries everything else.
-    struct { const char *n; int rr, gg, bb; } style[] = {
-        {"mansion",       255,  70,  70}, {"village",        255, 210,  60},
-        {"monument",       80, 190, 255}, {"ancient_city",   190, 110, 255},
-        {"outpost",       255, 140,  40}, {"desert_pyramid", 250, 240, 160},
-        {"jungle_temple", 120, 220, 120}, {"swamp_hut",      150, 110, 200},
-        {"igloo",         230, 245, 255},
-        // nether + end landmarks, drawn when those dimensions are shown
-        {"fortress",      220,  60,  60}, {"bastion",        120,  90, 160},
-        {"end_city",      210, 200, 120},
-    };
-    int nstyle = (int)(sizeof(style)/sizeof(style[0]));
-
-    for (int i = 0; i < queryStructureCount(); i++) {
-        const char *name = queryStructureName(i);
-        int type = queryStructureType(i);
-        StructureConfig sc;
-        if (!getStructureConfig(type, mc, &sc)) continue;
-        if (sc.dim != dim) continue;
-
-        int si = -1;
-        for (int k = 0; k < nstyle; k++) if (!strcmp(style[k].n, name)) si = k;
-        if (si < 0) continue;               // only mark the notable ones
-
-        double sp = sc.regionSize * 16.0;
-        int rx0 = (int)((cx - radius) / sp) - 1, rx1 = (int)((cx + radius) / sp) + 1;
-        int rz0 = (int)((cz - radius) / sp) - 1, rz1 = (int)((cz + radius) / sp) + 1;
-        for (int rx = rx0; rx <= rx1; rx++)
-        for (int rz = rz0; rz <= rz1; rz++) {
-            Pos p;
-            if (!getStructurePos(type, mc, seed, rx, rz, &p)) continue;
-            if (p.x < cx-radius || p.x > cx+radius || p.z < cz-radius || p.z > cz+radius) continue;
-            if (!isViableStructurePos(type, &g, p.x, p.z, 0)) continue;
-            marker(img, w, h, PX(p.x), PZ(p.z), 4,
-                   style[si].rr, style[si].gg, style[si].bb);
-        }
-    }
+    // Structures, drawn over the biomes (the same list "markers" prints).
+    forEachMarker(&g, mc, gflags, seed, dim, cx, cz, radius, img, w, h, span, NULL);
 
     // Only the overworld has a world spawn; drawing one elsewhere would be a
     // crosshair over a place that means nothing.

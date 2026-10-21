@@ -2450,6 +2450,14 @@ static int generatesAt(const Query *q, int stype, uint64_t s48, uint64_t worldSe
     return placementOk(q->mc, queryGenFlags(q), worldSeed, stype, p);
 }
 
+int structureGenerates(int mc, uint32_t gflags, uint64_t worldSeed,
+                       Generator *g, int stype, Pos p)
+{
+    if (!placementAllowed(mc, worldSeed & ((1ULL << 48) - 1), stype, p)) return 0;
+    if (!isViableStructurePos(stype, g, p.x, p.z, 0)) return 0;
+    return placementOk(mc, gflags, worldSeed, stype, p);
+}
+
 int queryStage1(const Query *q, uint64_t s48, Match *m)
 {
     // Zero it: callers declare Match on the stack, and haveSpawn/haveEyes must

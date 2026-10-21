@@ -1574,6 +1574,25 @@ jn=${jres% *}; jb=${jres#* }
   && ok "FIND_JSON hits are valid JSON with string seeds ($jn lines, mixed kinds + leaderboard)" \
   || bad "FIND_JSON output invalid" "lines=$jn invalid=$jb"
 
+# The map marks only structures that really generate. It used to mark by
+# biome viability alone and drew the pyramids, jungle temples and mansions the
+# 1.18 terrain floor rules out -- 101 of 259 over 20 seeds. Every one it marks
+# now must pass checkplacement's independent corner-height verdict.
+mk_n=0; mk_bad=0
+for ms in 1000003 2000006 3000009 4000012 5000015; do
+  while read -r t x z; do
+    mk_n=$((mk_n+1))
+    ./build/checkplacement.exe "$ms" "$t" 1.21 "$x" "$z" 2>/dev/null | grep -q ' generates$' || mk_bad=$((mk_bad+1))
+  done < <(./build/map.exe "$ms" 1.21 4000 64 markers 0 0 - 2>/dev/null | python -c "
+import sys, json
+for m in json.load(sys.stdin)['markers']:
+    if m['type'] in ('desert_pyramid', 'jungle_temple', 'mansion'):
+        print(m['type'], m['x'], m['z'])")
+done
+[ "$mk_n" -ge 5 ] && [ "$mk_bad" -eq 0 ] \
+  && ok "the map marks only pyramids/temples/mansions that generate ($mk_n checked)" \
+  || bad "the map marks a structure the terrain rule forbids" "checked=$mk_n phantom=$mk_bad"
+
 # The web server must refuse other origins and non-JSON posts (CSRF / DNS
 # rebinding), and still accept the UI's own requests.
 RUIPORT=8792

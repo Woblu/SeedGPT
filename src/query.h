@@ -346,6 +346,16 @@ const char *dimName(int dim);
 // it silently searches the default world while claiming to search another.
 uint32_t    queryGenFlags(const Query *q);
 
+// Does a structure attempt at p really generate in this world? The same gate
+// every search uses: the placement exclusions cubiomes omits (outposts near
+// villages), biome viability, and the 1.18 terrain floor for pyramids, jungle
+// temples and mansions. `g` must have the seed applied in the structure's
+// dimension. Exported so the map and the finder cannot disagree -- the map
+// used to mark by biome viability alone and drew structures the finder had
+// (correctly) ruled out.
+int         structureGenerates(int mc, uint32_t gflags, uint64_t worldSeed,
+                               Generator *g, int stype, Pos p);
+
 // Vocabulary accessors -- the NL layer reads these instead of hardcoding names.
 int         queryStructureCount(void);
 const char *queryStructureName(int i);

@@ -2893,16 +2893,25 @@
     read.style.cssText = 'position:absolute;left:6px;bottom:6px;font-family:var(--mono);'
       + 'font-size:11px;background:rgba(0,0,0,.6);color:#fff;padding:2px 6px;'
       + 'pointer-events:none;display:none';
-    vp.append(img, read); card.append(vp);
+    // Clickable markers, drawn over the baked-in ones from the same list
+    // (/api/markers). Real buttons: reachable by keyboard, announced by name.
+    const layer = el('div');
+    layer.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+    vp.append(img, layer, read); card.append(vp);
 
     const lg = el('div', 'legend');
     (typeof MARKERS !== 'undefined' ? MARKERS : []).forEach(([nm, col]) => {
       const sp = el('span'), sw = el('i'); sw.style.background = col;
       sp.append(sw, document.createTextNode(pretty(nm))); lg.append(sp);
     });
+    { const sp = el('span'), sw = el('i'); sw.style.background = '#F0F0F0';
+      sp.append(sw, document.createTextNode('Stronghold')); lg.append(sp); }
     const sc = el('span'); sc.append(document.createTextNode('✛ spawn')); lg.append(sc);
     card.append(lg);
-    card.append(el('div', 'hint', 'Drag to pan · scroll to zoom · click for coordinates.'));
+    card.append(el('div', 'hint', 'Drag to pan · scroll to zoom · click a marker for its coordinates and /tp.'));
+    const pick = el('div', 'note'); pick.hidden = true;
+    const inview = el('div', 'next-steps');
+    card.append(pick, inview);
     const back = el('button', 'tiny', '← back to results');
     back.onclick = showLastResults;
     card.append(back); out.append(card);
@@ -2917,11 +2926,62 @@
       clearTimeout(loadTimer);
       info.textContent = `loading ${dim} · centre ${cx}, ${cz}  ·  ±${radius} blocks…`;
       loadTimer = setTimeout(() => {
-        img.src = `/api/map?seed=${encodeURIComponent(seed)}&v=${encodeURIComponent(v)}`
+        const common = `seed=${encodeURIComponent(seed)}&v=${encodeURIComponent(v)}`
           + (largeBiomes() ? '&large=1' : '')
           + (dim !== 'overworld' ? `&dim=${dim}` : '')
-                + `&r=${radius}&px=${PX}&cx=${cx}&cz=${cz}`;
+          + `&r=${radius}&cx=${cx}&cz=${cz}`;
+        img.src = `/api/map?${common}&px=${PX}`;
+        const view = { cx, cz, radius, dim, tok: ++markTok };
+        fetch(`/api/markers?${common}`).then(r => r.ok ? r.json() : null)
+          .then(d => { if (d && view.tok === markTok) drawMarkers(d, view); })
+          .catch(() => {});
       }, 180);
+    }
+    let markTok = 0;
+    function drawMarkers(d, view) {
+      layer.innerHTML = ''; inview.innerHTML = '';
+      const span = 2 * view.radius;
+      const ms = (d.markers || []).slice();
+      if (d.spawn) ms.push({ type: 'spawn', x: d.spawn.x, z: d.spawn.z });
+      const counts = {};
+      ms.forEach(m => {
+        counts[m.type] = (counts[m.type] || 0) + 1;
+        const b = el('button');
+        const label = `${pretty(m.type)} at ${m.x}, ${m.z}`;
+        b.type = 'button'; b.title = label; b.setAttribute('aria-label', label);
+        b.style.cssText = 'position:absolute;width:16px;height:16px;padding:0;'
+          + 'transform:translate(-50%,-50%);border-radius:50%;border:2px solid rgba(255,255,255,.85);'
+          + 'background:rgba(0,0,0,.15);cursor:pointer;pointer-events:auto;'
+          + `left:${((m.x - (view.cx - view.radius)) / span) * 100}%;`
+          + `top:${((m.z - (view.cz - view.radius)) / span) * 100}%`;
+        b.onpointerdown = e => e.stopPropagation();    // a click, not a drag
+        b.onclick = e => { e.stopPropagation(); selectMarker(m, view.dim); };
+        layer.append(b);
+      });
+      Object.entries(counts).forEach(([t, n]) => {
+        const chip = el('button', 'tiny', `${n} ${pretty(t)}`);
+        chip.type = 'button';
+        chip.title = `select the ${pretty(t).toLowerCase()} nearest the centre`;
+        chip.onclick = () => {
+          const best = ms.filter(m => m.type === t).sort((a, b) =>
+            Math.hypot(a.x - view.cx, a.z - view.cz) - Math.hypot(b.x - view.cx, b.z - view.cz))[0];
+          if (best) selectMarker(best, view.dim);
+        };
+        inview.append(chip);
+      });
+    }
+    function selectMarker(m, mdim) {
+      pick.hidden = false; pick.innerHTML = '';
+      pick.append(el('b', null, pretty(m.type)), document.createTextNode(`  x=${m.x}  z=${m.z}  `));
+      const cp = el('button', 'tiny', '⧉ copy'); cp.type = 'button';
+      cp.onclick = () => copyText(cp, `${m.x} ${m.z}`);
+      const tp = el('button', 'tiny', '/tp'); tp.type = 'button';
+      tp.onclick = () => copyText(tp, tpCommand(m.x, m.z, mdim));
+      const go = el('button', 'tiny', 'centre here'); go.type = 'button';
+      go.onclick = () => { cx = m.x; cz = m.z; load(); };
+      pick.append(cp, tp, go);
+      if (mdim === 'nether') pick.append(el('span', 'dim', `  ≈ overworld ${m.x * 8}, ${m.z * 8}`));
+      announce(`${pretty(m.type)} at ${m.x}, ${m.z}`);
     }
     zin.onclick  = () => { radius = Math.max(200, Math.round(radius / 2)); load(); };
     zout.onclick = () => { radius = Math.min(20000, radius * 2); load(); };
@@ -2931,13 +2991,22 @@
     let drag = null, moved = false;
     vp.onpointerdown = e => { drag = { x: e.clientX, y: e.clientY }; moved = false;
       vp.setPointerCapture(e.pointerId); vp.style.cursor = 'grabbing'; };
-    vp.onpointermove = e => { if (!drag) return;
+    vp.onpointermove = e => {
+      if (!drag) {
+        // Hover readout: where the pointer is, in blocks, without clicking.
+        const rect = vp.getBoundingClientRect();
+        const bx = Math.round(cx + ((e.clientX - rect.left) / rect.width - 0.5) * 2 * radius);
+        const bz = Math.round(cz + ((e.clientY - rect.top) / rect.height - 0.5) * 2 * radius);
+        read.style.display = 'block'; read.textContent = `x ${bx}, z ${bz}`;
+        return;
+      }
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
-      img.style.transform = `translate(${dx}px,${dy}px)`; };
+      img.style.transform = layer.style.transform = `translate(${dx}px,${dy}px)`; };
+    vp.onpointerleave = () => { if (!drag) read.style.display = 'none'; };
     vp.onpointerup = e => { if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = null;
-      vp.style.cursor = 'grab'; img.style.transform = '';
+      vp.style.cursor = 'grab'; img.style.transform = layer.style.transform = '';
       if (moved) { const rw = vp.getBoundingClientRect().width || PX, span = 2 * radius;
         cx -= Math.round(dx / rw * span); cz -= Math.round(dy / rw * span); load(); } };
     // Zoom about the cursor, the way every map does: the point under the

@@ -725,6 +725,32 @@ def api_map(qs) -> bytes:
     return data
 
 
+def api_markers(qs) -> dict:
+    """The structures a map view marks, as data: {"markers":[{type,x,z}], "spawn"}.
+
+    The PNG bakes its markers in, so they could be seen but not clicked or
+    read. This is the same list -- produced by the same code, through the same
+    "does it really generate" gate as a search -- for the browser to overlay.
+    """
+    seed = java_seed((qs.get("seed") or [""])[0])
+    v = check_version((qs.get("v") or ["1.21"])[0])
+    radius = max(200, min(20000, int((qs.get("r") or ["2000"])[0])))
+    cx = max(-30000000, min(30000000, int((qs.get("cx") or ["0"])[0])))
+    cz = max(-30000000, min(30000000, int((qs.get("cz") or ["0"])[0])))
+    large = (qs.get("large") or ["0"])[0] in ("1", "true")
+    dim = (qs.get("dim") or ["overworld"])[0]
+    if dim not in ("overworld", "nether", "end"):
+        raise Failure(f"unknown dimension {dim!r}")
+    args = [tool("map"), seed, v, str(radius), "64", "markers", str(cx), str(cz),
+            "large" if large else "-"]
+    if dim != "overworld":
+        args.append(dim)
+    rc, out, err = run(args, TIMEOUTS["map"])
+    if rc != 0:
+        raise Failure(err.strip() or "marker lookup failed")
+    return json.loads(out)
+
+
 def api_ask(body) -> dict:
     """Natural language -> query JSON, via ask.py --dry-run."""
     text = str(body.get("text", "")).strip()
@@ -2655,6 +2681,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, api_vocab(parse_qs(u.query)))
             elif u.path == "/api/map":
                 self._send(200, api_map(parse_qs(u.query)), "image/png")
+            elif u.path == "/api/markers":
+                self._send(200, api_markers(parse_qs(u.query)))
             elif u.path == "/api/lootitems":
                 self._send(200, api_lootitems(parse_qs(u.query)))
             elif u.path == "/api/assets":
