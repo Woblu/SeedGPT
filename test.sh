@@ -1333,6 +1333,9 @@ def canned(payload):
                 {"text": json.dumps(payload)}]}}]}).encode()
     return lambda req, timeout=None: R()
 base = [{"id":"t","structure":"buried_treasure","within":1500,"of":"origin"}]
+# Routing a request is one question and whether this install has the tool is
+# another, so the whitelist is checked as if the tool were here.
+serve.capabilities = lambda: {"tools": {"casing": True}}
 urllib.request.urlopen = canned({"conditions":base,"notes":"x",
     "tool":{"name":"casing","casing":"coal_ore","radius":20000}})
 t = serve.api_gemini({"text":"x","key":"k","version":"1.21"})["query"].get("tool")
@@ -1343,10 +1346,17 @@ print("REJECTED", serve.api_gemini({"text":"x","key":"k","version":"1.21"})["que
 urllib.request.urlopen = canned({"conditions":base,"notes":"x",
     "tool":{"name":"casing","casing":"magma_block","radius":999999999}})
 print("CLAMPED", serve.api_gemini({"text":"x","key":"k","version":"1.21"})["query"]["tool"]["radius"] == 60000)
+serve.capabilities = lambda: {"tools": {}}
+try:
+    serve.api_gemini({"text":"x","key":"k","version":"1.21"})
+    print("ABSENT False")
+except serve.Failure as e:
+    print("ABSENT", "advanced-tools" in str(e))
 PY
 grep -q "ROUTED True" /tmp/sc_test/tool.txt   && ok "a routed prompt survives the query whitelist instead of being discarded"   || bad "tool routing dropped by api_gemini" "$(head -3 /tmp/sc_test/tool.txt)"
 grep -q "REJECTED True" /tmp/sc_test/tool.txt   && ok "an invented tool name is rejected, not sent to a panel that does not exist"   || bad "invalid tool name accepted" ""
 grep -q "CLAMPED True" /tmp/sc_test/tool.txt   && ok "tool parameters are clamped to a sane range"   || bad "tool radius not clamped" ""
+grep -q "ABSENT True" /tmp/sc_test/tool.txt \n  && ok "a request for a tool this install lacks is refused, not searched another way" \n  || bad "missing tool not refused" "$(tail -3 /tmp/sc_test/tool.txt)"
 
 # The casing readout reported the raw landing block, skipping vanilla's "unless
 # it is air or water, the fill is the block BELOW". It emitted fill=air, which no
