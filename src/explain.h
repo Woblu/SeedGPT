@@ -19,8 +19,21 @@ typedef struct {
     double   rate;       // sampled seeds/sec
 } Estimate;
 
+// What explainAny needs from one alternative. pHit is 0 when none was seen.
+typedef struct {
+    double p1;          // P(a structure seed passes geometry)
+    double pHit;        // P(a structure seed yields a hit)
+    double secPerSeed;  // wall clock per structure seed, 0 if never measured
+} ExplainResult;
+
 // Sample uniformly across 2^48 and report the predicted funnel + wall clock.
-void explainQuery(const Query *q, uint64_t samples, int nthreads, FILE *f);
+// `res` may be NULL.
+void explainQuery(const Query *q, uint64_t samples, int nthreads, FILE *f, ExplainResult *res);
+
+// The same answer for an "any" search (anyof.h): each alternative is sampled
+// alone, then combined as the search really runs them, every seed paying for
+// each alternative and any one of them being enough.
+void explainAny(const Query *plans, int nplans, uint64_t samples, int nthreads, FILE *f);
 
 // Compare uniform sampling against a sequential scan from 0, to check whether
 // scanning low seeds (what the searcher actually does) is representative.

@@ -6,6 +6,7 @@
 // auditable, and reports the pass-1 survival rate afterwards -- the single
 // number that tells you whether the query is selective enough to be fast.
 #include "query.h"
+#include "anyof.h"
 #include "solve.h"
 #include "loot.h"
 #include "ore.h"
@@ -40,7 +41,8 @@
 static int g_uppers = UPPER_SAMPLES_DEFAULT;
 #define MAX_RANK      50
 
-typedef struct { uint64_t ws; Match m; } Hit;
+// q: the alternative that held (see anyof.h). A Match means nothing without it.
+typedef struct { uint64_t ws; Match m; const Query *q; } Hit;
 
 // --- leaderboard ---------------------------------------------------------
 //
@@ -70,7 +72,8 @@ static void rankOffer(const Query *q, uint64_t ws, const Match *m, int score)
 }
 
 typedef struct {
-    const Query *q;
+    const Query *plans;        // a seed matches if ANY of these does; almost always 1
+    int nplans;
     uint64_t lo, hi, stride;   // indices lo, lo+stride, ... below hi
     // When the query has a tight-cluster condition, `cand` holds structure seeds
     // that src/solve.c already knows satisfy its geometry, and [lo,hi) indexes
@@ -101,7 +104,14 @@ static void writeTsv(const Query *q, uint64_t ws, const Match *mm, FILE *tsv);
 static void jsonHit(const Query *q, uint64_t ws, const Match *mm, int haveScore, int score);
 static int g_json = 0;     // FIND_JSON: also print each hit as an @JSON line
 static char *slurp(const char *path);
-static int checkSeedList(const Query *q, const char *path, int nthreads);
+static int checkSeedList(const Query *plans, int nplans, const char *path, int nthreads);
+
+static int anyWholeSeed(const Query *plans, int nplans)
+{
+    for (int p = 0; p < nplans; p++)
+        if (plans[p].ngeom == 0) return 1;
+    return 0;
+}
 
 // In stream mode a hit is printed the moment it is found, in the same SEED
 // block the end-of-run report uses, so a reader can show it immediately and --
@@ -174,8 +184,12 @@ static inline uint64_t mix64(uint64_t x)
 static DWORD WINAPI worker(LPVOID arg)
 {
     Job *j = (Job*)arg;
+    const Query *plans = j->plans;
+    // Version and world type belong to the whole query, so every alternative
+    // shares them and one generator serves all of them.
+    const Query *q0 = plans;
     Generator g;
-    setupGenerator(&g, j->q->mc, queryGenFlags(j->q));
+    setupGenerator(&g, q0->mc, queryGenFlags(q0));
     LootCache *lc = lootCacheNew();   // one per thread; loot tables are stateful
     ULONGLONG lastTick = 0;
     uint64_t  lastRep  = 0;   // this thread's scanned count at its last tick
@@ -184,8 +198,8 @@ static DWORD WINAPI worker(LPVOID arg)
     // the two-pass funnel has nothing to do: every structure seed survives and
     // the upper bits are sampled blind. Walk WORLD seeds directly instead. One
     // index is then one world, which is both faster and the only way "best of N
-    // seeds" means what it says.
-    int wholeSeed = (j->q->ngeom == 0);
+    // seeds" means what it says. One such alternative decides it for all of them.
+    int wholeSeed = anyWholeSeed(plans, j->nplans);
     if (wholeSeed) {
         for (uint64_t i = j->lo; i < j->hi; i += j->stride) {
             if (g_found >= g_want) break;
@@ -207,20 +221,29 @@ static DWORD WINAPI worker(LPVOID arg)
             }
 
             Match m;
-            queryStage1(j->q, ws & ((1ULL << 48) - 1), &m);   // zeroes the match
-            j->pass1++; j->applies++;
-            if (!queryStage2(j->q, &g, ws, &m, lc)) continue;
+            const Query *held = NULL;
+            j->pass1++;
+            for (int p = 0; p < j->nplans && !held; p++) {
+                // Stage 1 zeroes the match; a structure alternative in a mixed
+                // query also has to pass it, since nothing filtered on it here.
+                const Query *q = &plans[p];
+                int s1 = queryStage1(q, ws & ((1ULL << 48) - 1), &m);
+                if (q->ngeom && !s1) continue;
+                j->applies++;
+                if (queryStage2(q, &g, ws, &m, lc)) held = q;
+            }
+            if (!held) continue;
             j->pass2++;
 
-            if (j->q->rankTop > 0) {
+            if (held->rankTop > 0) {
                 // Not counted against g_want: a leaderboard never stops early.
-                rankOffer(j->q, ws, &m, queryScore(j->q, &m));
+                rankOffer(held, ws, &m, queryScore(held, &m));
                 continue;
             }
             EnterCriticalSection(&g_lock);
-            if (j->nhits < MAX_HITS) { j->hits[j->nhits].ws = ws; j->hits[j->nhits].m = m; j->nhits++; }
+            if (j->nhits < MAX_HITS) { j->hits[j->nhits].ws = ws; j->hits[j->nhits].m = m; j->hits[j->nhits].q = held; j->nhits++; }
             if (g_hitstream) { printf("HIT %lld %d %d\n", (long long)ws, m.pos[0].x, m.pos[0].z); fflush(stdout); }
-            else if (g_stream && g_found < g_want) emitHit(j->q, ws, &m);
+            else if (g_stream && g_found < g_want) emitHit(held, ws, &m);
             InterlockedIncrement64(&g_found);
             LeaveCriticalSection(&g_lock);
         }
@@ -250,8 +273,11 @@ static DWORD WINAPI worker(LPVOID arg)
             }
         }
 
-        Match m;
-        if (!queryStage1(j->q, s48, &m)) continue;   // cheap reject
+        Match pm[MAX_ALT];
+        int live[MAX_ALT], nlive = 0;
+        for (int p = 0; p < j->nplans; p++)
+            if (queryStage1(&plans[p], s48, &pm[p])) live[nlive++] = p;   // cheap reject
+        if (!nlive) continue;
         j->pass1++;
 
         // Scatter the upper 16 bits. Trying up=0 first made the reported seed
@@ -274,22 +300,26 @@ static DWORD WINAPI worker(LPVOID arg)
         // biome area -- anything the upper 16 bits change -- is not the best of
         // anything. One entry per structure seed still keeps a single layout
         // from flooding the table with near-identical variants.
-        int ranked = j->q->rankTop > 0;
-        Match m1 = m, best;
+        int ranked = q0->rankTop > 0;
+        Match m, best;
         int bestScore = INT_MIN; uint64_t bestWs = 0; int haveBest = 0;
         for (int t = 0; t < g_uppers; t++) {
             uint64_t up = (ustart + (uint64_t)t * ustep) & 0xFFFF;
             uint64_t ws = (up << 48) | s48;
+            const Query *held = NULL;
             j->applies++;
             // queryStage2 applies the seed itself, once per dimension the query
             // touches -- the caller must not applySeed here. It overwrites the
             // match on success, so each sister starts from pass 1's.
-            m = m1;
-            if (!queryStage2(j->q, &g, ws, &m, lc)) continue;
+            for (int l = 0; l < nlive && !held; l++) {
+                m = pm[live[l]];
+                if (queryStage2(&plans[live[l]], &g, ws, &m, lc)) held = &plans[live[l]];
+            }
+            if (!held) continue;
             j->pass2++;
 
             if (ranked) {
-                int sc = queryScore(j->q, &m);
+                int sc = queryScore(held, &m);
                 if (!haveBest || sc > bestScore) {
                     bestScore = sc; bestWs = ws; best = m; haveBest = 1;
                 }
@@ -298,17 +328,17 @@ static DWORD WINAPI worker(LPVOID arg)
             }
 
             EnterCriticalSection(&g_lock);
-            if (j->nhits < MAX_HITS) { j->hits[j->nhits].ws = ws; j->hits[j->nhits].m = m; j->nhits++; }
+            if (j->nhits < MAX_HITS) { j->hits[j->nhits].ws = ws; j->hits[j->nhits].m = m; j->hits[j->nhits].q = held; j->nhits++; }
             // Stream mode (FIND_HITSTREAM): emit EVERY hit as "HIT <seed> <x> <z>"
             // (condition 0's matched position), uncapped -- for tier-2 pipelines
             // that need thousands of candidates, not the 12 the array holds.
             if (g_hitstream) { printf("HIT %lld %d %d\n", (long long)ws, m.pos[0].x, m.pos[0].z); fflush(stdout); }
-            else if (g_stream && g_found < g_want) emitHit(j->q, ws, &m);
+            else if (g_stream && g_found < g_want) emitHit(held, ws, &m);
             InterlockedIncrement64(&g_found);
             LeaveCriticalSection(&g_lock);
             break;
         }
-        if (haveBest) rankOffer(j->q, bestWs, &best, bestScore);
+        if (haveBest) rankOffer(q0, bestWs, &best, bestScore);
     }
     j->climgate = climateGated();     // thread-local, so read them here
     j->climskip = climateSkipped();
@@ -736,19 +766,33 @@ static void jsonHit(const Query *q, uint64_t ws, const Match *mm,
 // seed's position in the list (blank lines and #comments are skipped), so a
 // reader can restore the input order.
 typedef struct {
-    const Query *q;
+    const Query *plans;
+    int nplans;
     char **lines;
     int n;
     volatile LONG next;
     volatile LONG yes;
 } SeedList;
 
+// Does this one seed hold, and under which alternative? *placed says whether any
+// alternative got past the structure pass, so a no can say which kind of no.
+static const Query *matchSeed(const Query *plans, int nplans, Generator *g, uint64_t ws,
+                              Match *m, LootCache *lc, int *placed)
+{
+    *placed = 0;
+    for (int p = 0; p < nplans; p++) {
+        if (!queryStage1(&plans[p], ws & ((1ULL << 48) - 1), m)) continue;
+        *placed = 1;
+        if (queryStage2(&plans[p], g, ws, m, lc)) return &plans[p];
+    }
+    return NULL;
+}
+
 static DWORD WINAPI seedListWorker(LPVOID arg)
 {
     SeedList *sl = (SeedList *)arg;
-    const Query *q = sl->q;
     Generator g;
-    setupGenerator(&g, q->mc, queryGenFlags(q));
+    setupGenerator(&g, sl->plans->mc, queryGenFlags(sl->plans));
     LootCache *lc = lootCacheNew();
     for (;;) {
         LONG i = InterlockedIncrement(&sl->next) - 1;
@@ -756,8 +800,9 @@ static DWORD WINAPI seedListWorker(LPVOID arg)
         uint64_t ws;
         if (!parseWorldSeed(sl->lines[i], &ws)) continue;
         Match m;
-        int s1 = queryStage1(q, ws & ((1ULL << 48) - 1), &m);
-        int s2 = s1 && queryStage2(q, &g, ws, &m, lc);
+        int s1;
+        const Query *q = matchSeed(sl->plans, sl->nplans, &g, ws, &m, lc, &s1);
+        int s2 = q != NULL;
         if (s2) InterlockedIncrement(&sl->yes);
         EnterCriticalSection(&g_lock);
         printf("@CHECK {\"index\":%ld,\"input\":", (long)i);
@@ -779,7 +824,7 @@ static DWORD WINAPI seedListWorker(LPVOID arg)
     return 0;
 }
 
-static int checkSeedList(const Query *q, const char *path, int nthreads)
+static int checkSeedList(const Query *plans, int nplans, const char *path, int nthreads)
 {
     char *text = slurp(path);
     if (!text) { fprintf(stderr, "cannot read %s\n", path); return 2; }
@@ -792,7 +837,7 @@ static int checkSeedList(const Query *q, const char *path, int nthreads)
         lines[n++] = ln;
         if (n >= 1000000) break;
     }
-    SeedList sl = { q, lines, n, 0, 0 };
+    SeedList sl = { plans, nplans, lines, n, 0, 0 };
     InitializeCriticalSection(&g_lock);
     HANDLE th[64];
     for (int i = 0; i < nthreads; i++) th[i] = CreateThread(NULL, 0, seedListWorker, &sl, 0, NULL);
@@ -872,71 +917,90 @@ int main(int argc, char **argv)
     char *json = slurp(argv[1]);
     if (!json) { fprintf(stderr, "cannot read %s\n", argv[1]); return 2; }
 
-    Query q; char err[1024];
-    if (queryParse(&q, json, err, sizeof err)) { fprintf(stderr, "query error: %s\n", err); return 1; }
-    if (queryPlan(&q, err, sizeof err))        { fprintf(stderr, "plan error: %s\n", err); return 1; }
-
-    if (q.warn[0]) printf("NOTE: %s\n\n", q.warn);
+    Query *plans; char err[1024];
+    int nplans = queryCompile(json, &plans, err, sizeof err);
+    if (nplans <= 0) {
+        fprintf(stderr, "%s error: %s\n", nplans < 0 ? "plan" : "query", err);
+        return 1;
+    }
+    // Everything that belongs to the whole query reads the first alternative:
+    // the version, the world type and a leaderboard (which has only one).
+    const Query *q = plans;
 
     char buf[96];
-    printf("query   : %d conditions, MC %s\n", q.n, mc2str(q.mc));
-    for (int i = 0; i < q.n; i++)
-        printf("   [%s] %s\n", q.cond[i].id, condDesc(&q, i, buf, sizeof buf));
-    printf("\n");
-    queryPrintPlan(&q, stdout);
+    if (nplans > 1)
+        printf("search  : any of %d alternatives, MC %s\n\n", nplans, mc2str(q->mc));
+    for (int p = 0; p < nplans; p++) {
+        const Query *a = &plans[p];
+        if (nplans > 1) printf("alternative %d of %d\n", p + 1, nplans);
+        if (a->warn[0] && (!p || strcmp(a->warn, plans[p-1].warn)))
+            printf("NOTE: %s\n\n", a->warn);
+        printf("query   : %d conditions, MC %s\n", a->n, mc2str(a->mc));
+        for (int i = 0; i < a->n; i++)
+            printf("   [%s] %s\n", a->cond[i].id, condDesc(a, i, buf, sizeof buf));
+        printf("\n");
+        queryPrintPlan(a, stdout);
 
-    // Warn when a condition uses a structure the engine cannot verify. Its
-    // position is exact, but whether the game actually places anything there
-    // is unmodelled -- which looks exactly like a wrong answer in game.
-    for (int i = 0; i < q.n; i++) {
-        if (q.cond[i].type != CT_STRUCTURE) continue;
-        for (int k = 0; k < queryStructureCount(); k++) {
-            if (queryStructureType(k) != q.cond[i].structType) continue;
-            if (queryStructureVerified(k)) continue;
-            printf("NOTE: \"%s\" is a %s. The engine reports EVERY generation attempt\n"
-                   "      for these without checking whether the game actually places\n"
-                   "      one, so a reported hit may not exist in your world.\n"
-                   "      Measured: 100%% of attempts pass, vs 0.9-31.7%% for\n"
-                   "      biome-checked structures like village/mansion/monument.\n\n",
-                   q.cond[i].id, queryStructureName(k));
+        // Warn when a condition uses a structure the engine cannot verify. Its
+        // position is exact, but whether the game actually places anything there
+        // is unmodelled -- which looks exactly like a wrong answer in game.
+        for (int i = 0; i < a->n; i++) {
+            if (a->cond[i].type != CT_STRUCTURE) continue;
+            for (int k = 0; k < queryStructureCount(); k++) {
+                if (queryStructureType(k) != a->cond[i].structType) continue;
+                if (queryStructureVerified(k)) continue;
+                printf("NOTE: \"%s\" is a %s. The engine reports EVERY generation attempt\n"
+                       "      for these without checking whether the game actually places\n"
+                       "      one, so a reported hit may not exist in your world.\n"
+                       "      Measured: 100%% of attempts pass, vs 0.9-31.7%% for\n"
+                       "      biome-checked structures like village/mansion/monument.\n\n",
+                       a->cond[i].id, queryStructureName(k));
+            }
         }
     }
 
-    if (bias)    { explainCompare(&q, samples, nthreads, stdout); free(json); return 0; }
-    if (explain) { explainQuery(&q, samples, nthreads, stdout);   free(json); return 0; }
+    if (bias) {
+        for (int p = 0; p < nplans; p++) explainCompare(&plans[p], samples, nthreads, stdout);
+        free(json); return 0;
+    }
+    if (explain) {
+        if (nplans > 1) explainAny(plans, nplans, samples, nthreads, stdout);
+        else            explainQuery(q, samples, nthreads, stdout, NULL);
+        free(json); return 0;
+    }
 
     g_json = getenv("FIND_JSON") != NULL;
     if (listmode) {
-        int rc = checkSeedList(&q, argv[3], nthreads);
+        int rc = checkSeedList(plans, nplans, argv[3], nthreads);
         free(json);
         return rc;
     }
     if (seedmode) {
         Generator g;
-        setupGenerator(&g, q.mc, queryGenFlags(&q));
+        setupGenerator(&g, q->mc, queryGenFlags(q));
         Match m;
         // Stage 1 works on the lower 48 bits, stage 2 on the whole seed. Both
         // must be reported separately: "the structures are placed but a biome
         // rules it out" and "the placement never happened" are different
         // answers, and collapsing them into one no would hide which.
-        int s1 = queryStage1(&q, oneseed & ((1ULL << 48) - 1), &m);
         LootCache *lc = lootCacheNew();
-        int s2 = s1 && queryStage2(&q, &g, oneseed, &m, lc);
+        int s1;
+        const Query *held = matchSeed(plans, nplans, &g, oneseed, &m, lc, &s1);
         printf("--- seed %" PRId64 " ---\n", (int64_t)oneseed);
         if (!s1) {
             printf("NO -- fails the 48-bit structure pass: the placements this query\n"
                    "      needs are not in this seed at all.\n");
-        } else if (!s2) {
+        } else if (!held) {
             printf("NO -- placements exist, but the full-seed pass rejects it\n"
                    "      (biome, viability, terrain or a Y/loot condition).\n");
         } else {
             printf("YES -- this seed satisfies the query.\n\n");
-            printHit(&q, oneseed, &m, NULL);
-            if (g_json) jsonHit(&q, oneseed, &m, 0, 0);
+            printHit(held, oneseed, &m, NULL);
+            if (g_json) jsonHit(held, oneseed, &m, 0, 0);
         }
         if (lc) lootCacheFree(lc);
         free(json);
-        return s2 ? 0 : 3;
+        return held ? 0 : 3;
     }
 
     const char *secs = getenv("FIND_SECONDS");
@@ -973,11 +1037,11 @@ int main(int argc, char **argv)
     // A leaderboard is only as good as the range it covers: stopping at the
     // first N survivors would report "the best of the first few", which is the
     // one thing a record search must not do.
-    if (q.rankTop > 0) {
+    if (q->rankTop > 0) {
         g_want = 0x7fffffff;
         printf("ranking the top %d by %s over %" PRIu64 " %s (%s)\n\n",
-               q.rankTop, queryScoreLabel(&q), range,
-               q.ngeom == 0 ? "world seeds" : "structure seeds",
+               q->rankTop, queryScoreLabel(q), range,
+               q->ngeom == 0 ? "world seeds" : "structure seeds",
                g_deadline ? "or until the time budget runs out -- the funnel "
                             "below says how many were actually scanned"
                           : "the full range is scanned -- no early stop");
@@ -993,7 +1057,11 @@ int main(int argc, char **argv)
     {
         char why[256];
         // FIND_NOSOLVE forces the plain scan, so the two paths can be compared.
-        int sk = (q.ngeom > 0 && !getenv("FIND_NOSOLVE")) ? solvePick(&q, why, sizeof why) : -1;
+        // A candidate list is specific to one cluster, so alternatives always
+        // scan: a seed that only the other alternative would match is not on it.
+        why[0] = 0;
+        int sk = (nplans == 1 && q->ngeom > 0 && !getenv("FIND_NOSOLVE"))
+               ? solvePick(q, why, sizeof why) : -1;
         if (sk >= 0) {
             // A solved candidate is worth orders of magnitude more than a
             // scanned seed, so a huge `range` does not need a huge list -- and
@@ -1015,7 +1083,7 @@ int main(int argc, char **argv)
                 int timedOut = 0;
                 LARGE_INTEGER s0, s1, sf;
                 QueryPerformanceFrequency(&sf); QueryPerformanceCounter(&s0);
-                ncand = solveFill(&q, sk, capN, cand, nthreads, budget, &timedOut);
+                ncand = solveFill(q, sk, capN, cand, nthreads, budget, &timedOut);
                 QueryPerformanceCounter(&s1);
                 double sel = (double)(s1.QuadPart - s0.QuadPart) / sf.QuadPart;
 
@@ -1047,7 +1115,7 @@ int main(int argc, char **argv)
                     range = ncand;
                 }
             }
-        } else if (q.ngeom > 0 && strstr(why, "solving") == NULL && strstr(why, "no tight") == NULL) {
+        } else if (why[0] && q->ngeom > 0 && strstr(why, "solving") == NULL && strstr(why, "no tight") == NULL) {
             printf("solver: not used -- %s\n\n", why);
         }
     }
@@ -1059,7 +1127,8 @@ int main(int argc, char **argv)
     LARGE_INTEGER freq, t0, t1;
     QueryPerformanceFrequency(&freq); QueryPerformanceCounter(&t0);
     for (int i = 0; i < nthreads; i++) {
-        jobs[i].q = &q;
+        jobs[i].plans = plans;
+        jobs[i].nplans = nplans;
         jobs[i].cand = cand;
         // INTERLEAVED, not one contiguous block per thread. With blocks, a run
         // stopped by its time budget left an unscanned tail inside every block,
@@ -1088,15 +1157,15 @@ int main(int argc, char **argv)
         sc += jobs[i].scanned; p1 += jobs[i].pass1; p2 += jobs[i].pass2; ap += jobs[i].applies;
         cg += jobs[i].climgate; cd += jobs[i].climskip;
     }
-    if (q.rankTop > 0) {
+    if (q->rankTop > 0) {
         // Leaderboard: the whole range was scanned, so these really are the
         // best seen -- not merely the first that cleared a threshold.
-        printf("--- leaderboard: top %d by %s ---\n\n", g_nrank, queryScoreLabel(&q));
+        printf("--- leaderboard: top %d by %s ---\n\n", g_nrank, queryScoreLabel(q));
         for (int i = 0; i < g_nrank; i++, shown++) {
             printf("SEED %" PRId64 "   %s = %d\n", (int64_t)g_rank[i].ws,
-                   queryScoreLabel(&q), g_rank[i].score);
-            printHit(&q, g_rank[i].ws, &g_rank[i].m, tsv);
-            if (g_json) jsonHit(&q, g_rank[i].ws, &g_rank[i].m, 1, g_rank[i].score);
+                   queryScoreLabel(q), g_rank[i].score);
+            printHit(q, g_rank[i].ws, &g_rank[i].m, tsv);
+            if (g_json) jsonHit(q, g_rank[i].ws, &g_rank[i].m, 1, g_rank[i].score);
         }
     } else {
         // Stream mode already printed each hit as it was found; printing them
@@ -1104,15 +1173,15 @@ int main(int argc, char **argv)
         for (int i = 0; i < nthreads && shown < MAX_HITS; i++)
             for (int k = 0; k < jobs[i].nhits && shown < MAX_HITS; k++, shown++) {
                 Hit *h = &jobs[i].hits[k];
-                if (g_stream && !g_hitstream) { writeTsv(&q, h->ws, &h->m, tsv); continue; }
+                if (g_stream && !g_hitstream) { writeTsv(h->q, h->ws, &h->m, tsv); continue; }
                 printf("SEED %" PRId64 "\n", (int64_t)h->ws);
-                printHit(&q, h->ws, &h->m, tsv);
-                if (g_json) jsonHit(&q, h->ws, &h->m, 0, 0);
+                printHit(h->q, h->ws, &h->m, tsv);
+                if (g_json) jsonHit(h->q, h->ws, &h->m, 0, 0);
             }
     }
 
     double r1 = 100.0 * p1 / (sc ? sc : 1);
-    int wholeSeed = (q.ngeom == 0);
+    int wholeSeed = anyWholeSeed(plans, nplans);
     printf("--- funnel ---\n");
     // Without this line a budgeted run is indistinguishable from a tiny range,
     // and "best of N seeds" would quietly mean a different N than requested.

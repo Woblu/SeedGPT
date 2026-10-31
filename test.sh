@@ -1717,6 +1717,64 @@ kill "$ruipid" 2>/dev/null; wait "$ruipid" 2>/dev/null
   && ok "server refuses cross-origin, non-JSON and foreign-Host requests" \
   || bad "server request gate" "json=$c_ok text=$c_txt origin=$c_org host=$c_hst (want 200/403/403/403)"
 
+# ---------------------------------------------------------------- any groups
+section "any groups (OR)"
+# The whole claim in one check: over the same range, an "any" search finds
+# exactly the union of its alternatives run alone. Compared on the lower 48 bits,
+# because which sister world is reported first depends on what is being tested.
+ANY_A='{"id":"a","structure":"mansion","within":700}'
+ANY_B='{"id":"b","structure":"monument","within":256}'
+ANY_V='{"id":"v","structure":"village","within":2500}'
+any_hits() {
+  printf '%s' "$1" > /tmp/sc_test/any.json
+  FIND_HITSTREAM=1 ./build/find.exe /tmp/sc_test/any.json 15000 4 2>/dev/null \
+    | python -c "
+import re, sys
+print('\n'.join(sorted({str(int(m.group(1)) & ((1 << 48) - 1)) for m in re.finditer(r'^HIT (-?\d+)', sys.stdin.read(), re.M)})))"
+}
+any_hits "{\"version\":\"1.21\",\"conditions\":[$ANY_V,$ANY_A]}" > /tmp/sc_test/any_a.txt
+any_hits "{\"version\":\"1.21\",\"conditions\":[$ANY_V,$ANY_B]}" > /tmp/sc_test/any_b.txt
+any_hits "{\"version\":\"1.21\",\"conditions\":[$ANY_V,{\"id\":\"g\",\"any\":[$ANY_A,$ANY_B]}]}" > /tmp/sc_test/any_u.txt
+cat /tmp/sc_test/any_a.txt /tmp/sc_test/any_b.txt | sort -u > /tmp/sc_test/any_want.txt
+sort -u /tmp/sc_test/any_u.txt > /tmp/sc_test/any_got.txt
+any_n=$(wc -l < /tmp/sc_test/any_got.txt | tr -d ' ')
+[ -s /tmp/sc_test/any_a.txt ] && [ -s /tmp/sc_test/any_b.txt ] && diff -q /tmp/sc_test/any_want.txt /tmp/sc_test/any_got.txt >/dev/null \
+  && ok "an any search finds exactly the union of its alternatives ($any_n seeds)" \
+  || bad "any is not the union" "$(diff /tmp/sc_test/any_want.txt /tmp/sc_test/any_got.txt | head -4)"
+
+# A hit reports the alternative that held, with nothing from the one that did not.
+printf '%s' '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"a","structure":"mansion","within":700},{"id":"b","structure":"monument","within":256}]}]}' > /tmp/sc_test/any.json
+any_cols=$(FIND_TSV=/tmp/sc_test/any.tsv ./build/find.exe /tmp/sc_test/any.json 3000 4 >/dev/null 2>&1; cut -f2 /tmp/sc_test/any.tsv | sort -u | tr '\n' ' ')
+[ -s /tmp/sc_test/any.tsv ] && [ "$(awk -F'\t' '{print NF}' /tmp/sc_test/any.tsv | sort -u)" = 4 ] \
+  && ok "each hit reports only the alternative that held ($any_cols)" \
+  || bad "any hit output" "$(head -2 /tmp/sc_test/any.tsv)"
+
+# Asking about one seed takes the same route as searching.
+any_seed=$(cut -f1 /tmp/sc_test/any.tsv | head -1)
+./build/find.exe /tmp/sc_test/any.json --seed "$any_seed" 2>&1 | grep -q '^YES' \
+  && ok "find --seed honours any groups" || bad "find --seed with any" "seed=$any_seed"
+
+any_refuse() {
+  printf '%s' "$2" > /tmp/sc_test/any.json
+  ./build/find.exe /tmp/sc_test/any.json 10 1 2>&1 | grep -q "$3" \
+    && ok "refused: $1" || bad "not refused: $1" "$(./build/find.exe /tmp/sc_test/any.json 10 1 2>&1 | tail -2)"
+}
+any_refuse "measuring from a group member" \
+  '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"a","structure":"village","within":500}]},{"id":"x","biome":"forest","of":"a","within":100}]}' \
+  'inside an "any" group'
+any_refuse "a leaderboard over a group" \
+  '{"version":"1.21","rank":{"of":"a"},"conditions":[{"id":"g","any":[{"id":"a","structure":"village","within":500},{"id":"b","structure":"igloo","within":500}]}]}' \
+  'cannot use'
+any_refuse "nested groups" \
+  '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"h","any":[{"id":"a","structure":"village","within":500}]}]}]}' \
+  'cannot be nested'
+any_refuse "a key on the group itself" \
+  '{"version":"1.21","conditions":[{"id":"g","within":100,"any":[{"id":"a","structure":"village","within":500}]}]}' \
+  'put "within" on'
+any_refuse "more combinations than one search takes" \
+  '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"a","structure":"village"},{"id":"b","structure":"igloo"},{"id":"c","structure":"mansion"},{"id":"d","structure":"monument"},{"id":"e","structure":"shipwreck"}]},{"id":"h","any":[{"id":"f","biome":"forest"},{"id":"i","biome":"plains"},{"id":"j","biome":"desert"},{"id":"k","biome":"jungle"}]}]}' \
+  'too many alternatives'
+
 # ---------------------------------------------------------------- summary
 section "summary"
 printf '\n\033[1m%d passed, %d skipped, %d failed\033[0m (%ss total)\n' \

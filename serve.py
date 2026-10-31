@@ -298,8 +298,11 @@ def drop_query(path):
 # silently dropping information.
 
 def parse_plan(out: str) -> dict:
+    """The plan find printed. An "any" search prints one per alternative, so a
+    condition they share appears several times; it is still one condition."""
     plan = {"pass1": [], "pass2": [], "conditions": []}
     section = None
+    seen = set()
     for line in out.splitlines():
         s = line.strip()
         if s.startswith("pass 1"):
@@ -314,10 +317,13 @@ def parse_plan(out: str) -> dict:
             continue
         m = re.match(r"^\[(\w+)\]\s+(.*)$", s)
         if m:
-            plan["conditions"].append({"id": m.group(1), "desc": m.group(2)})
+            if m.group(1) not in seen:
+                seen.add(m.group(1))
+                plan["conditions"].append({"id": m.group(1), "desc": m.group(2)})
             continue
         m = re.match(r"^\d+\.\s+(.*?)\s+~([\d.]+) ns$", s)
-        if m and section:
+        if m and section and (section, m.group(1)) not in seen:
+            seen.add((section, m.group(1)))
             plan[section].append({"desc": m.group(1).strip(), "ns": float(m.group(2))})
     return plan
 
@@ -360,7 +366,7 @@ def parse_notes(out: str) -> list:
             cur.append(line.strip())
         elif cur is not None:
             cur = None
-    return [" ".join(n) for n in notes]
+    return list(dict.fromkeys(" ".join(n) for n in notes))
 
 
 def parse_seeds(out: str) -> list:
