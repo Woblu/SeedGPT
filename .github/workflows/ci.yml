@@ -49,5 +49,7 @@ jobs:
         run: ./build.sh all
       - name: same worlds as every other platform
         run: python tests/golden.py
+      - name: the offline prompt
+        run: python tests/test_nlparse.py
       - name: test suite
         run: ./test.sh

@@ -129,7 +129,7 @@ int main(int argc, char **argv)
     if (json) {
         // Names are cubiomes identifiers ([a-z_]), so no escaping is needed.
         printf("{\"seed\":\"%" PRId64 "\",\"version\":\"%s\",\"structure_seed\":\"%" PRIu64 "\",",
-               (int64_t)seed, mc2str(mc), seed & ((1ULL << 48) - 1));
+               (int64_t)seed, mc2str(mc), (uint64_t)(seed & ((1ULL << 48) - 1)));
         printf("\"spawn\":{\"x\":%d,\"z\":%d,\"biome\":\"%s\"},\"radius\":%d,\"structures\":[",
                spawn.x, spawn.z, biome2str(mc, spawnBiome), radius);
         for (int j = 0; j < nf; j++) {
