@@ -1,0 +1,10 @@
+name: Idea
+description: Something you would like to be able to search for or do
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like to do?
+      description: Describe what you are trying to find or do, rather than how it should work.
+    validations:
+      required: true

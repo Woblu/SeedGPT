@@ -5,6 +5,11 @@ it builds also contain the following, each under the MIT license. None of it
 is stored in this repository: `setup.sh` clones the engine (which carries the
 other two) at a pinned commit, and `patches/` holds small changes to it.
 
+The downloads on the releases page also contain a private copy of Python, from
+[python-build-standalone](https://github.com/astral-sh/python-build-standalone),
+in the `python` folder. Python is under the Python Software Foundation License,
+and its license and those of the libraries it includes are in that folder.
+
 Nothing here is GPL. cubiomes-viewer (GPL-3.0) is deliberately not used, and
 `.gitignore` keeps its sources out. Minecraft itself is not redistributed: the
 tier-2 backends compile against Mojang's jars fetched by Gradle at build time,

@@ -1,0 +1,38 @@
+name: Something is wrong
+description: A wrong result, a crash, or something that does not work
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you search for, what did you expect, and what did you get?
+    validations:
+      required: true
+  - type: input
+    id: seed
+    attributes:
+      label: Seed
+      description: For a wrong result, the seed and coordinates.
+  - type: input
+    id: mc
+    attributes:
+      label: Minecraft version
+      description: The version you created the world on, such as 1.21.4 or 26.2.
+  - type: input
+    id: search
+    attributes:
+      label: Search
+      description: Press share on the result and paste the link, or describe the search.
+  - type: input
+    id: version
+    attributes:
+      label: Seedsmith version
+      description: Under Settings, in the About section.
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - Windows
+        - macOS
+        - Linux

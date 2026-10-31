@@ -1,0 +1,1538 @@
+# Seedsmith reference
+
+The full manual: every condition, how the search works, how far each result can
+be trusted, and how to run it from source. To get started, see the
+[README](../README.md). For a shorter account of what can go wrong, see
+[Accuracy](accuracy.md).
+
+Seed *finding* searches for a seed that **has** the features you describe. Seed
+*cracking* recovers the seed of a world you have data from. This is a finder, so
+**the Minecraft version is an input, not an output**: a finder cannot infer a
+version it was told to generate for.
+
+## Build
+
+```sh
+./setup.sh                 # clone + pin the engine, apply patches/ (first time only)
+./build.sh all             # library + every tool in tools/ -> build/*.exe
+./test.sh --quick          # most of the suite, without the slow solver section
+./test.sh                  # everything: about 8 min on 16 threads, 20 on 4
+```
+
+Requirements:
+
+| | needed for |
+|---|---|
+| `clang`, `git`, `bash` | the engine and every tool. No `make`/`ninja`. On Windows, Git Bash. |
+| Python 3 | the web UI (`serve.py`, stdlib only) and the tier-2/3 scripts |
+| JDK 17+ | the cross-validation in `test.sh` (`tools/XVal.java`) |
+| JDK 21 | the 1.21.1 real-worldgen backend (`tier2-outpost/`) |
+| JDK 17 | the 1.16.5 backend and server (`tier2/`, `tier3-java/`) |
+
+**Platforms.** Windows, Linux and macOS, on x86-64 and ARM. The C code is portable
+through `src/platform.h` (Win32 threads, atomics and clocks on Windows, pthreads
+and `clock_gettime` elsewhere). `.github/workflows/ci.yml` builds and tests all of
+them, and `tests/golden.py` checks that each one generates identical worlds, down
+to the bytes of a rendered map. Binaries are named `*.exe` on every platform so
+every script finds them by one name.
+
+`./build.sh` records its compiler flags and rebuilds everything when they
+change. It compiles with `-ffp-contract=off`: Java never fuses `a*b+c` into one
+rounding, and with `-march=native` clang did, in 393 places in the noise code —
+enough to flip a biome or a block that sits on a threshold. `MARCH=x86-64-v2
+./build.sh all` builds binaries for a different machine, and `./package.sh` turns
+a build into the download a player gets.
+
+`setup.sh` pins cubiomes at a specific commit (`b12a532`, MC 26.2) rather than
+tracking `main`. Engine currency is the whole reason this project uses
+`xpple/cubiomes`, so the version it generates against should change on purpose —
+bump the pin, then re-run `./test.sh`.
+
+## Run
+
+### Web UI
+
+```sh
+python serve.py        # opens http://127.0.0.1:8777
+```
+
+The main screen is a single prompt box: **describe the world you want** in plain
+English and press Enter. Asking replaces what came before, and a **stop** button
+sits beside the live scan, which kills the search process itself. While it
+searches, the **seeds it's testing scroll past live**; matches appear below, and
+**every coordinate in a result is clickable**: it opens the **biome map** centred
+on that exact spot, in that structure's own dimension. The map covers **overworld,
+nether and end**, with structures marked and spawn crosshaired, zoomable from 200
+to 20,000 blocks, and switching to the nether divides the coordinates by 8 the way
+a portal would. It binds to loopback only: the search is a native binary, so this
+cannot be a hosted page, and the server exists to bridge the browser to
+`build/find.exe`.
+
+**Build** opens the manual builder, where conditions are put together by hand.
+The join between two conditions switches between needing both and accepting either.
+
+#### The prompt box works without an AI key
+
+`nlparse.py` reads common requests on this machine: structures, biomes, ores,
+chest loot, distances, "near spawn", "no ocean", "this or that". Whatever it cannot
+read comes back to you rather than being dropped, because a search for half of what
+you asked looks like an answer to all of it.
+
+For anything more involved, add a key under **⚙ Settings**. A free Gemini key comes
+from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), and it is
+stored only in your browser. To keep it out of the browser, set `GEMINI_API_KEY`
+before starting the server.
+
+Any OpenAI-compatible provider works too (Groq, OpenAI, OpenRouter, DeepSeek, a
+local Ollama): choose it in settings and give a base URL and model. From the
+environment that is `AI_API_KEY` **together with** `AI_API_BASE`. An environment
+key is only ever sent to the environment's base URL, never to a URL a request
+names, because any web page can send requests to a local server.
+
+#### The local server only answers this page
+
+`serve.py` binds to 127.0.0.1, which keeps other machines out — but not other
+*web pages*: any site open in your browser can send requests to 127.0.0.1. So
+the API refuses requests whose `Host` is not this server, whose `Origin` or
+`Sec-Fetch-Site` is another site, or whose body is not JSON. curl and the UI
+pass untouched. `SEED_UI_PORT` changes the port; `SEED_UI_NO_BROWSER=1` stops it
+opening a tab.
+
+Structures and items show emoji icons out of the box; drop your own PNGs into
+[`assets/`](../assets/README.md) to replace them (no Mojang textures are bundled).
+
+While a search runs, a progress line shows seeds scanned, elapsed time, rate,
+time left and how many were found, and **each seed appears the moment it is
+found**. **Stop keeps them.** A search with no time budget of its own stops
+after about 2½ minutes and says so, with a **continue with the next seeds**
+button that resumes exactly where it stopped (nothing scanned twice, nothing
+skipped). Every result starts with what was understood — "Java 26.2 · looking
+for: Mansion ≤300 from origin · Village ≤400 from mansion" — with edit,
+estimate and share buttons, and the edition and version are always shown under
+the prompt. Coordinates are buttons: they open the map there, nether and end
+rows are tagged (a nether row also gives the overworld spot), and **/tp**
+copies a teleport that works from any dimension (`/execute in …`).
+
+Conveniences for real use:
+
+- **Check my seeds** (Build drawer): paste seeds you already have — a friend's
+  world, a server, another finder's list, up to 100,000 — and see which of them
+  have every condition, with full result rows, and why the others fail.
+- **The map** marks landmarks (and strongholds) as buttons: click one for its
+  coordinates, a /tp and "centre here"; an "in view" row counts each type. It
+  marks only structures that really generate — the same gate as a search. A
+  drag or zoom moves the current picture at once and swaps in the new render
+  when it lands (a few hundred milliseconds: renders are multi-threaded).
+- **Describe** shows a seed as a table: spawn, then every structure type nearest
+  first, each with map, copy and /tp, the biome, and whether a ruined portal is
+  buried.
+- **History** re-runs the query a prompt produced, exactly and without another
+  AI call.
+- **Share** (on every result) copies a link with the query encoded in the URL
+  hash — the *exact* query, including fields the builder cannot show. Opening it
+  on any local instance rebuilds it — the server is loopback-only, so you share
+  the *query*, not a hosted page.
+- **Copy as record** writes a find up the way seedfinding records are listed:
+  seed, edition, the version searched (and that others were not checked), the
+  value for ranked runs, every coordinate with its /tp, and a Finder line.
+- **Saved searches** keeps named queries in your browser's local storage;
+  click one to reload it.
+- **Export** on a result set writes the seeds and every coordinate to **CSV**
+  or **JSON** (or copies CSV to the clipboard) — one flat row per structure,
+  structure cluster, biome, chest, ore count, slime cluster, biome area, terrain
+  height, spawn, and portal.
+
+### Command line
+
+Write a query as JSON (`queries/` has examples) and run it:
+
+```sh
+./build/find.exe queries/mansion-village.json 3000000 16
+#                <query>                      <seeds>  <threads>
+
+./build/find.exe queries/mansion-village.json --explain    # will this ever finish?
+./build/find.exe queries/mansion-village.json --bias       # is scanning from 0 representative?
+./build/find.exe queries/mansion-village.json --seed glacier   # does THIS seed have it?
+./build/find.exe queries/mansion-village.json --seeds my-seeds.txt 16   # which of these do?
+
+./build/describe.exe <seed> 26.2 4000 - json      # what is in this seed, as JSON
+./build/map.exe <seed> 26.2 3000 64 markers 0 0 -  # the landmarks a map marks, as JSON
+```
+
+Environment knobs: `FIND_SECONDS` (time budget), `FIND_OFFSET` (where to start —
+every run prints `covered : indices a..b -- resume with FIND_OFFSET=b`, a
+gap-free resume point, because threads take interleaved indices),
+`FIND_UPPERS` (sister seeds tried per structure seed, default 64, visited as a
+permutation so N tries are N different worlds), `FIND_STREAM` (print each hit
+as it is found), `FIND_JSON` (also print each hit as one `@JSON {...}` line,
+built from the engine's result structs — what the web server reads),
+`FIND_TSV` (machine-readable hits for the verifiers). Several machines can
+split one range by giving each its own `FIND_OFFSET` block. `MAP_THREADS` sets
+how many threads a map render uses (default: every core, at most 8).
+
+```sh
+./build/popinvert.exe forward 1.16 37 -12 <world seed>   # a chunk's population seed
+./build/popinvert.exe 1.16 37 -12 <population seed>      # ...and back to structure seeds
+```
+
+`popinvert` lists every 48-bit structure seed that gives a chunk a population
+seed (the decoration RNG's seed: dungeons, ores, trees), for 1.8–1.17 — from
+1.18 that seed comes from all 64 bits through Xoroshiro and does not reverse.
+Add a salt (`index + 10000 * step` from 1.13) to start from a decorator seed.
+
+`--seeds FILE` reads one seed per line (numbers or text; blank lines and
+`#comments` skipped), checks them on every thread, and prints per seed an
+`@CHECK {...}` verdict followed, for a yes, by the hit.
+
+**Seeds are read the way Minecraft reads them.** If the text is a valid signed
+64-bit number it is that seed; otherwise the seed is the text's Java
+`String.hashCode()` — so `glacier` is 108181935, and `18446744073709551615`,
+which overflows a long, is *hashed* (1823116549), not clamped. `--seed`, the
+UI's describe/map/check and `/api/check` all follow this rule.
+
+Query format:
+
+```json
+{
+  "version": "1.21",
+  "conditions": [
+    { "id": "mansion", "structure": "mansion", "within": 300, "of": "origin"  },
+    { "id": "village", "structure": "village", "within": 400, "of": "mansion" },
+    { "id": "jungle",  "biome":     "jungle",  "within": 400, "of": "mansion" }
+  ]
+}
+```
+
+`of` refers to another condition's `id` (coordinates are measured from that
+condition's matched position), or one of two **different** reference points:
+
+| `of` | means | cost |
+|---|---|---|
+| `"origin"` (default) | the point (0, 0) | cheap — pass 1 filters on it directly |
+| `"spawn"` | the actual world spawn | slower — see below |
+
+**These are not the same place.** Measured over 400 seeds, the median world
+spawn is 22 blocks from origin, but p90 is 520 and the maximum nearly 1000 —
+**47% of seeds spawn further than 35 blocks from origin**. A query for
+"ruined portal within 35 of spawn" that quietly measured from origin would
+return seeds where you land 300 blocks from the portal. Both references are now
+supported explicitly and results state which one each distance is measured from.
+
+Spawn is a 64-bit, biome-derived quantity, so pass 1 cannot filter on it: a
+spawn-relative condition widens the pass-1 radius by a 1100-block margin (a
+conservative over-admit) and pass 2 then recomputes the match around the true
+spawn exactly. That turns a 2%-survival query into ~96%, so `origin` is the
+default and `spawn` is an informed choice. The End and Nether have no world
+spawn — using `"spawn"` there is rejected rather than silently misinterpreted.
+
+Forward references are fine — the planner resolves and orders them. A
+condition measured from a parent whose position is only settled in pass 2 (a
+spawn-relative structure, a cluster, a biome, any scan) runs after it and is
+measured from where it finally landed.
+
+### Absence: `"not": true`
+
+```json
+{ "id": "o",  "biome": "ocean", "family": true, "within": 300, "of": "spawn", "not": true }
+{ "id": "nv", "structure": "village", "within": 600, "of": "mansion", "not": true }
+```
+
+The condition holds when there is **none** in range. It keeps the rule that a
+reported seed is never wrong:
+
+- a negated structure is checked against **every** placement attempt in range,
+  through the same gate as a positive match (exclusion zones, biome, 1.18
+  terrain floor) — so an attempt the game would not build does not count
+  against the seed, and pass 1 cannot reject on absence;
+- a negated biome scans **every 4-block cell**, because a coarse lattice can step
+  over a small patch and "none found" would then be a false positive. Keep its
+  radius to a few hundred blocks;
+- nothing can be measured from it, and it takes no count or variant flags.
+
+### Either: `"any"`
+
+A group takes the place of a condition, and holds if any one of its members does.
+Everything outside a group must hold as usual.
+
+```json
+{"version": "1.21", "conditions": [
+  {"id": "v", "structure": "village", "within": 400},
+  {"id": "g", "any": [
+    {"id": "a", "structure": "mansion", "within": 1500},
+    {"id": "b", "structure": "monument", "within": 1500}]}]}
+```
+
+A group is compiled away (`src/anyof.h`): this query *is* two ordinary queries, each
+planned as if written alone, and a seed matches if either does. So every existing
+check applies unchanged, and a hit reports the alternative that actually held.
+`test.sh` holds it to that: over one range, an `any` search finds exactly the union
+of its alternatives run separately.
+
+Groups multiply, so one search takes at most 16 combinations. Groups cannot be
+nested, nothing may be measured from a group member (it only exists in some
+alternatives), and a leaderboard cannot use one, since it ranks a single condition.
+The cluster solver is also skipped, so an `any` search always scans.
+
+### Strict input
+
+A key the parser does not know is reported (`NOTE: condition "p": unknown key
+"radius" was ignored`) rather than silently skipped. A structure `within` above
+100,000 or a biome `within` above 10,000 is an error rather than a search that
+never returns — for a far-away search, put the radius on `"of": "<x>,<z>"`.
+
+## Why the planner exists
+
+A structure geometry check costs **~9 ns**. A biome check costs **~31 µs**. That
+**~3,650× ratio** decides everything: a full 2^48 sweep is ~3–4 days with
+structure filters and ~17.8 years with biome filters.
+
+cubiomes does **no** cost-based ordering — it evaluates conditions in whatever
+order you hand it. So ordering is *our* job, and natural language produces almost
+exactly the wrong order ("a jungle village near a mansion" states the expensive
+condition first).
+
+Every structure condition therefore splits into two tasks:
+
+| task | pass | needs | cost |
+|---|---|---|---|
+| geometry (`getStructurePos`) | 1 | low 48 bits only | ~9 ns |
+| viability (`isViableStructurePos`) | 2 | full 64-bit seed + biome gen | ~42 µs |
+
+Pass 1 runs first and rejects most seeds for ~9 ns. Because structure layout
+depends only on the low 48 bits, **one pass-1 rejection kills all 65,536 world
+seeds sharing that structure seed**.
+
+`find` prints the plan it chose before searching, so the ordering is auditable:
+
+```
+plan (reordered by cost, NOT by the order you wrote them)
+  pass 1  48-bit geometry -- no biome generator exists yet
+    1. mansion within 500 of spawn                ~29 ns
+  pass 2  64-bit, biome-dependent -- only for pass-1 survivors
+    1. mansion within 500 of spawn                ~42000 ns
+    2. jungle within 400 of mansion               ~419175 ns
+```
+
+That query was *written* biome-first (`jungle`, then `mansion`, with `jungle`
+referencing a condition declared after it). Natural language states the
+expensive condition first; the planner inverts it. The AI prompt therefore tells
+the model **not** to worry about ordering — that decision belongs to the planner,
+which has the measured costs.
+
+## Estimate before searching
+
+`--explain` samples the query and predicts the funnel in a couple of seconds,
+rather than discovering after an hour that it will never finish:
+
+```
+phase A  2000000 structure seeds, geometry only, 0.02s
+  pass 1 survival : 2.32625%   (46525/2000000)
+phase B  39936 upper-bit probes across 512 survivors (78 each), 0.14s
+  pass 2 survival : 0.05759%   (23/39936)  per upper-bit variant
+
+model (mirrors the real searcher: cap 64 upper probes, stop at first hit)
+  structure seeds per hit       : 1188
+  predicted search rate         : 181 k seeds/s on 16 threads
+
+time to first hit : 6 ms
+VERDICT: very common. Instant results.
+```
+
+The estimator is calibrated against real runs — on the query above it predicted
+`181 k seeds/s` and `62.9` upper probes per survivor; the real search measured
+`190 k seeds/s` and `62.8`. On a rare query it predicted 0.0370% pass-1 survival
+against an actual 0.0360%. Timing estimates run ~2x conservative.
+
+Two details worth knowing:
+
+- Samples are drawn **uniformly across 2^48** via splitmix64, not sequentially
+  from 0. `--bias` checks whether scanning from 0 (what the searcher actually
+  does) is representative — currently 1.2 sigma, i.e. it is.
+- Phase A samples geometry only (~9 ns/seed) so it can afford a huge N and still
+  measure a tiny pass-1 rate; phase B then spends a fixed probe budget on the
+  survivors it kept, so pass-2 gets a usable sample size even when pass-1 is
+  minuscule. A flat "N probes per survivor" gives 8 probes when 1 seed survives.
+
+## Read the funnel
+
+The **pass-1 survival rate** is the number that matters:
+
+```
+pass1 (48b): 69957  (2.3319% survive)
+```
+
+If it approaches 100%, the query is too loose to filter and every seed pays full
+biome cost — throughput collapses from ~116M/s to ~32k/s/core. `find` warns when
+this happens. Loose proximity constraints are weak filters: "mansion within 2000
+blocks" is true of nearly every seed, because mansion regions are only 1280
+blocks wide.
+
+## Leaderboard: records, not matches
+
+Every condition above is a **filter**: pass or fail, and the search stops once it
+has enough hits. That answers "find me a seed with a tall mountain". It cannot
+answer "find me the *tallest* mountain", which is a different question — and the
+question the famous record hunts (Minecraft@Home's tallest cactus, biggest ore
+vein) actually ask.
+
+Add a `rank` block next to `conditions` and the finder becomes an optimiser:
+
+```json
+{
+  "version": "1.21",
+  "conditions": [ { "id": "pk", "height": 0, "within": 200, "of": "origin" } ],
+  "rank": { "of": "pk", "by": "height", "top": 10 }
+}
+```
+
+```
+ranking the top 10 by peak Y over 2000000 structure seeds (the full range is scanned -- no early stop)
+
+--- leaderboard: top 10 by peak Y ---
+
+SEED -6648438949905690143   peak Y = 251
+   peak           x=  -184 z=    72   ~251 peak within 200
+```
+
+`by` is optional — `auto` takes the ranked condition's own natural measurement,
+which is almost always what you want. The explicit metrics are `height`,
+`relief`, `vein`, `count`, `pct`, `size`, and `area` (overlap intersection).
+Rankable conditions are the ones that *measure* something: terrain height, ore,
+slime chunks, biome area, island, end-portal eyes, structure clusters, geode
+size, and overlap.
+
+### Budget it by time, not by seeds
+
+A seed count is a poor way to say "keep looking while I make coffee" -- how far
+a range gets you depends entirely on how expensive the query is, and the
+interesting queries are the slow ones. So a search can be given a **time
+budget** instead: the UI's "search for (minutes)" box, or `FIND_SECONDS` on
+`find.exe` directly. The scan stops when the clock runs out and reports
+whatever it found, and both the funnel and the UI say the budget expired --
+because "best of N seeds" has to name the N actually reached, not the one that
+was requested. Leave the seed count huge and let the clock decide. Asking for it
+in plain English works too ("search for ten minutes", "scan 50 million seeds").
+
+Two things to know, because they change how you write the query:
+
+- **The whole range is scanned.** There is no early stop, because "the best of
+  the first twelve hits" is not a record. The range therefore sets the runtime
+  directly, and "best" means best *of exactly that many seeds* — the header line
+  says so, and you should quote it alongside any result. A query with **no
+  structure conditions** (terrain, ore, slime, biome area) has no 48-bit
+  geometry to filter on, so the finder walks **world seeds** directly instead of
+  structure seeds: one seed scanned is then one world evaluated, spread across
+  the whole 64-bit space by a bijection rather than counting up from zero. The
+  funnel says which mode ran.
+- **Set the ranked condition's threshold LOW.** `{"height": 0}` ranked by height
+  beats `{"height": 200}` ranked by height: the threshold still filters, so a
+  tight one just starves the leaderboard of candidates.
+
+Ranked results carry their score into the UI and the CSV/JSON export, and the
+score is reproducible — the suite re-derives the top entry's value with
+`tools/checkheight` and requires an exact match.
+
+## Verification
+
+Nothing here is trusted without an independent check.
+
+```sh
+./build.sh tools/xval.c && ./build/xval.exe   # cubiomes
+cd tools && javac XVal.java && java XVal      # independent JDK reference
+```
+
+`tools/XVal.java` reimplements structure placement from the JDK spec using real
+`java.util.Random`, with salts sourced from the Minecraft Wiki (**not** read from
+cubiomes — that would be circular). Current status: **3,881/3,881 positions
+match**, across all three dimensions, linear and triangular spread, negative
+seeds/regions, and MC 26.2. It also replicates the per-site gates, not just
+positions: bastion's `chunkGenerateRnd` → `nextInt(5) >= 2`, and end city's
+1008-block origin exclusion.
+
+`tools/Verify.java` re-checks individual reported seeds:
+
+```sh
+FIND_TSV=/tmp/hits.tsv ./build/find.exe queries/mansion-village.json
+while IFS=$'\t' read -r s a mx mz b vx vz; do
+  java -cp /tmp/vc Verify "$s" "$mx" "$mz" "$vx" "$vz"
+done < /tmp/hits.tsv
+```
+
+`tools/biomecheck.c` shows what "viable" actually resolved to for a seed.
+
+`./test.sh` runs the whole thing as a regression suite (~8 min; `--quick` skips
+the MITM solver section, ~3 min): the cross-validation above, planner reordering
+*and* cost-based ordering, error paths, same-type distinctness, nether/end
+queries including the end-city exclusion zone, biome-precision plumbing, a real
+search whose every seed is re-verified under the JDK reference, the
+loose-query warning, estimator calibration, `describe` round-tripping a found
+seed, the UI server's endpoints and its request gate, the hand-rolled PNG
+encoder, and a section of regressions for every wrong answer found in review.
+It builds every tool and fails on compiler warnings. Skipped checks are counted
+as skipped, never as passed. Each assertion has been confirmed to fail when the
+behaviour it checks is broken — a green run means something.
+
+**How independent is each check?** Be precise about this, because it is easy to
+overclaim:
+
+- **Independent:** `XVal.java`/`Verify.java` (the JDK and the Minecraft Wiki, not
+  cubiomes) and the tier-2/tier-3 checks against Minecraft's own generator and
+  real servers.
+- **Same engine, separate path:** `checkloot`, `checkeyes`, `checkore`,
+  `checkportal`, `checkvariant`, `checkrpchest`, `checkbiome` re-derive a result
+  through a different code path than the search, which catches planner and
+  plumbing bugs — but they call the same cubiomes functions (and `checkore` the
+  same `oreScan`), so an engine bug passes both. That is exactly how 1.18+ loot
+  was computed for the wrong world for months while `checkloot` agreed with it:
+  both truncated the seed. Treat these as consistency checks.
+
+### The last resort: a real world (tier 3)
+
+Everything above checks our code against *another implementation*. Some claims
+have no second implementation to check against — anything Minecraft places
+*after* terrain, because features need a `WorldGenLevel` the headless backend
+cannot build. For those, `tier3-java/` runs an actual 1.21.1 server and reads
+blocks out of the world it generates.
+
+```sh
+python tier3-java/check_terrain.py 12345 40        # our heights vs the real world
+python tier3-java/check_cactus.py 12345 -2468 832 6
+python tier3-java/confirm_cactus.py <seed> <x> <z> <height>
+```
+
+`server.jar` is fetched from Mojang's own manifest and checksummed; it is never
+committed. Running it writes `eula=true`, which accepts Mojang's licence on that
+machine — a deliberate act, not a side effect.
+
+It is built around one trap: `/execute if block` on an unloaded chunk fails
+*exactly* like a block that is not there. Merging those is how earlier Bedrock
+work reached three separate false conclusions, so every probe is preceded by a
+positive control (y=−64 is bedrock in every overworld column) and answers
+"unknown" rather than "no".
+
+This is also what keeps the honest numbers honest. Our block-level heights are
+exact in about four columns out of five; the cactus simulation, which replays
+decoration RNG where one wrong column desynchronises a whole patch, lands at 79%
+of predicted columns exact and 98% of chunks exact on block count. So the search
+generates candidates and tier 3 confirms a record before it is claimed — the same
+split this project uses everywhere else.
+
+## Chest loot
+
+Search for a structure whose chests hold a rare item:
+
+```json
+{ "id": "chest",
+  "loot": { "structure": "desert_pyramid", "item": "diamond", "count": 1 },
+  "within": 3000 }
+```
+
+Supported structures: `desert_pyramid`, `jungle_temple`, `igloo`, `outpost`,
+`shipwreck`, `ruined_portal`, `fortress`, and `bastion`. The item list per structure is exposed at
+`/api/lootitems` and in the UI dropdown, so you can only ask for something that
+can actually appear there. `count` aggregates across every chest in an instance,
+and the search scans **all** instances within the radius — a farther pyramid
+with the diamond still counts. Only instances the game really builds are
+rolled (biome, outpost exclusion and the 1.18 terrain floor all apply), and a
+leaderboard ranked on loot takes the best chest in range, not the first.
+
+**From 1.18 a chest depends on all 64 bits of the seed.** The population seed
+that seeds each chest is built with Xoroshiro from the whole world seed, so two
+sister seeds with identical structures roll different chests. Until 2026-10-20
+the search (and `checkloot`, which agreed with it) rolled 1.18+ chests from the
+48-bit structure seed — the chests of a different world. Pre-1.18 is unaffected:
+Java's LCG drops the upper bits anyway.
+
+**Checked chest by chest on a real 1.21.1 server** (2026-10-21,
+`tier3-java/check_loot_seed.py`, world seed -7311924356716553218, above 2⁴⁸):
+a desert pyramid (4 chests), an outpost (1) and two shipwrecks (5) — every
+chest holds the `LootTableSeed` predicted from the full seed, at the predicted
+position, and the items the server rolls from it are the predicted items,
+enchantments included: 10/10. None held the old 48-bit prediction. Getting
+there took four more fixes, three of them in the loot library cubiomes carries
+(`patches/loot-fixups.patch`, `patches/structure-chest-positions.patch`):
+
+- **Ocean shipwrecks rolled with the beached salt.** From 1.18 the two are
+  separate structures with separate decoration indices, chosen by biome, and
+  the loot code passed no biome — which reads as "beached". Every ocean wreck's
+  chests were another world's; both chests of the ocean wreck checked were.
+- **Enchantments in early 1.21.x.** 1.21 tables draw `enchant_randomly` from
+  `#minecraft:on_random_loot`; the library served the first 1.21.x releases
+  (to 1.21.4, 1.21.5, 1.21.8 or 1.21.10 depending on the table) with 1.20
+  tables and the 1.20 list. A different enchantment,
+  and with a one-level enchantment a skipped level roll, so the rest of the
+  chest drifted (an emerald, not an enchanted golden apple).
+- **Goat horns** (outposts, 1.19+) draw one random number for their sound; the
+  library left it out, so everything after a horn drifted (two sentry trims
+  that were not there).
+- **Chest positions**: a desert pyramid's four seeds were paired with the wrong
+  chests for three of its four facings, and the outpost chest was reported one
+  block off. Counts were unaffected (they sum the structure); per-chest output
+  was not.
+
+Not yet checked on a server: jungle temples, igloos, fortresses, bastions, ruined
+portals (cross-checked against MCUtils/FeatureUtils only), versions other than
+1.21.1, and the 1.20-and-earlier `enchant_randomly` list — read from 1.20's
+code, a book there can roll mending and the curses, which the library's default
+list leaves out; that needs a 1.20 server to settle before it is changed.
+
+Rolling a chest is ~5 us, cheap next to the ~42 us structure viability check,
+so a loot search costs about the same as a plain structure search. What makes a
+specific item rare is the loot table, not the tool: a diamond in a desert
+pyramid is roughly 1 in a few hundred pyramids, which is why the default radius
+is small (a stray large radius rolls loot for thousands of instances per seed).
+
+### Ruined portals — computed, not enumerated
+
+The first five come straight from `getStructurePieces`. Ruined portals have **no**
+`getStructurePieces` chest case, so their single chest is computed directly
+([`src/loot.c`](../src/loot.c) `rpChest*`), and every step is pinned to an
+independent reference so it earns the same trust:
+
+- **Chest offset** per template (portal_1…10, giant_portal_1…3) from
+  KaptainWutax/FeatureUtils; its template **sizes** match cubiomes' own table
+  12/13 exactly (portal_5 differs only in Y, which doesn't affect the chest's
+  x/z), confirming the variant indexing lines up.
+- **World position** via Minecraft's template transform — verified **identical
+  to MCUtils' `BPos.transform` for all 104** variant/rotation/mirror cases.
+- **Loot seed** = the decoration seed at the chest's chunk, salt **40005** (equal
+  in cubiomes and FeatureUtils), with **no** pre-consumption — ruined portal's
+  `getSpecificCalls()` is null (unlike igloo, which discards a `nextLong`, or
+  desert pyramid, which draws a `nextInt(3)`; both cross-checked here).
+
+`tools/checkrpchest` re-derives the chest and loot independently, and the suite
+confirms every search result reproduces at the matched chest. (The buried/
+fail-to-generate caveat above still applies to the *portal* — but the chest
+contents, if it generates, are exact. Add `"surface": true` to a structure
+condition to skip the buried ones.)
+
+### Loot and threads
+
+cubiomes' loot contexts are **singletons** — `init_*()` returns `&staticContext`,
+so every worker thread shares one context per table and `generate_loot` mutates
+its RNG state and output buffer in place. Concurrent rolls therefore raced,
+which silently made loot counts depend on thread timing; a global lock around
+every roll fixed that by serialising all loot work. What a roll writes is small
+and all inside the struct (`prng_state`, `generated_items[27]`) while the tables
+it reads are constant, so `src/loot.c` now gives each thread a private copy of
+each context and rolls without a lock; only the first `init_*` call, which
+builds the shared tables, is serialised. A 16-thread search's chests re-roll
+identically single-threaded.
+
+### The nether pair
+
+Fortress and bastion were previously excluded, one for a crash and one because
+its counts did not reproduce. Both are now in, for different reasons.
+
+**Fortress — exact.** `getFortressPieces` documents its `n` argument as "the
+maximum size of the output list", stores it in `env->nmax`, and then never reads
+it: every piece is written at `env->list + *env->n` with no bound. That is not a
+rare overflow — over a 3.6-million-fortress sample the median fortress has ~130
+pieces and **84% have more than 64**, so the old array was overrun by most
+fortresses, not by an unlucky one (largest seen: 257 pieces, 96 chests).
+[`patches/fortress-piece-bound.patch`](../patches/fortress-piece-bound.patch) makes
+the engine honour the bound — returning `NULL` exactly as the existing collision
+path does, so generation unwinds instead of corrupting memory — and `setup.sh`
+applies it after pinning the upstream commit. With room to work in, the patch
+changes nothing: the same 180 000-fortress sample produces byte-identical piece
+counts before and after. The engine simulates the entire corridor/bridge graph,
+so **every** fortress chest is found and the counts are exact.
+
+**Bastion — a floor, stated as one.** cubiomes simulates only the starting piece
+of each of the four bastion types, i.e. the chests that *always* generate (2 for
+units, 1 for hoglin stable, 2 for treasure, 1 for bridge); the randomly
+assembled remainder is not modelled (`// TODO: simulate all pieces` upstream). So
+a bastion loot count is a **lower bound**: every hit is real and reproduces
+exactly, but a bastion whose only copy of the item sits in a later chest is
+missed. `lootCountIsLowerBound()` names that asymmetry rather than leaving it
+implicit, and the API description tells the planner to say so in its notes.
+
+The earlier "bastion loot did not reproduce" finding was the loot-context
+singleton race described above, not the piece list — the search ran threaded and
+the verifier did not. With the lock in place, 24 fortress and bastion instances
+pulled from a 32-thread search all re-derive exactly, single-threaded.
+
+Every supported structure has its loot re-derived from scratch in the test suite
+(`tools/checkloot`, `tools/checkrpchest`) — including a 236-piece fortress, to
+keep the buffer honest.
+
+## Ore density
+
+Find seeds rich in a material near a point:
+
+```json
+{ "id": "dia", "ore": "diamond", "count": 1400, "within": 64, "of": "origin" }
+```
+
+This counts **every ore block of that material at all depths** within the
+radius, deduplicated across the generation features that place it — a richness
+proxy, not the handful you would actually mine. cubiomes reproduces Minecraft's
+ore placement exactly (`getOreConfig` → `generateOres`), and matching on the
+*placed block* rather than a hardcoded feature list means "diamond" captures the
+regular, buried, large, and medium diamond features in whatever version you
+pick. Materials: `diamond`, `iron`, `gold`, `emerald`, `redstone`, `lapis`,
+`copper`, `coal` (overworld); `quartz`, `ancient_debris`, `nether_gold`
+(nether). `of` may be `origin`, `spawn`, or another condition's structure.
+
+It is the **most expensive** condition — a per-chunk cost over the whole search
+disc — so the planner always runs it last, only for seeds that already cleared
+the cheap filters. Radius is capped at 256 and defaults to 64; as the *only*
+condition it will crawl, so pair it with a structure. `tools/checkore` re-counts
+independently, and the test suite confirms every reported count reproduces
+exactly (`find` == `checkore`) and clears the requested threshold.
+
+### Veins, and ore you can actually see
+
+Two extra measurements turn ore density into a record hunt:
+
+```json
+{ "id": "dia", "ore": "diamond", "count": 1, "vein": 14, "within": 64 }
+{ "id": "dia", "ore": "diamond", "count": 150, "exposed": true, "within": 48 }
+```
+
+`"vein": N` requires at least **N blocks in one face-connected blob** — the vein
+you mine in a single sitting, rather than a scattered total across the disc.
+Placements that happen to overlap merge into one larger vein, which is where the
+big numbers come from. A 64-block disc typically holds ~1,500 diamond blocks in
+total but a largest vein of only ~10; 24+ is rare.
+
+`"exposed": true` counts only ore with a **non-solid neighbour in Minecraft's
+real block terrain** — ore sitting in a cave or ravine wall, not sealed in stone.
+It generates actual terrain columns for every chunk that holds the ore, so it is
+the slowest filter in the tool: 1.18+ overworld only, radius capped at 48, and
+worth pairing with something cheap. Two honest caveats: the terrain model is
+solid/not-solid, so a water- or lava-filled pocket counts as "open" the same as
+air; and a neighbour in the *next chunk* is treated as solid, which can miss an
+exposed block at a chunk border but never invents one.
+
+`tools/checkore <seed> <material> <version> <x> <z> <radius> [exposed]` reports
+both figures independently, and the suite checks that finder and checker agree
+and that the exposed count is always a subset of the total.
+
+## Structure overlap
+
+Two structures generating into the same ground — a ruined portal inside a
+village, a shipwreck through a monument:
+
+```json
+{ "id": "ov", "overlap": ["village", "ruined_portal"], "within": 2000, "pad": 0 }
+```
+
+`within` is how far from the reference the **pair** may be; how close the two
+structures are to *each other* is the footprint test, not a radius. `pad` adds
+slack in blocks for "practically touching". Both halves are biome-viability
+checked, so a pair where one structure would not generate is rejected.
+
+> ⚠️ **Footprints are nominal.** cubiomes models where a structure is *placed*
+> exactly, but not the full extent it assembles into (`getVariant` sizes cover
+> only the starting piece of a jigsaw structure, and nothing at all for several
+> others). The boxes used here are per-structure approximations — village 64×64,
+> ruined portal 16×16, ancient city 128×128, and so on — so **a hit is a strong
+> candidate for a real collision, not a proof**. Sprawling structures (village,
+> mineshaft, fortress) reach well past their nominal box. Load the seed and look.
+
+The suite checks that every reported pair really sits inside the summed
+footprints and that both halves independently confirm as viable
+(`tools/checkcluster` re-counts them from scratch).
+
+## Amethyst geodes
+
+```json
+{ "id": "g", "structure": "geode", "size": 4, "cracked": false, "within": 300 }
+```
+
+`size` is the geode's distribution-point count — **3 or 4**, with 4 the big one.
+`cracked` is the 95% draw that breaks a geode open, so `"cracked": true` barely
+filters anything and **`"cracked": false` is the interesting ask**: the 1-in-20
+sealed geode that is still intact when you find it. Both come from `getVariant`,
+which reads the same draws the game makes, so they are exact.
+
+Geodes are placed from the **chunk population seed**, not the region-based
+structure grid. On 1.18+ that seed is derived from all 64 bits, so a geode
+cannot be located in pass 1 (which only knows the lower 48) — the finder places
+it in pass 2 with the full world seed instead. Two consequences: nothing can be
+measured *from* a geode (`"of": "g"` is rejected rather than silently wrong), and
+`count` clusters are not supported for it. `tools/checkvariant <seed> geode
+<version> --at <x> <z>` re-reads size and crack independently.
+
+## Slime chunks
+
+Find a dense cluster of slime chunks near a point — the site for a slime farm:
+
+```json
+{ "id": "cl", "slime": 8, "within": 128, "of": "origin" }
+```
+
+This counts the slime chunks whose centre falls inside the disc and keeps the
+seed if that count is `>= slime`. A slime chunk is a **per-chunk RNG check on the
+world seed** (`isSlimeChunk`: mix the chunk coords into the seed → `setSeed` →
+`nextInt(10) == 0`), so the mechanic is **version-independent** — the condition
+carries across every MC version unchanged, and switching versions in the UI never
+drops it. `of` may be `origin`, `spawn`, or another condition's structure.
+
+A radius-128 disc holds ~200 chunks and averages ~20 slime, so ask for a tight
+cluster to find a farm-worthy spot. Radius is capped at 2048 and defaults to 128.
+It is a cheap pass-2 check (no biome generator needed), but as the *only*
+condition it still scans every seed, so pairing it with a structure narrows the
+field first. `tools/checkslime` re-derives the count from scratch, and the test
+suite confirms every reported count reproduces exactly (`find` == `checkslime`,
+origin- and spawn-relative) and clears the requested threshold.
+
+## Structure clusters
+
+A structure condition takes an optional `"count": N` to demand **several of that
+structure packed within the radius** — a triple village near spawn, a knot of
+witch huts, three outposts in a stretch:
+
+```json
+{ "id": "vils", "structure": "village", "count": 3, "within": 800, "of": "spawn" }
+```
+
+Pass 1 counts candidate positions geometrically (an over-admit, since biomes
+aren't generated yet); pass 2 re-counts, biome-viability checking each instance,
+and keeps the seed only if at least `count` survive. The reported position is the
+cluster's centroid; open the map to see the members. This form is **anchored to
+the reference** (origin/spawn/parent) — it finds clusters near a known point. A
+cluster can't be combined with a variant filter. `tools/checkcluster` re-counts
+from the same reference, and the test suite confirms every count reproduces
+exactly and clears the threshold.
+
+### Tight clusters (the "quad huts" search)
+
+Add `"spread": T` to demand that the instances be packed **within T blocks of
+each other**, located *anywhere* within `within` of the reference — the classic
+quad-witch-hut hunt, where four huts must share one despawn sphere:
+
+```json
+{ "id": "quad", "structure": "swamp_hut", "count": 4, "spread": 160, "within": 10000, "of": "origin" }
+```
+
+Here `within` is the **search reach**, not the cluster size. The finder sweeps a
+bounded region window (capped at 64 regions per side) and, anchoring on each
+structure instance, counts how many others fall within `spread`; a seed passes
+when some member has `count` neighbours (itself included) that close. The
+reported position is that **anchor member** — a real structure, not a centroid —
+which makes the result exactly re-checkable: `tools/checkcluster` counts viable
+instances within `spread` of it and must reproduce the number. Tight clusters are
+genuinely rare (four huts within 160 blocks is a many-tens-of-millions-of-seeds
+search), so expect a long scan; the cost scales with the search reach, so keep
+`within` only as large as you need.
+
+This is *not* an infinite-world scan — it examines a large area around the
+reference, which is what you actually want (a quad hut you can reach), not a
+cluster half a million blocks away.
+
+#### Solving for the cluster instead of scanning for it
+
+`tools/quad.c` solves the **first** structure's two constraints with
+`src/invert.c` and tests the other six — ~140× better than brute force, and
+still 4.9e11 seeds *per corner offset*, so a complete enumeration costs more the
+looser the spread. `tools/mitm.c` solves all eight at once
+([`meet-in-the-middle.md`](meet-in-the-middle.md)):
+
+```sh
+./build/mitm.exe 1.21 swamp_hut quad 15          # every quad base in 2^48
+./build/mitm.exe 1.21 swamp_hut --verify         # sound + complete, two-sided
+```
+
+**The planner uses it automatically.** A `spread` cluster condition on a
+solvable structure no longer walks seeds 0,1,2,… — `src/solve.c` hands `find` a
+list of seeds that already place the cluster, and the search spends its budget
+on those. Only the seed *source* changes: pass 1 still evaluates every
+candidate, so the solver decides what is **tried**, never what is a **hit**.
+`find` prints which path it took and why, and falls back to scanning when a
+cluster is loose enough that scanning is genuinely the better tool (measured,
+not guessed — it builds under a time budget and judges by the yield).
+
+The failure mode that matters is the list *missing* clusters, so that is checked
+by brute force rather than argued: `mitm --covers 240 2000000` finds real
+clusters the hard way and demands the solver would have proposed each one — 185
+found, 0 missed.
+
+### Quad fortresses: distance is the wrong measure
+
+Four fortresses "close together" ranks by the distance between their START
+positions, which is not what makes them interesting. A fortress is up to 257
+pieces sprawling as far as 112 blocks from its start, and each one is generated
+**without knowledge of the others** — `getFortressPieces` rejects a piece
+colliding with an earlier piece of the *same* fortress and has no idea a
+neighbour exists. Two fortresses 80 blocks apart do not sit near each other,
+they grow *through* each other.
+
+`tools/fortoverlap.c` measures what actually happened rather than the
+opportunity: build all four piece lists, count the pairs whose bounding boxes
+intersect.
+
+```sh
+./build/mitm.exe 1.21 fortress quad 8 --limit 6000 | grep QUADBASE | awk '{print $2}' \
+  | ./build/fortoverlap.exe 0 1.21 --stdin | sort -rn | head
+```
+
+Best found: **seed 272750727216669 — 286 intersecting piece pairs, 27 592
+blocks of shared bounding box**, four verified fortresses. Spread 8 beats
+looser bands outright (201 at spread 10, 148 at spread 12), and it is
+exhaustive: two runs with different limits returned the same twelve bases, so
+that is every quad fortress at the tightest geometry the grid allows. Within
+that band the scores run 138–286, so the first candidate emitted is not the one
+worth having.
+
+One result the wiring makes cheap: when the solver **completes** and finds
+nothing, that is a proof of absence over all 2⁴⁸ seeds, in seconds. The example
+two paragraphs above is one — four swamp huts within **160 blocks of a common
+member cannot exist**, because the two diagonal members are never closer than
+9√2 chunks ≈ 204 blocks. A plain scan reports that as 0.0000% survival, which
+reads as "rare" rather than "impossible".
+
+Split the 48-bit seed into halves. The low half alone decides whether **any**
+high half can work — `(s1 >> 17) mod 24` is `8·s1H + (s1L >> 17)` (128 ≡ 8 mod
+24), and since `gcd(128, 24) = 8` divides 24 only 3 ways, a low half landing on
+the wrong residue is dead for every high half at once, having touched none of
+them. Eight constraints later
+(x *and* z, all four structures) that is `2²⁴/8⁸ ≈ 1` surviving low half when
+the offsets are pinned: **the low 24 bits of the seed fall out of the geometry.**
+The survivors then meet the high halves, either by sweeping all 2²⁴ (obvious) or
+by a bucket lookup keyed on the high half's residue class (70× fewer tests for
+swamp huts, 28 000× for ruined portals).
+
+The two halves are strong in *opposite* regimes, and `gcd(128, range)` decides
+which. Swamp huts (gcd 8) get a sieve that pins the low half to ~1 value in 2²⁴
+and a weak 3-residue bucket key; ruined portals (gcd 1) get **no sieve at all** —
+every low half stays live — and a 25-residue key that carries the whole search.
+Building only one of the two would have left half the structures unimproved.
+
+Complete enumeration of **every** swamp-hut quad in the world, at spread 15 —
+the tightest spread that has any:
+
+| | seeds/pairs examined | wall clock | quad bases |
+|---|---|---|---|
+| `quad.c` | 2.39e13 seeds | ~49 h (projected from its measured rate) | 1 045 607 |
+| `mitm --nested` | 8.34e11 pairs | 318 s | 1 045 607 |
+| `mitm` (join) | 1.54e10 pairs | **44 s** | 1 045 607 |
+
+Same 1 045 607 bases from the sweep and the join, measured on the same machine
+that ran `quad.exe` for the projection (49 corner offsets × 2⁴⁸/24² seeds at its
+observed 1.35e8 seeds/s).
+
+A solver that silently drops seeds reports "nothing found" for seeds that exist,
+so `--verify` is two-sided and the completeness half is the one that matters: it
+checks acceptance against cubiomes' placement in **both** directions over
+millions of seeds, brute-forces windows and demands the *same set* back (not
+similar counts), takes low halves the sieve **discarded** and sweeps all 2²⁴ high
+halves against each, and requires the nested sweep and the hash join to return
+identical sets over the whole 2⁴⁸ space. Every base `quad.c` finds must be
+reachable, and the suite checks that against the real binary.
+
+**Which structures.** Every region-based structure in the game except the four
+that use a different algorithm entirely:
+
+| solvable | how |
+|---|---|
+| swamp hut, desert pyramid, jungle pyramid, igloo, village, ocean ruin, shipwreck, ruined portal, trail ruins, trial chambers | `ox = (s1>>17) % r` — the high half is pinned to one residue mod `r/gcd(128,r)` |
+| **ancient city** | power-of-two range: Java scales instead of taking a remainder, which for r = 2ᵏ is exactly `ox = s1H >> (24−k)` — a prefix of the high half |
+| **fortress, bastion (1.18+), pillager outpost** | same placement, plus a rejection roll that is a concrete function of the seed and the chunk |
+| ↳ **fortress and bastion share a grid slot** | identical salt, region and range, and only one of them is built — so for these two the search checks *existence*, not placement. `getStructurePos(Fortress, …)` returns 1 unconditionally in 1.18+, and a quad search built on that reported three bastions and one fortress. |
+| **monument, mansion, end city** | two draws averaged per axis (four per structure); the sieve uses each draw's marginal |
+| **not solvable** | mineshaft and buried treasure (per-chunk rolls), stronghold (ring-based), geodes and wells (Xoroshiro population seeds) |
+
+`--verify` is green for **all twelve**: swamp hut, village, ruined portal,
+desert pyramid, shipwreck, ancient city, outpost, fortress, bastion, monument,
+mansion and end city. The suite runs six of them — between them covering every
+distinct code path, including `gcd(128, range)` of 8, 2 and 1, the power-of-two
+placement, a rejection roll, and the averaged pair.
+
+Mansion and end city took a while to get there, and the reason is worth knowing
+if you touch the join: on a **windowed** run the bucket lookup used to compute
+its class sets before checking whether a plain sweep would be cheaper, and for a
+query whose sieve keeps every low half that setup cost eleven minutes to avoid
+sweeping two values. Sweeping wins whenever the window is smaller than the walk's
+setup, and that is now decided first — mansion's verify went from over forty
+minutes to 2m29s.
+
+One result worth stating: under `quad.c`'s pairwise rule, **spread 13 and 14 are
+empty** — the two diagonal huts are ≥9 chunks apart on both axes, so nothing is
+tighter than 9√2 ≈ 12.73, and the offsets that reach it have no seed at all. The
+tightest swamp-hut quad that exists is spread 15. Since an empty answer from a
+sieve looks exactly like a broken sieve, `mitm quad` corroborates one by solving
+for three structures and testing the fourth with cubiomes — a route that never
+consults the sieve about it (650 236 seeds place three huts right; none places
+the fourth).
+
+## Biome adjacency
+
+A biome condition can be measured from **another biome**, not just from a
+structure — which is how you ask for two biomes *next to each other*:
+
+```json
+{ "conditions": [
+  { "id": "shroom", "biome": "mushroom_fields", "within": 800, "of": "spawn" },
+  { "id": "mesa",   "biome": "badlands",        "within": 300, "of": "shroom" }
+] }
+```
+
+That reads "a mushroom-island near spawn, with a mesa within 300 blocks of it."
+To make this work, a biome condition now **records where it matched** and reports
+that position; a biome that something else is measured from records the match
+nearest its own centre (so a large biome's far corner doesn't anchor the child).
+The planner schedules the parent biome before the child in pass 2 — the one
+place pass 2 has an ordering constraint, since the parent's position is produced
+there rather than in pass 1. A biome's parent must be a structure or a biome
+(orbiting an ore/slime/area count has no single meaningful point).
+
+Because the anchor is one representative point, adjacency errs toward **false
+negatives** (it can miss a pairing when the recorded point is far from the
+neighbour), never false positives — a reported pair genuinely has both biomes
+within the requested distance. `tools/checkbiome` reports the biome at a point;
+the test suite confirms both reported positions really are their biomes and the
+child really is within its radius of the parent.
+
+## Terrain height (approximate)
+
+Find seeds with tall terrain near a point — a mountain over spawn, or a
+structure sitting up high (a "tall pillager outpost"):
+
+```json
+{ "id": "peak", "height": 150, "within": 300, "of": "origin" }
+```
+
+The disc must contain a surface point at least `height` blocks high. For "tall
+structure," measure from one with a small radius: `{ "height": 130, "within": 48,
+"of": "outpost" }`.
+
+> ⚠️ **This is the one approximate condition.** Everything else in the tool is
+> exact and independently verified; terrain height is cubiomes' *estimate*
+> (`mapApproxHeight`, the same routine it uses for spawn finding), not exact game
+> height. It can be off by a few blocks either way, so it can occasionally report
+> a peak that the real world doesn't quite reach — leave headroom on the
+> threshold. Overworld only; most accurate on **1.18+**. `find` prints it with a
+> leading `~` and the plan/UI label it "approx". `tools/checkheight` re-samples
+> the same estimate (confirming the finder reproduces it, not that the estimate
+> matches a real world), and the suite checks that.
+
+Adding `"exact": true` switches to cubiomes' **real block-level terrain**
+(`generateColumn`), which is a measurement rather than an estimate — at the cost
+of a heavy noise column per 4×4 cell, so the radius is capped at 48 and the
+planner runs it dead last. Pair it with `"relief": D` (peak minus valley) to find
+a structure on a genuine cliff edge rather than merely on high ground. Exact
+heights are reported in **world Y**, the same scale as the estimate; the suite
+compares the two so the column-index conversion cannot silently drift back.
+
+## Biome area
+
+Find seeds where a biome is genuinely *large* near a point — a huge mushroom
+island, a sprawling mesa, a jungle big enough to build in:
+
+```json
+{ "id": "sh", "biome_area": "mushroom_fields", "pct": 50, "within": 800, "of": "spawn" }
+```
+
+This keeps the seed if the biome fills at least `pct` percent of the disc. It
+samples the disc on the same lattice a plain biome check uses and takes the
+fraction of sample points that are the target biome, so a big radius plus a high
+percentage means a big biome. `precision` (`fast`/`fine`/`exact`, default `fine`)
+is the same recall/cost knob as a biome condition — a coarser scan only ever
+*misses* qualifying seeds, it never invents one, so a reported percentage is a
+floor. Radius caps at 4000 and defaults to 800; `of` may be `origin`, `spawn`,
+or another condition. `tools/checkbiomearea` re-samples identically, and the test
+suite confirms every reported percentage reproduces exactly (`find` ==
+`checkbiomearea`) and clears the threshold.
+
+## Versions
+
+The engine (xpple/cubiomes) generates up to **MC 26.2**, and the UI defaults to
+it — pick any version from 26.2 back to 1.12. A finder generates for exactly the
+version you choose; it cannot infer one, and structure/biome availability and
+ore placement all shift between versions, so the choice is load-bearing.
+
+Every reported count is re-derived independently by `tools/checkloot.c` in the
+suite, so the numbers aren't a plumbing artefact.
+
+## Village buildings — real Minecraft worldgen (tier 2)
+
+cubiomes stops at *where* a structure is; it has no block-level terrain, so it
+cannot see *inside* a 1.14+ jigsaw village. Neither can any seedfinding library —
+FeatureUtils and its `mc_feature` fork both ship an **unfinished** village
+generator (the jigsaw assembler was never completed). The only correct way to
+count a village's buildings is to run Minecraft's **actual** world generator.
+
+So there's a second, heavier engine in [`tier2/`](../tier2/README.md): a headless
+Minecraft (via Fabric Loom, which downloads a deobfuscated jar — nothing Mojang
+is committed) that boots the registries, builds the overworld generator for a
+seed, runs the real jigsaw assembler, and counts buildings by their template names.
+The UI's **Village buildings** panel drives it: pick a **building type**
+(any smith, or a specific one — toolsmith/weaponsmith/armorer/library/
+cartographer/mason/fletcher/butcher/shepherd/fisher/tannery/temple/farm/…), a
+count, and how many seeds to scan; it returns seeds whose village holds that
+many.
+
+```
+seed 21  x=1128 z=-488  taiga  smiths=6  {taiga_armorer=2, taiga_weaponsmith=4}
+seed 29  x=-440 z=-856  snowy  smiths=5  {snowy_armorer_house=2, snowy_tool_smith=2, snowy_weapon_smith=1}
+```
+
+Architecture: a persistent Java worker bootstraps Minecraft **once** (~5 s) then
+streams seeds over stdin; [`tier2/village_search.py`](../tier2/village_search.py)
+fans out across several workers and `serve.py` exposes `/api/villagesmiths`.
+Caveats: it is **slow** (real jigsaw generation, seconds per seed — a tier-2
+search, not a brute force), targets **MC 1.16.5** (1.16.1 predates data-driven
+worldgen; village *composition* is identical across 1.16.x but *positions*
+differ), and requires the backend to be built (`tier2/README.md`). Village
+*composition* here is the game's own output — as authoritative as it gets.
+
+## End portal eyes
+
+An end portal has 12 frames, each independently 10% likely to already hold an
+eye. `{"id": "portal", "eyes": 6}` searches for a stronghold whose portal has at
+least that many. Results report the stronghold position and the count.
+
+Locating a stronghold costs ~10 ms (biome checks), so the search runs at
+**~98 seeds/s**, which sets hard expectations:
+
+| eyes | probability | seeds needed | time on one machine |
+|---|---|---|---|
+| 6 | 4.9e-04 | 2,036 | ~20 s |
+| 7 | 4.7e-05 | 21,382 | ~4 min |
+| 8 | 3.2e-06 | 307,910 | ~50 min |
+| 9 | 1.6e-07 | 6,235,191 | ~18 hours |
+| 10 | 5.3e-09 | 187,055,742 | ~22 days |
+| 11 | 1.1e-10 | 9,259,259,259 | ~3 years |
+| **12** | **1.0e-12** | **~1e12** | **~320 years** |
+
+So 6–8 is a normal search and 9–10 is a commitment. **A 12-eyed portal is a
+distributed-compute target** — the kind of thing Minecraft@home exists for — not
+something one machine finds. The UI shows the estimate as you change the number.
+
+Every reported count is re-derived independently by `tools/checkeyes.c` in the
+test suite, so the numbers are not an artefact of the search plumbing.
+
+## Ruined portals: what can and cannot be known
+
+Ruined portals are the one structure the engine cannot fully model, and it is
+worth being precise about why.
+
+The *position* is exact — cross-validated against the JDK reference like every
+other structure. What is not modelled is whether the game actually builds one
+there. From cubiomes' own source:
+
+> Ruined portals ... have no terrain restrictions, so a ruined portal *should*
+> always generate in each region. However, in locations with underground
+> biomes, a ruined portal can fail to generate ... because the biome check is
+> done after selecting the portal type and generation height. **Testing for this
+> case requires the surface height and is therefore not supported.**
+
+Surface height means block-level world generation, which cubiomes does not do.
+So a perfectly reliable ruined portal search is not achievable on this engine.
+
+What *is* now available: `describe` reports each portal's variant, because
+**about half of ruined portals in plains- and mountain-category biomes generate
+underground**. A portal marked `BURIED` is there — you just cannot see it from
+the surface:
+
+```
+ruined_portal   x=   144 z=     0    144 away   savanna    BURIED, air pocket
+ruined_portal   x=   304 z=   288    192 away   forest     surface
+```
+
+### Filtering out buried portals
+
+You can require a **surface** portal and drop the buried ones as candidates.
+Add `"surface": true` to a ruined-portal condition (or tick *surface only* in the
+UI):
+
+```json
+{"id": "rp", "structure": "ruined_portal", "within": 800, "of": "origin", "surface": true}
+```
+
+This is an **exact** filter, not an approximation. Minecraft decides burial with
+a single coin flip — `nextFloat() < 0.5` on the chunk RNG, only for
+plains/mountain-category portals — and `getVariant` reads that exact draw. The
+independent verifier `checkportal` re-derives the same bit from scratch and the
+test suite confirms every surface-filtered result really is a surface portal:
+
+```sh
+./build/checkportal.exe <seed> 1.21 --at <x> <z>
+#  -> ... underground=0 airpocket=0 giant=0 (reref=0 AGREE)
+```
+
+It does **not** yet catch the rarer "sunk into low terrain" case — that needs
+the approximate surface height (`mapApproxHeight`), a planned follow-up. For
+results you can reliably walk to today, `surface: true` removes the ~50% that
+are buried by design; for maximum certainty prefer a biome-checked structure
+(see the table below).
+
+## Structure variants
+
+Some structures generate in distinct variants, and the engine can identify which
+one a given instance is — exactly, because `getVariant` reads the same RNG draw
+the game does. Require a variant by adding a flag to its condition:
+
+```json
+{ "id": "zv", "structure": "village",       "abandoned": true }   // zombie village
+{ "id": "ig", "structure": "igloo",         "basement": true  }   // has the lab/basement
+{ "id": "gp", "structure": "ruined_portal", "giant": true     }   // giant portal
+{ "id": "rp", "structure": "ruined_portal", "surface": true   }   // not buried (above)
+```
+
+Each flag is gated to the structure that has it (asking for a `basement` village
+is an error, not a silent no-op), and each is checked in pass 2 on the exact
+matched instance. `tools/checkvariant` re-reads the flags independently, and the
+test suite confirms every zombie-village result really is abandoned. (Geodes
+aren't in this engine's structure list, so its `cracked`/`size` variant fields
+aren't exposed.)
+
+## Questions about the finished world (tier 3)
+
+Some questions are not about *where* something generates but about what is
+actually there once every generation stage has run. cubiomes computes placement;
+it does not build blocks, so it cannot answer them at all. `tier3-java/` runs a
+real 1.21.1 server and reads the blocks out of the world it makes.
+
+```sh
+python tier3-java/village_smiths.py <seed> 1500      # blacksmiths per village
+python tier3-java/hunt_smiths.py --min 5 --seeds 200 # hunt for a 5-smith village
+python tier3-java/treasure_probe.py <seed>           # what surrounds a treasure
+python tier3-java/treasure_casing.py <seed>          # faces vs diagonals: the casing rule
+python tier3-java/treasure_census.py --seeds 150     # what a casing CAN be, at 0.13s/chest
+python tier2-outpost/treasure_search.py --casing magma_block   # search for one
+python tier2-outpost/verify_oregen.py 4 5000        # headless vs server agreement
+```
+
+**"A village with 5 blacksmiths."** The 1.13 blacksmith became three buildings
+in 1.14 — armorer, toolsmith, weaponsmith — each identified by the workstation
+its template places. A 1.14+ village is assembled by the jigsaw generator, and
+no seed-finding library implements that assembler. Rather than reproduce it,
+this counts `blast_furnace` / `smithing_table` / `grindstone` in the finished
+world: whatever the assembler decided, the blocks are there to count. Every
+count carries a positive control — a village has one bell, and a box with no
+bell reports nothing rather than zero.
+
+**"A buried treasure somewhere it shouldn't be."** Probes all 26 neighbours of
+the chest in one server round trip and identifies each against a candidate list,
+reporting anything it cannot name as *unidentified* rather than as ordinary.
+Measured over 108 chests: they sit at y 32–79 in sand, sandstone, water and
+gravel, with **zero** unidentified neighbours — so a bedrock-encased treasure
+does not occur, bedrock being a hundred blocks below anything measured. The
+detector fires when something unusual is present (two chests had ore touching
+them), so that negative is a measurement rather than a blind spot.
+
+**"A buried treasure encased in ore."** That first probe answered the wrong
+question. Buried treasure does not sit in terrain — it takes the block at its
+landing spot and writes it into whichever of its six **face** neighbours were air
+or water, so the chest arrives already walled in. `treasure_casing.py` separates
+the six faces from the twenty diagonals and finds them **75% uniform against
+59%**, with chests like `[andesite ×4, gravel ×2]`: four faces overwritten, two
+already solid. So 4/6 is a *complete* casing, and `hunt_treasure_ore.py` scores
+the faces rather than all 26 neighbours.
+
+The casing over 87 chests is sand 64, gravel 13, sandstone 6, stone 2, andesite
+1, diorite 1 — the sediment it sat *in* and the rock it sat *on*. The scan
+descends until the block beneath is stone-like, so ore is fallen *through* and
+landed *on*: reachable only where a blob's top block sits directly under the
+sediment. **Deepslate iron is out of reach entirely** — deepslate needs y≲8 and
+these chests are at y 32–79.
+
+This tier is **slow and one-seed-at-a-time**: ~14 s per world, ~8 s per village.
+It is a confirmer and a hunter, not a filter inside the main search — the flow is
+cubiomes finds candidates in microseconds, the server checks the survivors.
+
+## Not every structure is verified
+
+A structure position comes from two things: a generation **attempt** (exact
+LCG math, cross-validated against the JDK reference) and a **placement check**
+(does the game actually build one there). The second is where the engine's
+coverage varies. Measured pass rate of `isViableStructurePos`
+(`tools/confidence.c`, MC 1.21):
+
+| structure | attempts passing | meaning |
+|---|---|---|
+| swamp hut, desert pyramid, mansion | 0.9–2.6% | biome-checked |
+| ancient city, igloo, monument | 3–9% | biome-checked |
+| trail ruins, outpost, village | 12–23% | biome-checked |
+| ocean ruin, shipwreck | 28–32% | biome-checked |
+| trial chambers | 95.5% | weak (generates almost everywhere) |
+| **ruined portal** | **100.0%** | **no check at all** |
+
+For ruined portals, cubiomes' `isViableFeatureBiome` is literally
+`return mc >= MC_1_16_1;` — every attempt is reported and false positives
+cannot be filtered. A reported ruined portal may not exist in your world.
+`find` and the UI now print a warning when a query uses one.
+
+This is a limitation of the engine's world model, not of the search: the
+coordinates are right, but whether the game populates that spot is unmodelled.
+Prefer biome-checked structures when you intend to visit the result.
+
+## World types
+
+```json
+{ "version": "1.21", "large_biomes": true, "conditions": [ ... ] }
+```
+
+`large_biomes` selects the Large Biomes world preset: the same generator with
+the biome scale multiplied, so structures, ores and terrain all still work —
+they just land in a differently shaped world. It is a property of the world, not
+of a condition, so it sits next to `conditions` and every generator the query
+builds is told about it. The UI carries it through search, **map and describe**
+alike; a Large Biomes result drawn with the default generator is a picture of a
+different world. `tools/checkbiome` and `tools/checkore` take a trailing `large`
+argument so results stay re-checkable in the world that produced them.
+
+Amplified, superflat and single-biome presets are **not** supported.
+
+## 1.18+ structure placement
+
+From 1.18, three structures refuse to generate on ground that is too low, and
+cubiomes' `isViableStructurePos` models the biome rules but not that one. The
+finder therefore used to report structures that are not in the world. The rules
+are now applied, read out of the shipped 1.21 classes rather than guessed:
+
+| structure | rule |
+|---|---|
+| desert pyramid | lowest of four corner heights across 21×21 from the chunk min ≥ 63 |
+| jungle temple | same across 12×15 ≥ 63 |
+| woodland mansion | a 5×5 box at chunk min + 7, signs flipped by the rotation the chunk's structure RNG draws first, ≥ 60 |
+
+Measured effect on what the finder reports: **45% of biome-viable desert
+pyramids, 26% of jungle temples and 7% of mansions were phantom** and are now
+rejected. Validated against the real MC 1.21.1 generator over 110 positions —
+**0 false positives**, 5 false negatives.
+
+Those false negatives are the deliberate direction. Minecraft's
+`WORLD_SURFACE_WG` counts water, we measure solid ground, and cubiomes' terrain
+differs from the game's by a block or two — so a structure sitting exactly on the
+threshold, or with a corner under water, can be rejected when the game would
+allow it. `tools/checkplacement <seed> <structure> <version> <x> <z>` re-derives
+the corners and prints the verdict.
+
+## A structure over a cave
+
+```json
+{ "id": "v", "structure": "village", "cave_below": 25, "within": 800 }
+```
+
+1.18 caves are part of the terrain density function, not a carving pass, so a
+structure can end up on a thin crust above a cavern. This measures the tallest
+run of open blocks under the structure — sampling the anchor and four corners of
+its footprint, because a village is 60+ blocks wide and the interesting void is
+rarely under the exact anchor.
+
+Real block terrain, so it is one of the most expensive conditions and the
+planner sorts it last. `tools/surface … column` re-measures any single column
+independently, and the suite checks that every reported cave reproduces.
+
+Worth being precise about the wording: a village is never *inside* a cave —
+villages generate on the surface. What this finds is a village **over** one.
+
+## Impossible queries are refused, not searched
+
+Some requests no seed can satisfy, and searching for them does not fail — it
+runs forever. The engine proves the ones that come from Minecraft's placement
+rules and refuses up front, with the reason:
+
+```
+$ find outpost-in-village.json
+plan error: impossible: a pillager outpost never generates within 10 chunks
+(176 blocks) of a village -- Minecraft's placement data excludes it. Ask for
+176 blocks or more
+```
+
+That rule is real and comes from the game's own data
+(`data/minecraft/worldgen/structure_set/pillager_outposts.json`):
+
+```json
+"exclusion_zone": { "chunk_count": 10, "other_set": "minecraft:villages" }
+```
+
+`ExclusionZone.isPlacementForbidden` scans the ±10-chunk square for a village
+**placement** chunk — placement, not viability, so a village that would fail its
+own biome check still blocks the outpost. cubiomes does not model this, so the
+finder used to report outposts the game will not build; it is now applied in
+pass 1, where it is pure 48-bit math.
+
+Currently proven impossible:
+
+- a pillager outpost within 176 blocks of a village (so "an outpost inside a
+  village", or on a building in one, cannot happen at all)
+- two of the same structure closer than the placement grid allows — villages
+  and swamp huts are never within ~144 blocks of each other, so a tighter
+  cluster is impossible
+
+**Rarity is deliberately not judged.** A 12-eye portal is astronomically
+unlikely but possible, and `--explain` estimates that honestly. Only genuinely
+impossible things are refused, or the tool would be lying about what it cannot
+do.
+
+## Strongholds: how close to the surface
+
+```json
+{ "id": "s", "stronghold": "exposed", "within": 3000, "of": "origin" }
+{ "id": "s", "stronghold": true, "max_depth": 12, "land": false, "within": 3000 }
+```
+
+`"stronghold"` takes `"exposed"` (no ground over it), `"shallow"` (≤ 4 blocks),
+`true`/`"any"`, or a number of blocks; `max_depth` and `min_roof_y` set the
+bounds directly. Depth is measured **per piece**, against the ground over that
+piece — a stronghold sprawls 100+ blocks, and the part that breaks the surface
+is rarely the start chunk — and the reported `/tp` goes to that shallowest
+piece. Dry land is the default (`"land": false` admits strongholds open to the
+sea floor), because most strongholds that reach the surface do so under water.
+
+The rules that bound it, refused up front rather than searched forever:
+
+- **From 1.18 no stronghold roof is above y=52** (`moveBelowSeaLevel` starts it
+  64 blocks lower than it used to). Dry land starts at y=62, so on land there are
+  always ≥ 10 blocks over one: "shallow" and "exposed" on land are impossible
+  from 1.18, and the planner says so. On the sea floor they are possible.
+- Pre-1.18 heights come from `patches/stronghold-accurate-y.patch` (cubiomes
+  pins the start piece at Y=64). Against a real 1.16.5 server: 15/15 exact below
+  y=52, 2 of 3 above it — tall strongholds are flagged "verify".
+- `patches/stronghold-1-17-filler-corridor.patch` moves one corridor rule from
+  1.17 to 1.18, which turns 3/12 into 8/12 of DylanDC14's published 1.17.1
+  exposed strongholds into confirmed hits. **Not yet checked on a real 1.17
+  server**, and it changes 1.17 stronghold pieces (and so 1.17 eye counts and
+  stronghold loot) too.
+
+## What has been checked, and against what
+
+"Engine" means cubiomes' model (cross-checked internally); "real" means checked
+against Minecraft's own generator or a running server. Versions are where the
+check was made; others are expected to follow the same code but were not run.
+
+| feature | checked against | versions |
+|---|---|---|
+| structure positions (9 types, linear + triangular) | JDK reference from Minecraft Wiki constants (`XVal.java`), 3,881/3,881 | 1.18 settings through 26.2 |
+| 1.18 pyramid / jungle temple / mansion terrain rules | real 1.21.1 generator, 110 positions: 0 false positives | 1.21.1 |
+| outpost–village exclusion zone | Minecraft's own structure_set data | 1.14+ |
+| village buildings (smiths etc.) | real 1.16.5 jigsaw generation (tier 2) | 1.16.5 |
+| buried treasure exposure / casing | real 1.21.1 generator; bedrock casing on a real 1.16.5 server | 1.16.5, 1.21.1 |
+| stronghold heights | real 1.16.5 server (15/15 below y=52) | 1.16.5 (1.17 patch: published finds only) |
+| ruined portal chest seed + chest offset | MCUtils / FeatureUtils | 1.17.1 |
+| chest loot, 1.18+ | real 1.21.1 server, chest by chest: loot table seed, position and items, 10/10 (desert pyramid, outpost, ocean + beached shipwreck) after the fixes in [Chest loot](#chest-loot). Other structure types and versions: engine only | 1.21.1 |
+| biome conditions, 1.17 and earlier | engine only. Before 2026-10-20 they matched nothing (a NULL layer lookup); fixed and covered by tests | — |
+| Bedrock | biomes match Java (13/15 points); structures do NOT (0/14) | BDS 1.26 |
+
+## Known limitations
+
+- **Structure overlap uses nominal footprints.** The per-structure boxes are
+  approximations of assembled extent, not generated geometry, so an overlap hit
+  is a strong candidate rather than a proof — and a sprawling village can collide
+  with something outside its box without being reported. See
+  [Structure overlap](#structure-overlap).
+- **A leaderboard is only as good as its range.** "Best in 2 million seeds" is
+  the honest claim; nothing here searches the whole 2⁶⁴ space, and the ranked
+  header prints the range for exactly that reason. A ranked run scores every
+  sister seed it tries for a structure seed and keeps the best of them, so a
+  64-bit metric (ore, height, loot, area) is a real maximum over what was tried.
+- **Biome presence samples a lattice, so recall is below 100%.** `fast` samples
+  every 4th chunk centre, `fine` (the default) every chunk centre, `exact` every
+  4-block quart — the same grid an exhaustive check uses. Measured at radius 400
+  before quart sampling was exact: fast 90.4%, fine 96.2% (`tools/biomerecall.c`);
+  both fall at smaller radii. Absence (`"not"`) always uses every quart.
+- **Same-type matching is greedy, nearest-first.** Two conditions of the same
+  structure type are guaranteed to match distinct instances, but the assignment
+  is greedy: if an earlier condition claims the instance a later one needed, the
+  seed is rejected even though some other assignment would have worked. Another
+  false negative, never a false positive.
+- **Sister seeds: 64 of 65,536 by default.** Each surviving structure seed tries
+  `FIND_UPPERS` (default 64) of its sister world seeds, visited as a permutation.
+  Right for finding *a* seed; wrong when the biome half of a query is rare — raise
+  `FIND_UPPERS` (or the UI's `uppers`) for that.
+- **World spawn is an estimate** (cubiomes' `getSpawn` does not simulate grass
+  placement). Structure positions are exact; distances from spawn are not.
+- **Ruined portals are not placement-checked by the engine**; ~50% of
+  plains/mountain portals are buried (`"surface": true` filters those exactly).
+- **cubiomes omits `nextInt`'s rejection loop** (vanilla has it). Divergence
+  ~3.7e-9 per call. Real, negligible.
+- **No GPU acceleration, deliberately — for now.** Pass 1 is pure integer math
+  and would port to CUDA cleanly, but on every query here pass 1 is **0.0–0.2%**
+  of runtime: pass 2 (biome generation) dominates and does not port. That changes
+  for targets solved by reversing the RNG (dungeons, chest stacks), where the
+  whole filter is integer math — see [`reversal-roadmap.md`](reversal-roadmap.md). The first two
+  pieces exist: `src/lcg.h` and `popinvert` (a chunk's population seed back to
+  the structure seeds that give it, 1.8–1.17).
+
+## Engine
+
+[`xpple/cubiomes`](https://github.com/xpple/cubiomes) — MIT, actively maintained,
+supports through MC 26.2. **Not** `Cubitect/cubiomes` (dormant since 2024-11-10,
+caps at 1.21 — it cannot generate current worlds), and **not** `cubiomes-viewer`
+(GPL-3.0; linking it would force this project GPL).
+
+`setup.sh` pins it at `b12a532` and applies `patches/`:
+
+| patch | why |
+|---|---|
+| `fortress-piece-bound` | `getFortressPieces` ignored its buffer bound; 84% of fortresses overran it |
+| `stronghold-accurate-y` | real stronghold piece heights (upstream pins Y=64) |
+| `stronghold-1-17-filler-corridor` | the 1.17 corridor rule (see Strongholds) |
+| `terrainnoise-region-stride` | `generateRegion` indexed its noise cache by width instead of height: rectangular regions overflowed or returned wrong heights. `tools/checkregion` is the check. Upstream bug |
+| `loot-fixups` | early 1.21.x tables drew `enchant_randomly` from the 1.20 list, not `#minecraft:on_random_loot`; goat horns skipped their sound roll. Both shift every later roll in the chest. Found and checked on a real 1.21.1 server (see Chest loot) |
+| `structure-chest-positions` | desert pyramid seeds paired with the wrong chests for three of four facings; outpost chest one block off. Checked on a real 1.21.1 server |
+
+On Windows `setup.sh` also writes `cubiomes/compat/sys/time.h` (clang there
+targets `x86_64-pc-windows-msvc`, which has no POSIX headers); elsewhere it does
+not, because it would shadow the real header.
+
+> Note: `cubiomes/tests.c` is **not** a test suite. Its `main()` is entirely
+> commented out and it exits 0 with no output. Don't mistake it for verification.
+
+## Layout
+
+```
+serve.py              local web UI server (loopback only, refuses other origins)
+nlparse.py            reads a sentence into a query offline, no key needed
+ai_prompt.py          the prompt that turns a sentence into a query (kept in step with query.c)
+ui/index.html         the UI's markup
+ui/app.css, app.js    its stylesheet and script, served from /ui/
+assets/               the logo, plus optional structure/item PNGs (see its README)
+build.sh              build: ./build.sh [all | tools/x.c]
+setup.sh              clone + pin cubiomes, apply patches/
+package.sh            build the download a player gets (see packaging/)
+test.sh               regression suite (./test.sh [-v] [--quick] [--kill])
+tests/                same-worlds check, offline prompt tests, package smoke test
+.github/workflows/    CI on four platforms; draft releases
+patches/              fixes applied to the pinned cubiomes (see Engine)
+src/query.{h,c}       condition tree, cost model, planner, evaluator
+src/anyof.{h,c}       "any" groups, compiled into ordinary queries
+src/explain.{h,c}     selectivity sampling; predicts the funnel before searching
+src/platform.h        Win32 threads/atomics/clocks, or their POSIX equivalents
+src/seed.h            seed text -> seed, the way Minecraft parses it
+src/biomeat.h         the surface-biome lookup, correct on every version
+src/terrain.{h,c}     exact 1.18+ surface heights (generateRegion, world Y)
+src/lcg.h             java.util.Random forwards and backwards (reversal primitives)
+src/popinvert.{h,c}   a chunk's population seed -> the structure seeds behind it (<= 1.17)
+src/ore.{h,c}         ore density, veins, exposure, Y bands
+src/loot.{h,c}        loot-table cache + item counting (full 64-bit seed)
+src/cactus.{h,c}      cactus height simulation
+src/climate.{h,c}     temperature pre-filter for biome scans
+src/invert.{h,c}      structure placement run backwards: which seeds put it HERE
+src/mitm.{h,c}        meet-in-the-middle: all of a cluster's constraints at once
+src/solve.{h,c}       candidate enumeration for tight clusters
+tools/find.c          CLI: parse -> plan -> search | --explain | --bias | --seed
+tools/describe.c      given a seed, print spawn + nearby structures & their biomes
+tools/map.c           render a seed's biome map as a PNG (no image library)
+tools/nearest.c       the Java /locate: nearest structure or biome to a point
+tools/locate.c        every instance of a structure in a radius
+tools/check*.c        re-derive one result through a separate path (see Verification)
+tools/checkregion.c   generateRegion: rectangular regions vs 1x1 (patch check)
+tools/lcgcheck.c      src/lcg.h self-checks + a table LcgCheck.java reproduces
+tools/LcgCheck.java   the same table from the real java.util.Random
+tools/popinvert.c     CLI for src/popinvert + its check (planted seeds, exhaustive cases)
+tools/xval.c          cubiomes side of the cross-validation
+tools/XVal.java       independent JDK reference
+tools/Verify.java     re-verify individual seeds against the JDK reference
+tools/mitm.c, quad.c  quad-hut enumeration and hunt
+tools/invert.c        CLI + two-sided soundness/completeness proof for the inverter
+tools/biomerecall.c   biome-scan recall vs an exhaustive scan
+tools/mcsrc.py        search the decompiled Minecraft sources (local use only)
+tier2/                real Minecraft 1.16.5 worldgen, headless (village buildings)
+tier2-outpost/        real Minecraft 1.21.1 worldgen, headless (outposts, treasure, ore)
+tier3-java/           drives real Java servers as an oracle; hunts and censuses
+tier3-bedrock/        drives Bedrock Dedicated Server as an oracle (/locate, probes)
+docs/                 design notes (meet-in-the-middle, cactus, reversal roadmap)
+queries/*.json        example queries
+cubiomes/             the engine (git clone, not tracked)
+```
+
+## License
+
+MIT — see `LICENSE`. The engine and libraries the build pulls in are MIT too;
+their notices are in `THIRD_PARTY_NOTICES.md`.

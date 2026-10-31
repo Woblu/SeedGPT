@@ -1826,7 +1826,8 @@
           ['seeds found', String(d.seeds.length), d.seeds.length ? 'good' : 'warn'],
           ['scanned', (f.scanned ?? 0).toLocaleString()],
           ['elapsed', (f.seconds ?? 0) + ' s'],
-          ['throughput', (f.mseeds_s ?? 0) + ' M/s'],
+          // From what was scanned, so a thorough search does not read "0 M/s".
+          ['speed', f.seconds > 0 ? fmtN((f.scanned || 0) / f.seconds) + ' seeds/s' : '—'],
         ]));
       if (f.stopped)
         out.append(el('div', 'note warn',

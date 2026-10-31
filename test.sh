@@ -545,7 +545,7 @@ echo "$endout" | grep -q '^SEED' \
   && ok "end query (end_city) returns seeds" \
   || bad "end query found nothing"
 # End cities never generate within 1008 blocks of the origin.
-mind=$(echo "$endout" | sed -n 's/.*city *x= *\(-\?[0-9]*\) z= *\(-\?[0-9]*\).*/\1 \2/p' \
+mind=$(echo "$endout" | sed -nE 's/.*city *x= *(-?[0-9]*) z= *(-?[0-9]*).*/\1 \2/p' \
        | awk '{d=sqrt($1*$1+$2*$2); if(m==""||d<m) m=d} END{printf "%d", m}')
 [ -n "$mind" ] && [ "$mind" -ge 1008 ] \
   && ok "end cities respect the 1008-block origin exclusion (nearest $mind)" \
@@ -1055,8 +1055,9 @@ while read -r cseed cx cz ch; do
   done
   [ "$best" != "$ch" ] && cv_bad=$((cv_bad+1))
 done < <(awk '/^SEED/{s=$2}
-              match($0, /([0-9]+)-block cave below/, m) {
-                  gsub(/x=|z=|,/,""); print s, $2, $3, m[1] }'          /tmp/sc_test/cave.out | head -5)
+              match($0, /[0-9]+-block cave below/) {
+                  n = substr($0, RSTART, RLENGTH) + 0
+                  gsub(/x=|z=|,/,""); print s, $2, $3, n }'          /tmp/sc_test/cave.out | head -5)
 [ "$cv_n" -ge 3 ] && [ "$cv_bad" -eq 0 ]   && ok "every reported cave under a structure re-measures identically ($cv_n checked)"   || bad "a reported cave did not reproduce" "checked=$cv_n bad=$cv_bad"
 
 # ---------------------------------------------------------------- climate gate
@@ -1113,8 +1114,9 @@ while read -r cseed cx cz ch; do
         | awk -v x="$cx" -v z="$cz" '$1=="CACTUS" && $2==x && $3==z {print $5}')
   [ "$got" != "$ch" ] && cbad=$((cbad+1))
 done < <(awk '/^SEED/{s=$2}
-              match($0, /([0-9]+)-block cactus/, m) {
-                  gsub(/x=|z=/,""); print s, $2, $3, m[1] }' /tmp/sc_test/cactus.out | head -6)
+              match($0, /[0-9]+-block cactus/) {
+                  n = substr($0, RSTART, RLENGTH) + 0
+                  gsub(/x=|z=/,""); print s, $2, $3, n }' /tmp/sc_test/cactus.out | head -6)
 [ "$cn" -ge 3 ] && [ "$cbad" -eq 0 ] \
   && ok "every reported cactus re-simulates to the same height ($cn checked)" \
   || bad "a reported cactus did not reproduce" "checked=$cn bad=$cbad"
@@ -1122,7 +1124,7 @@ done < <(awk '/^SEED/{s=$2}
 # A single patch places 1-3 blocks and can stack to about 6; a plain (unranked)
 # search asking for more should therefore find nothing quickly rather than
 # report something impossible.
-tallcnt=$(awk 'match($0, /([0-9]+)-block cactus/, m) && m[1] > 12' /tmp/sc_test/cactus.out | wc -l)
+tallcnt=$(awk 'match($0, /[0-9]+-block cactus/) && substr($0, RSTART, RLENGTH) + 0 > 12' /tmp/sc_test/cactus.out | wc -l)
 [ "$tallcnt" -eq 0 ] \
   && ok "no absurd heights reported (nothing over 12 blocks in 1500 seeds)" \
   || bad "implausible cactus height reported" "$tallcnt over 12 blocks"
