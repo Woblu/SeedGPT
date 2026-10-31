@@ -1936,9 +1936,9 @@ def api_structoverlap(body) -> dict:
         "engine": engine,
         # An engine that cannot assemble a structure must not be read as one
         # that checked and found nothing.
-        "note": ("Piece-exact. cubiomes can assemble fortresses and end cities; "
-                 "for other structures this returns UNKNOWN rather than a "
-                 "verdict, which is not the same as 'they do not overlap'."),
+        "note": ("Piece-exact for fortresses and end cities. Other structures "
+                 "return UNKNOWN unless the real generator is installed, which "
+                 "is not the same as 'they do not overlap'."),
     }
 
 
@@ -2353,7 +2353,10 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("  %s\n" % (fmt % args))
+        # A player's console window is not a request log, and a pipe nobody
+        # reads would fill up and stop the server. SEED_UI_LOG=1 to see them.
+        if os.environ.get("SEED_UI_LOG"):
+            sys.stderr.write("  %s\n" % (fmt % args))
 
     def _foreign(self, post: bool) -> str:
         """Why this request must be refused, or "" if it may go ahead.

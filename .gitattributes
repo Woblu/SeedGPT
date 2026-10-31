@@ -14,6 +14,9 @@
 # (the fortress piece bound, the terrain region stride) would silently be gone.
 patches/*.patch text eol=lf
 
+# cmd.exe can misread a batch file with LF line endings.
+*.bat text eol=crlf
+
 # Binary formats: never touch their bytes.
 *.png  binary
 *.webp binary

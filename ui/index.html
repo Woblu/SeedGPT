@@ -11,7 +11,7 @@
 <body>
 
 <div class="app" id="app">
-  <aside class="sidebar" id="sidebar">
+  <aside class="sidebar" id="sidebar" inert>
     <div class="side-brand"><img class="logo" src="/assets/logo.svg" alt=""> Seedsmith</div>
     <button class="newbtn" id="newSearch">＋ New search</button>
     <div class="side-label">History <span class="spacer"></span>
@@ -157,7 +157,7 @@
 
     <section>
       <h2>World version</h2>
-      <select id="version">
+      <select id="version" aria-label="Minecraft version">
         <option>26.2</option><option>26.1</option>
         <option>1.21</option><option>1.20</option><option>1.19</option>
         <option>1.18</option><option>1.17</option><option>1.16</option>
@@ -173,7 +173,7 @@
     <section>
       <h2>Saved searches</h2>
       <div class="btnrow" style="margin-top:0">
-        <input type="text" id="saveName" placeholder="name this search" style="flex:1;min-width:0">
+        <input type="text" id="saveName" aria-label="Name this search" placeholder="name this search" style="flex:1;min-width:0">
         <button id="saveBtn">save</button>
       </div>
       <div id="savedList"></div>
@@ -490,22 +490,22 @@
 
     <section>
       <h2>AI provider</h2>
-      <select id="aiProvider">
+      <select id="aiProvider" aria-label="AI provider">
         <option value="gemini">Google Gemini</option>
         <option value="compatible">Other (Groq, OpenAI, OpenRouter, Ollama…)</option>
       </select>
 
       <div id="aiCompatFields" class="hidden" style="margin-top:10px">
-        <input id="aiBase" placeholder="base URL, e.g. https://api.groq.com/openai/v1" autocomplete="off">
+        <input id="aiBase" aria-label="Provider base URL" placeholder="base URL, e.g. https://api.groq.com/openai/v1" autocomplete="off">
         <div class="hint">Groq <code>https://api.groq.com/openai/v1</code> ·
           OpenAI <code>https://api.openai.com/v1</code> ·
           OpenRouter <code>https://openrouter.ai/api/v1</code> ·
           local Ollama <code>http://localhost:11434/v1</code> (leave the key blank).</div>
       </div>
-      <input id="aiModel" placeholder="model (blank = default)" autocomplete="off" style="margin-top:6px">
+      <input id="aiModel" aria-label="AI model" placeholder="model (blank = default)" autocomplete="off" style="margin-top:6px">
       <div class="hint" id="aiModelHint"></div>
 
-      <input type="password" id="geminiKey" placeholder="paste your key" autocomplete="off" style="margin-top:10px">
+      <input type="password" id="geminiKey" aria-label="AI key" placeholder="paste your key" autocomplete="off" style="margin-top:10px">
       <div class="btnrow" style="margin-top:8px">
         <button class="primary" id="keySave">Save key</button>
         <button class="tiny" id="keyTest">Test connection</button>

@@ -3,11 +3,12 @@
 # reaches the public until someone presses Publish.
 name: release
 
+# Not on tags: publishing a draft creates its tag, and building again at that
+# point could only fail. For a later release, run this from main by hand.
 on:
   workflow_dispatch:
   push:
     branches: [release-prep]
-    tags: ['v*']
 
 permissions:
   contents: read

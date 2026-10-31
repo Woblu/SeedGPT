@@ -410,7 +410,7 @@ until the block BELOW is sandstone/stone/andesite/granite/diorite, and writes th
 block it landed on into every air or water face around the chest. Ore and magma
 are not stopping blocks, so the scan falls THROUGH them and lands ON them, which
 is exactly why they can be the casing. Measured over 6646 chests: sand 78%,
-gravel 18%, dirt 2.7%, stone 0.9%, copper_ore and magma_block ~0.015% EACH.
+gravel 18%, dirt 2.7%, stone 0.9%; copper_ore and magma_block are rare.
 Bedrock casings need a pre-1.18 world (in 1.18+ deepslate sits above the bedrock
 band and is not a stopping block, so the placement fails instead) -- say that
 plainly rather than promising a search that cannot deliver.

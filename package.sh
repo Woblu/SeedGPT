@@ -46,9 +46,9 @@ mkdir -p "$OUT/tier3-java"
 cp tier3-java/find_cool_stuff.py "$OUT/tier3-java/"
 
 case "$PLATFORM" in
-  windows-*) cp "packaging/Start Seedsmith.bat" "$OUT/" ;;
-  macos-*)   cp "packaging/Start Seedsmith.command" "$OUT/"
-             chmod +x "$OUT/Start Seedsmith.command" ;;
+  windows-*) cp "packaging/Seedsmith.bat" "$OUT/" ;;
+  macos-*)   cp "packaging/Seedsmith.command" "$OUT/"
+             chmod +x "$OUT/Seedsmith.command" ;;
   linux-*)   cp packaging/start.sh "$OUT/"; chmod +x "$OUT/start.sh" ;;
 esac
 

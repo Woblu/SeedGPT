@@ -33,8 +33,8 @@
 
 2. Unzip it anywhere. There is nothing to install.
 3. Start it:
-   - **Windows:** double-click `Start Seedsmith.bat`. If SmartScreen appears, choose **More info**, then **Run anyway**.
-   - **Mac:** Control-click `Start Seedsmith.command` and choose **Open**.
+   - **Windows:** double-click `Seedsmith.bat`. If SmartScreen appears, choose **More info**, then **Run anyway**.
+   - **Mac:** Control-click `Seedsmith.command` and choose **Open**.
    - **Linux:** run `./start.sh`.
 
 A browser tab opens. Type what you want and press Enter:

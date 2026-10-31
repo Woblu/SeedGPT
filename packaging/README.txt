@@ -6,11 +6,11 @@ Everything runs on this computer. Nothing to install.
 
 To start:
 
-  Windows   Double-click "Start Seedsmith.bat"
+  Windows   Double-click "Seedsmith.bat"
             If SmartScreen says it protected your PC, choose More info,
             then Run anyway. Seedsmith is open source but not code-signed.
 
-  macOS     Control-click "Start Seedsmith.command", then choose Open.
+  macOS     Control-click "Seedsmith.command", then choose Open.
             Do this the first time; double-clicking works after that.
 
   Linux     Run ./start.sh

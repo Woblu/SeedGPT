@@ -175,10 +175,12 @@
   };
 
   // Sidebar collapses under a narrow viewport; the ☰ button toggles it.
-  const closeSidebar = () => { $('#app').classList.remove('sb-open'); $('#scrim').classList.add('hidden'); };
+  const closeSidebar = () => { $('#app').classList.remove('sb-open'); $('#scrim').classList.add('hidden');
+    $('#sidebar').inert = true; };
   $('#menuBtn').onclick = () => {
     const open = $('#app').classList.toggle('sb-open');
     $('#scrim').classList.toggle('hidden', !open);
+    $('#sidebar').inert = !open;
   };
 
   // ---- vocabulary --------------------------------------------------------
@@ -1172,12 +1174,20 @@
     $('#main').classList.add('searched');
     out.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
+  // A tool can run for minutes, so the wait has a way out: the next request
+  // carries this id (see post) and /api/cancel ends the process behind it.
+  let toolJob = null;
   const busy = t => {
     reveal();
+    const job = toolJob = 't' + Date.now() + Math.random().toString(36).slice(2, 8);
     out.innerHTML = `<div class="card"><div class="busy">${esc(t)}</div></div>`;
+    const stop = el('button', 'tiny', '■ stop'); stop.type = 'button';
+    stop.onclick = () => { stop.disabled = true; post('/api/cancel', { job }).catch(() => {}); };
+    out.querySelector('.busy').append(' ', stop);
   };
-  const fail = (e) => { reveal(); out.innerHTML =
-    `<div class="err"><b>error</b>${esc(e)}</div>`; announce('error: ' + e); };
+  const fail = (e) => { reveal();
+    if (e === 'stopped') { out.innerHTML = ''; out.append(el('div', 'note', 'Stopped.')); return; }
+    out.innerHTML = `<div class="err"><b>error</b>${esc(e)}</div>`; announce('error: ' + e); };
 
   function nsFmt(n) {
     if (n >= 1e6) return (n/1e6).toFixed(1) + ' ms';
@@ -1257,8 +1267,10 @@
   // ---- actions -----------------------------------------------------------
   // `signal` is optional: pass a run's AbortSignal to make the request stoppable.
   async function post(path, body, signal) {
+    const sent = (toolJob && !('job' in body)) ? Object.assign({}, body, { job: toolJob }) : body;
+    toolJob = null;
     const r = await fetch(path, { method:'POST', signal,
-      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(sent) });
     // Not every failure is our JSON: a proxy, a crashed handler or a stopped
     // server answers with HTML or nothing, and r.json() then surfaced as
     // "Unexpected token <" -- true, and no help at all.
@@ -2909,7 +2921,8 @@
   $('#soBtn').onclick = async () => {
     const seed = $('#soSeed').value.trim();
     if (!seed) { fail('need a seed'); return; }
-    const body = { seed, a: $('#soA').value.trim(), ax: +$('#soAx').value, az: +$('#soAz').value,
+    const body = { seed, version: $('#version').value,
+                   a: $('#soA').value.trim(), ax: +$('#soAx').value, az: +$('#soAz').value,
                    b: $('#soB').value.trim(), bx: +$('#soBx').value, bz: +$('#soBz').value };
     busy('assembling both structures and intersecting their real piece boxes.');
     try {
