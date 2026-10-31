@@ -3,39 +3,41 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SeedGPT — Minecraft seed finder</title>
+<title>Seedsmith</title>
+<meta name="description" content="Describe the Minecraft world you want. Seedsmith searches millions of seeds on your own computer.">
+<link rel="icon" type="image/svg+xml" href="/assets/logo.svg">
 <link rel="stylesheet" href="/ui/app.css">
 </head>
 <body>
 
 <div class="app" id="app">
   <aside class="sidebar" id="sidebar">
-    <div class="side-brand"><span class="logo">🌱</span> SeedGPT</div>
+    <div class="side-brand"><img class="logo" src="/assets/logo.svg" alt=""> Seedsmith</div>
     <button class="newbtn" id="newSearch">＋ New search</button>
     <div class="side-label">History <span class="spacer"></span>
       <button id="histClear" type="button" title="forget every search">clear</button></div>
     <div class="history" id="history"></div>
-    <div class="side-foot"><span id="engine">cubiomes · loading…</span></div>
+    <div class="side-foot"><span id="engine">loading…</span></div>
   </aside>
 
   <main class="main" id="main">
     <div class="topbar">
       <button class="icon-only" id="menuBtn" title="History" aria-label="Search history">☰</button>
-      <div class="brand" id="topBrand"><span class="logo">🌱</span> SeedGPT</div>
+      <div class="brand" id="topBrand"><img class="logo" src="/assets/logo.svg" alt=""> Seedsmith</div>
       <span class="spacer"></span>
-      <button id="buildBtn" title="Build a search by hand, without the AI">🧱 <span class="lbl">Build</span></button>
-      <button id="toolsBtn" title="Specialist engines: real worldgen, Bedrock, per-seed">🧰 <span class="lbl">Tools</span></button>
+      <button id="buildBtn" title="Build a search by hand">🧱 <span class="lbl">Build</span></button>
+      <button id="toolsBtn" title="Specialist tools">🧰 <span class="lbl">Tools</span></button>
       <button class="icon-only" id="gear" title="Settings" aria-label="Settings">⚙</button>
     </div>
 
     <div class="hero" id="hero">
       <div class="hero-inner">
-        <div class="hero-logo" id="heroLogo"><span class="logo-emoji">🌱</span></div>
-        <div class="hero-title">SeedGPT</div>
-        <div class="hero-sub">Describe the Minecraft world you want. It scans millions of seeds and shows the matches.</div>
+        <div class="hero-logo"><img src="/assets/logo.svg" alt=""></div>
+        <h1 class="hero-title">Seedsmith</h1>
+        <div class="hero-sub">Describe the Minecraft world you want. Seedsmith searches millions of seeds on your own computer and shows you the matches.</div>
         <form class="prompt" id="promptForm">
           <textarea id="nl" rows="1" aria-label="Describe the world you want"
-            placeholder="e.g. a woodland mansion within 300 blocks of spawn, with a village next to it"></textarea>
+            placeholder="a mansion near spawn"></textarea>
           <button type="submit" id="go" class="iconbtn go" title="Search" aria-label="Search">➜</button>
         </form>
         <div class="edition" id="edition">
@@ -49,12 +51,14 @@
         </div>
 
         <div class="setup hidden" id="setup">
-          <div class="t"><b>The chat box needs an AI key</b> — it is what turns a
-            sentence into a query. Everything else, including the whole search
-            engine, runs without one.</div>
-          <button class="tiny" id="setupKey">Add a key</button>
+          <div class="t">Works offline for structures, biomes, ores and chest loot.
+            For anything more involved, build it by hand or add an AI key.</div>
           <button class="tiny" id="setupBuild">Build by hand</button>
+          <button class="tiny" id="setupKey">Add a key</button>
         </div>
+
+        <div class="legal">Not an official Minecraft product. Not approved by or
+          associated with Mojang or Microsoft.</div>
       </div>
     </div>
 
@@ -81,15 +85,16 @@
   <div class="tabs">
     <button class="tab on" data-pane="build" id="tabBuild">Build<span class="sub">query by hand</span></button>
     <button class="tab" data-pane="tools" id="tabTools">Tools<span class="sub">special engines</span></button>
-    <button class="tab" data-pane="settings" id="tabSettings">Settings<span class="sub">key · version</span></button>
+    <button class="tab" data-pane="settings" id="tabSettings">Settings<span class="sub">AI · about</span></button>
   </div>
 
   <div class="drawer-body">
 
   <!-- ================= BUILD ================= -->
   <div class="tabpane on" id="pane-build">
-    <p class="pane-intro">Assemble a query yourself — no AI key needed. This is
-      also where a search the chat box wrote lands, so you can see it and adjust it.</p>
+    <p class="pane-intro">Put a search together by hand. Whatever the prompt box
+      wrote lands here too, so you can see it and adjust it. The button between two
+      conditions switches between needing both (AND) and accepting either (OR).</p>
 
     <section>
       <h2>Conditions</h2>
@@ -121,9 +126,9 @@
         <div><label for="budgetMin">or search for (minutes)</label>
           <input type="number" id="budgetMin" value="0" min="0" max="360" step="1"></div>
         <div style="align-self:end">
-          <div class="hint" style="margin:0">0 = no limit. With a budget the
-            seed count is just an upper bound — leave it huge and let the clock
-            decide. A leaderboard only improves the longer it runs.</div>
+          <div class="hint" style="margin:0">0 stops at about 2½ minutes. With a
+            budget the seed count is just an upper bound: leave it huge and let the
+            clock decide. A leaderboard only improves the longer it runs.</div>
         </div>
       </div>
       <div id="rankBox" style="margin-top:9px"></div>
@@ -179,11 +184,9 @@
 
   <!-- ================= TOOLS ================= -->
   <div class="tabpane" id="pane-tools">
-    <p class="pane-intro">The main search runs on <b>cubiomes</b>, which is fast
-      because it never builds the world. These questions need something it cannot
-      see — real decoration, real structure pieces, a real server — so each has
-      its own engine. Open one to use it. The chat box will also route to these
-      on its own when a question needs them.</p>
+    <p class="pane-intro">The main search is fast because it never builds the
+      world. These questions need something it cannot see, so each has its own
+      engine. Open one to use it.</p>
 
     <details class="tool" id="tool-village">
       <summary>Village buildings <span class="tag-exp">real worldgen</span>
@@ -227,28 +230,25 @@
 
     <details class="tool" id="tool-casing">
       <summary>Treasure casing <span class="tag-exp">real worldgen</span>
-        <span class="what">A buried treasure walled in by magma, copper ore, gravel… Roughly 1 in 6 600 chests for the rare ones.</span></summary>
+        <span class="what">A buried treasure walled in by magma, copper ore, gravel… Some of these are very rare.</span></summary>
       <div class="body">
         <details class="why"><summary>why this needs its own engine</summary>
           <div class="hint">A buried treasure writes the block it <b>landed on</b> into every
             air or water face around it — so it arrives already walled in. The main search
-            cannot ask this: it runs on cubiomes, which has no surface rules and no
-            decoration, so sand columns, ore and magma are <b>absent from that engine</b>
-            rather than slow. Measured over 6&nbsp;646 chests: sand&nbsp;78%, gravel&nbsp;18%,
-            dirt&nbsp;2.7%, stone&nbsp;0.9% — and <b>copper ore and magma ~0.015% each</b>,
-            about 6&nbsp;600 chests scanned per expected hit.</div>
+            cannot ask this: its engine has no surface rules and no decoration, so sand
+            columns, ore and magma are <b>absent from it</b> rather than slow.</div>
         </details>
         <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
           <div><label for="tcCasing">encased in</label>
             <select id="tcCasing">
-              <option value="magma_block">magma block (~0.015%)</option>
-              <option value="copper_ore">copper ore (~0.015%)</option>
+              <option value="magma_block">magma block (rare)</option>
+              <option value="copper_ore">copper ore (rare)</option>
               <option value="iron_ore">iron ore (rarer still)</option>
               <option value="coal_ore">coal ore</option>
               <option value="mud">mud</option>
-              <option value="stone">stone (deep / cave floor, ~0.9%)</option>
-              <option value="gravel">gravel (~18%)</option>
-              <option value="dirt">dirt (~2.7%)</option>
+              <option value="stone">stone (deep / cave floor)</option>
+              <option value="gravel">gravel (common)</option>
+              <option value="dirt">dirt (uncommon)</option>
             </select></div>
           <div><label for="tcLimit">want</label>
             <input type="number" id="tcLimit" value="1" min="1" max="10"></div>
@@ -276,7 +276,7 @@
 
     <details class="tool" id="tool-hunt">
       <summary>Keep looking <span class="tag-exp">open-ended</span>
-        <span class="what">Runs the query in the chat box batch after batch on fresh seeds until it finds one, or you stop it.</span></summary>
+        <span class="what">Runs the search on the Build tab batch after batch on fresh seeds until it finds one, or you stop it.</span></summary>
       <div class="body">
         <details class="why"><summary>why this is not just pressing Search again</summary>
           <div class="hint">The normal search walks seeds <b>starting from the same place
@@ -323,7 +323,7 @@
         <details class="why"><summary>why this needs its own engine</summary>
           <div class="hint">The chest is placed at the bottom of the sand column, so it is
             almost always covered or underwater; this needs a beach with essentially no sand
-            over the stone. cubiomes cannot see it (no sand, no water), so real worldgen decides.</div>
+            over the stone. The main search cannot see sand or water, so real worldgen decides.</div>
         </details>
         <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
           <div><label for="etRange">seeds to scan</label>
@@ -476,18 +476,23 @@
         </div>
       </div>
     </details>
+
+    <div class="hint hidden" id="toolsMore">Seven more tools run the real Minecraft
+      generator or a real server. They need a JDK and game files that cannot be
+      included in this download: see <code>docs/advanced-tools.md</code>.</div>
   </div>
 
   <!-- ================= SETTINGS ================= -->
   <div class="tabpane" id="pane-settings">
-    <p class="pane-intro">Only the chat box uses an AI key. The query builder,
-      every tool, and the whole search engine run without one.</p>
+    <p class="pane-intro">An AI key is optional. It lets the prompt box follow
+      requests the built-in reader cannot. Searching, building and every tool work
+      without one.</p>
 
     <section>
       <h2>AI provider</h2>
       <select id="aiProvider">
         <option value="gemini">Google Gemini</option>
-        <option value="compatible">OpenAI-compatible (Groq, OpenAI, OpenRouter, Ollama…)</option>
+        <option value="compatible">Other (Groq, OpenAI, OpenRouter, Ollama…)</option>
       </select>
 
       <div id="aiCompatFields" class="hidden" style="margin-top:10px">
@@ -514,10 +519,17 @@
     </section>
 
     <section>
-      <h2>Engine</h2>
-      <div class="hint" style="margin-top:0" id="engineInfo">cubiomes · loading…</div>
-      <div class="hint">The world version and large-biomes switch live on the
-        <b>Build</b> tab, next to the conditions they change.</div>
+      <h2>About</h2>
+      <div class="hint" style="margin-top:0">Seedsmith <span class="app-version"></span> ·
+        <span id="engineInfo">loading…</span></div>
+      <div class="hint">Open source under the MIT license. Searches run on this
+        computer; nothing is sent anywhere unless you add an AI key, and then only
+        what you type in the prompt box.</div>
+      <div class="hint">World generation by
+        <a href="https://github.com/xpple/cubiomes" target="_blank" rel="noopener">cubiomes</a>.
+        The world version and large-biomes switch are on the <b>Build</b> tab.</div>
+      <div class="hint">Not an official Minecraft product. Not approved by or
+        associated with Mojang or Microsoft.</div>
     </section>
   </div>
 

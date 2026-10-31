@@ -331,7 +331,8 @@
   .app.sb-open .sidebar { transform: none; }
   .side-brand { font-size: 17px; font-weight: 800; display: flex; align-items: center;
     gap: 8px; padding: 4px 6px 12px; }
-  .side-brand .logo { font-size: 20px; }
+  .side-brand .logo, .brand .logo { width: 22px; height: 22px; display: inline-block;
+    vertical-align: -5px; image-rendering: pixelated; }
   .newbtn { width: 100%; justify-content: center; margin-bottom: 14px; }
   .side-label { font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
     text-transform: uppercase; color: var(--ink-faint); padding: 0 6px 6px;
@@ -392,7 +393,7 @@
   .hero-logo img { width: 92px; height: 92px; object-fit: contain;
     image-rendering: pixelated; display: block; margin: 0 auto;
     filter: drop-shadow(0 3px 7px rgba(0,0,0,.45)); }
-  .hero-title { font-size: 32px; font-weight: 800; letter-spacing: .01em; }
+  .hero-title { font-size: 32px; font-weight: 800; letter-spacing: .01em; margin: 0; color: var(--ink); }
   .hero-sub { margin: 10px auto 22px; max-width: 540px; color: var(--ink-soft); font-size: 14.5px; }
   .prompt { display: flex; align-items: flex-end; gap: 7px;
     background: var(--slot); border: 2px solid var(--slot-edge); border-radius: 22px;
@@ -424,12 +425,25 @@
   .chip:hover:not(:disabled) { color: var(--ink); border-color: var(--grass); filter: none; }
   .chip:active:not(:disabled) { box-shadow: none; }
 
-  /* First run: the prompt needs an AI key, and the old build only said so after
-     you had typed a question and pressed enter. */
+  /* The optional AI, offered once and quietly: the prompt works without it. */
   .setup { margin-top: 18px; display: flex; align-items: center; gap: 10px;
     text-align: left; font-size: 12.5px; color: var(--ink-soft);
     background: var(--stone-dk); border: 2px solid var(--slot-edge);
-    border-left: 4px solid var(--gold); padding: 10px 12px; }
+    border-left: 4px solid var(--stone-lt); padding: 10px 12px; }
+  .legal { margin-top: 18px; font-size: 11px; color: var(--ink-faint); }
+
+  /* What the local reader could not follow, and what to do about it. */
+  .unread { background: var(--stone-dk); border: 2px solid var(--slot-edge);
+    border-left: 4px solid var(--gold); padding: 12px 14px; font-size: 13.5px; }
+  .unread p { margin: 0 0 8px; }
+  .unread .understood { margin-bottom: 10px; }
+  .unread .btnrow { margin-top: 10px; }
+
+  /* The join between two conditions in the builder. */
+  .cond-link { display: block; margin: -19px auto 8px; padding: 1px 12px; font: 700 10.5px var(--mono);
+    letter-spacing: .08em; color: var(--ink-soft); background: var(--stone-dk);
+    border: 1px solid var(--stone-lt); border-radius: 999px; box-shadow: none; }
+  .cond-link.or { color: #10240a; background: var(--gold); border-color: var(--gold); }
   .setup .t { flex: 1; min-width: 0; }
   .setup b { color: var(--ink); }
 

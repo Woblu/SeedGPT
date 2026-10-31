@@ -1,23 +1,17 @@
-# Custom graphics
+# Graphics
 
-Drop PNGs here and the UI uses them automatically. All optional — the UI has a
-clean CSS/emoji fallback for anything missing.
+`logo.svg` is Seedsmith's logo, original to this project and under the same MIT
+license as the code.
 
-## Structure icons  ->  assets/structures/<name>.png
-Name them by the structure id, e.g.:
-  mansion.png  village.png  monument.png  desert_pyramid.png  jungle_temple.png
-  igloo.png  outpost.png  ancient_city.png  ruined_portal.png  trial_chambers.png
-  shipwreck.png  ocean_ruin.png  fortress.png  bastion.png  end_city.png
-Recommended: square, 32-64px, transparent background. Rendered pixelated.
+Everything else here is optional. The page falls back to emoji for anything
+missing, so these folders are empty in a fresh copy, and this project ships no
+Minecraft textures (those belong to Mojang).
 
-## Item icons  ->  assets/items/<name>.png
-Name them by the item id (no "minecraft:" prefix), e.g.:
-  diamond.png  emerald.png  golden_apple.png  gold_ingot.png  iron_ingot.png
-  diamond_horse_armor.png  enchanted_golden_apple.png  ...
+If you want your own icons in your own copy, drop PNGs in:
 
-## Backdrop  ->  assets/backdrop.png  (optional)
-A tiling texture used behind the header. Anything ~64px that tiles cleanly.
+- `assets/structures/<structure id>.png`, such as `mansion.png` or `village.png`
+- `assets/items/<item id>.png`, such as `diamond.png` or `golden_apple.png`
+- `assets/backdrop.png`, a small image that tiles, used behind the header
 
-Nothing here is shipped with the project — these are yours to add. The tool
-does not bundle Minecraft textures (those are Mojang's); provide your own or
-leave the folder empty and enjoy the built-in look.
+Square, 32 to 64 pixels, with a transparent background works best. They are drawn
+without smoothing, so pixel art stays sharp.

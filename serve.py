@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local web UI for the seed finder.
+"""Seedsmith's local web UI.
 
     python serve.py            # then open http://127.0.0.1:8777
 
@@ -8,18 +8,19 @@ a hosted page -- the server exists to bridge the browser to build/find.exe.
 
 Endpoints (all POST bodies are JSON):
     GET  /                -> the UI
+    GET  /api/capabilities -> what this install can do, so the page never offers
+                             a tool whose engine is not here
     GET  /api/vocab?v=..  -> valid structures/biomes for a version, with dimension
     POST /api/plan        -> parse + plan only, no search (fast, always safe)
     POST /api/explain     -> sampled rarity estimate
-    POST /api/search      -> the real search (batch)
+    POST /api/parse       -> a sentence -> query JSON, offline (nlparse.py)
     POST /api/stream      -> the real search, streamed: {"t":seed} heartbeats
                              while scanning, then {"done":{...}} -- lets the UI
                              show the seeds scroll past live
     POST /api/describe    -> what is actually in a given seed
     GET  /api/map?...     -> biome map PNG for a seed
     GET  /api/assets      -> lists which structure/item icons the user has added
-    GET  /assets/<path>   -> static image files (user-provided graphics)
-    POST /api/ask         -> natural language -> query JSON (needs ANTHROPIC_API_KEY)
+    GET  /assets/<path>   -> static image files
     POST /api/gemini      -> natural language -> query JSON. "provider":"gemini"
                              (default, key from the body or GEMINI_API_KEY) or
                              "compatible" for any OpenAI chat-completions API --
@@ -29,7 +30,7 @@ Endpoints (all POST bodies are JSON):
     POST /api/hunt        -> open-ended search: batch after batch, advancing
                              FIND_OFFSET, until satisfied or stopped. Returns a
                              job id immediately; poll /api/hunt/status, end with
-                             /api/hunt/stop. The batch /api/search can only ever
+                             /api/hunt/stop. A single search can only ever
                              answer "not in the first N seeds".
     POST /api/confirmcasing -> settle ONE casing lead against a real server.
                              The fast path is 88% right, so its hits are leads;
@@ -47,6 +48,8 @@ Endpoints (all POST bodies are JSON):
 import json
 import os
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -59,11 +62,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, quote
 
-ROOT = Path(__file__).parent
+import nlparse
+
+APP_NAME = "Seedsmith"
+ROOT = Path(__file__).resolve().parent
 ASSETS = ROOT / "assets"
 BUILD = ROOT / "build"
 UI = ROOT / "ui" / "index.html"
 PORT = int(os.environ.get("SEED_UI_PORT", "8777"))
+try:
+    APP_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+except OSError:
+    APP_VERSION = "dev"
+# Scratch files belong in the system's temp folder. A download can be unpacked
+# somewhere read-only, and writing beside the program made every search fail
+# there with a raw PermissionError.
+WORK = Path(tempfile.gettempdir()) / f"seedsmith-{os.getpid()}"
+QUERY_DIR = WORK / "queries"
+# On POSIX a killed parent leaves its children alive unless they share a process
+# group that can be signalled whole. Windows has taskkill /T for the same job.
+POPEN_GROUP = {} if os.name == "nt" else {"start_new_session": True}
 
 # Guard against a stray query pinning all cores for minutes.
 TIMEOUTS = {"plan": 15, "explain": 90, "search": 180, "describe": 30, "map": 60,
@@ -95,6 +113,16 @@ def tool(name: str) -> Path:
 # and a slow query can sit for seconds between those.
 JOBS = {}
 JOBS_LOCK = threading.Lock()
+# Every process run() has going, whether or not it has a job id, so shutting the
+# server down can reach a tool that was started with nothing to stop it by.
+RUNNING = set()
+# The job id of the request this thread is serving: a tool panel's worker can
+# then be stopped by id without every handler having to pass it down.
+REQUEST = threading.local()
+# Searches at once. Each one takes every core it is given, so two is already a
+# slower machine; this is a ceiling on a stuck tab, not a queue.
+MAX_SEARCHES = 3
+SEARCHES = threading.BoundedSemaphore(MAX_SEARCHES)
 
 
 def job_register(job, proc):
@@ -141,7 +169,7 @@ def _kill_tree(proc):
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                            capture_output=True, timeout=30)
         else:
-            proc.terminate()
+            os.killpg(proc.pid, signal.SIGKILL)
     except Exception:
         try:
             proc.terminate()
@@ -182,7 +210,7 @@ def human(out: str) -> str:
     return "\n".join(l for l in out.splitlines() if not l.startswith("@JSON "))
 
 
-def run(args, timeout, stdin=None, env=None):
+def run(args, timeout, stdin=None, env=None, cwd=None):
     """Run a tool. No shell, so query text can never become a command.
 
     On timeout the whole process TREE is killed. subprocess.run kills only the
@@ -192,8 +220,12 @@ def run(args, timeout, stdin=None, env=None):
     """
     p = subprocess.Popen([str(a) for a in args], stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, stdin=subprocess.PIPE if stdin else None,
-                         text=True, encoding="utf-8", errors="replace", cwd=str(ROOT),
-                         env=env)
+                         text=True, encoding="utf-8", errors="replace",
+                         cwd=str(cwd or ROOT), env=env, **POPEN_GROUP)
+    job = getattr(REQUEST, "job", None)
+    with JOBS_LOCK:
+        RUNNING.add(p)
+    job_register(job, p)
     try:
         out, err = p.communicate(input=stdin, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -203,6 +235,12 @@ def run(args, timeout, stdin=None, env=None):
         except Exception:  # noqa: BLE001
             pass
         raise Failure(f"timed out after {timeout}s -- try a smaller range")
+    finally:
+        with JOBS_LOCK:
+            RUNNING.discard(p)
+        job_done(job)
+    if getattr(p, "sc_cancelled", False):
+        raise Failure("stopped")
     return p.returncode, out, err
 
 
@@ -236,21 +274,24 @@ def java_seed(text) -> str:
     return str(h - (1 << 32) if h >= (1 << 31) else h)
 
 
-def clamp_threads(body, default=16) -> int:
+def default_threads() -> int:
+    """Every core but one: a search is a guest on someone's working computer."""
+    return max(1, (os.cpu_count() or 2) - 1)
+
+
+def clamp_threads(body, default=None) -> int:
     """Worker threads for a native search: at least 1, at most this machine.
 
     These were passed through unclamped -- 0 divided by zero inside find.exe,
     and anything above 64 broke its thread wait -- and a page could ask for
     more threads than the CPU has on a machine someone is using.
     """
+    default = default or default_threads()
     try:
         n = int(body.get("threads", default))
     except (TypeError, ValueError):
         n = default
     return max(1, min(n, os.cpu_count() or 16, 64))
-
-
-QUERY_DIR = BUILD / "tmp" / "queries"
 
 
 def write_query(body) -> Path:
@@ -262,8 +303,9 @@ def write_query(body) -> Path:
     two searches running at once raced on the same file. Callers remove theirs
     with drop_query(); a hunt keeps its own until it ends.
 
-    The last query is still mirrored to queries/_ui.json, never read back, so it
-    stays a single command away for running find.exe by hand.
+    Tools are run from QUERY_DIR and given the bare file name. Their command
+    lines are narrow strings on Windows, so an absolute path through a folder
+    name outside the system codepage reached them as question marks.
     """
     q = body.get("query")
     if not isinstance(q, dict):
@@ -274,12 +316,6 @@ def write_query(body) -> Path:
     fd, name = tempfile.mkstemp(prefix="q_", suffix=".json", dir=str(QUERY_DIR))
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
-    try:
-        last = ROOT / "queries" / "_ui.json"
-        last.parent.mkdir(exist_ok=True)
-        last.write_text(text, encoding="utf-8")
-    except OSError:
-        pass
     return Path(name)
 
 
@@ -574,18 +610,8 @@ def api_assets() -> dict:
         if not d.is_dir():
             return []
         return sorted(f.stem for f in d.glob("*.png"))
-    # The centre logo: a file named seed.* takes priority (that's what people
-    # reach for), else logo.*.
-    imgext = (".png", ".webp", ".gif", ".jpg", ".jpeg")
-    logo = None
-    if ASSETS.is_dir():
-        for stem in ("seed", "logo"):
-            logo = next((f.name for f in ASSETS.glob(stem + ".*")
-                         if f.suffix.lower() in imgext), None)
-            if logo:
-                break
     return {"structures": names("structures"), "items": names("items"),
-            "backdrop": (ASSETS / "backdrop.png").is_file(), "logo": logo}
+            "backdrop": (ASSETS / "backdrop.png").is_file()}
 
 
 def api_lootitems(qs) -> dict:
@@ -597,13 +623,17 @@ def api_lootitems(qs) -> dict:
 
 
 def _plan_or_fail(path, extra=(), timeout=None, key="plan"):
-    rc, out, err = run([tool("find"), path, *extra], timeout or TIMEOUTS[key],
-                       env=find_env())
+    rc, out, err = run([tool("find"), path.name, *extra], timeout or TIMEOUTS[key],
+                       env=find_env(), cwd=QUERY_DIR)
     # find.exe prints "query error:" / "plan error:" and exits non-zero.
     for marker in ("query error:", "plan error:"):
         if marker in out or marker in err:
             msg = (out + err).split(marker, 1)[1].strip().splitlines()[0]
             raise Failure(msg)
+    # 0 found, 3 searched and found nothing; anything else died, and a crash
+    # must not come back as a blank plan.
+    if rc not in (0, 3):
+        raise Failure(f"the search engine stopped unexpectedly (exit {rc})")
     return rc, out, err
 
 
@@ -627,18 +657,6 @@ def api_explain(body) -> dict:
         drop_query(path)
     return {"plan": parse_plan(out), "explain": parse_explain(out),
             "notes": parse_notes(out), "raw": human(out)}
-
-
-def api_search(body) -> dict:
-    path = write_query(body)
-    rng = max(1, min(500_000_000, int(body.get("range", 3_000_000))))
-    try:
-        _, out, _ = _plan_or_fail(path, [str(rng), str(clamp_threads(body))],
-                                  TIMEOUTS["search"], "search")
-    finally:
-        drop_query(path)
-    return {"plan": parse_plan(out), "seeds": parse_hits(out),
-            "funnel": parse_funnel(out), "notes": parse_notes(out), "raw": human(out)}
 
 
 def _seed_items(raw) -> list:
@@ -694,8 +712,9 @@ def api_check(body) -> dict:
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("".join(s + "\n" for s in seeds))
     try:
-        rc, out, err = run([tool("find"), path, "--seeds", lst, str(clamp_threads(body))],
-                           max(TIMEOUTS["search"], 900), env=find_env())
+        rc, out, err = run([tool("find"), path.name, "--seeds", Path(lst).name,
+                            str(clamp_threads(body))],
+                           max(TIMEOUTS["search"], 900), env=find_env(), cwd=QUERY_DIR)
     finally:
         drop_query(path)
         drop_query(lst)
@@ -703,7 +722,8 @@ def api_check(body) -> dict:
         if marker in out or marker in err:
             raise Failure((out + err).split(marker, 1)[1].strip().splitlines()[0])
     if rc not in (0, 3):
-        raise Failure(f"find.exe failed (exit {rc}): " + " / ".join(err.strip().splitlines()[-2:]))
+        raise Failure(f"the search engine stopped unexpectedly (exit {rc}): "
+                      + " / ".join(err.strip().splitlines()[-2:]))
     # Each @CHECK line is followed, for a yes, by that seed's @JSON hit.
     results, last = [], None
     for line in out.splitlines():
@@ -764,13 +784,12 @@ def api_map(qs) -> bytes:
     # /api/markers over the picture; baking them in too computed every
     # structure twice per view.
     marks = (qs.get("marks") or ["1"])[0] not in ("0", "false")
-    out = ROOT / "build" / "tmp"
-    out.mkdir(parents=True, exist_ok=True)
+    QUERY_DIR.mkdir(parents=True, exist_ok=True)
     # Write to a file rather than piping: PNG bytes through a pipe are easy to
     # corrupt, and a path keeps the failure mode obvious. Unique name per tile so
     # concurrent pan/zoom requests don't clobber each other.
-    dest = out / f"map_{abs(hash((seed, v, radius, px, cx, cz, large, dim, marks))):x}.png"
-    margs = [tool("map"), seed, v, str(radius), str(px), dest, str(cx), str(cz)]
+    dest = QUERY_DIR / f"map_{abs(hash((seed, v, radius, px, cx, cz, large, dim, marks))):x}.png"
+    margs = [tool("map"), seed, v, str(radius), str(px), dest.name, str(cx), str(cz)]
     # Positional up to cz; the tail flags are order-independent keywords, so a
     # nether map without large biomes still needs a placeholder in that slot.
     margs.append("large" if large else "-")
@@ -778,7 +797,7 @@ def api_map(qs) -> bytes:
         margs.append(dim)
     if not marks:
         margs.append("nomarkers")
-    rc, _, err = run(margs, TIMEOUTS["map"])
+    rc, _, err = run(margs, TIMEOUTS["map"], cwd=QUERY_DIR)
     if rc != 0 or not dest.exists():
         raise Failure(err.strip() or "map render failed")
     data = dest.read_bytes()
@@ -815,29 +834,6 @@ def api_markers(qs) -> dict:
     return json.loads(out)
 
 
-def api_ask(body) -> dict:
-    """Natural language -> query JSON, via ask.py --dry-run."""
-    text = str(body.get("text", "")).strip()
-    if not text:
-        raise Failure("say what you're looking for")
-    v = check_version(str(body.get("version", "1.21")))
-    rc, out, err = run([sys.executable, str(ROOT / "ask.py"),
-                        "--version", v, "--dry-run", text], 120)
-    if rc != 0:
-        detail = (err or out).strip().splitlines()
-        hint = detail[-1] if detail else "ask.py failed"
-        if "ANTHROPIC_API_KEY" in (err + out) or "authentication" in (err + out).lower():
-            hint = ("no Anthropic credentials. Set ANTHROPIC_API_KEY, or run "
-                    "`ant auth login`. The query builder below works without it.")
-        raise Failure(hint)
-    m = re.search(r"\{.*\}", out, re.S)
-    if not m:
-        raise Failure("ask.py returned no query")
-    notes = re.search(r"notes\s*:\s*(.+)", out)
-    return {"query": json.loads(m.group(0)),
-            "notes": notes.group(1).strip() if notes else ""}
-
-
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 
 # The condition schema taught to the model lives in ai_prompt.py.
@@ -850,6 +846,57 @@ def _vocab_for(version: str) -> dict:
     if rc != 0:
         raise Failure(err.strip() or f"vocab failed for {version}")
     return json.loads(out)
+
+
+def api_parse(body) -> dict:
+    """A sentence -> query JSON, on this machine, with no key (nlparse.py)."""
+    text = str(body.get("text", "")).strip()
+    if not text:
+        raise Failure("say what you're looking for")
+    v = check_version(nlparse.want_version(text) or str(body.get("version", "1.21")))
+    try:
+        return nlparse.parse(text, v, _vocab_for(v), api_lootitems({"v": [v]}))
+    except nlparse.NotUnderstood:
+        return {"query": None, "ignored": [], "notes": ""}
+
+
+def _built(folder, cls) -> bool:
+    """A real-worldgen backend: its compiled class, its classpath, and a JVM."""
+    return ((ROOT / folder / "out" / f"{cls}.class").exists()
+            and (ROOT / folder / "cp.txt").exists()
+            and shutil.which("java") is not None)
+
+
+def capabilities() -> dict:
+    """What this install can actually do, from the same files the handlers check.
+
+    The download contains the search engine; the tools that drive real Minecraft
+    generation or a real server need a JDK and game files that may not be
+    redistributed. So the page asks first, and a tool that cannot run is simply
+    not offered, instead of failing with a build instruction.
+    """
+    server = (ROOT / "tier3-java" / "server.jar").exists()
+    oregen = _built("tier2-outpost", "OreGen")
+    outpost = _built("tier2-outpost", "OutpostWorldgen")
+    village = _built("tier2", "VillageWorldgen")
+    bds = (ROOT / "tier3-bedrock" / "server").glob("bedrock_server*")
+    return {
+        "app": APP_NAME, "version": APP_VERSION, "threads": default_threads(),
+        "cores": os.cpu_count() or 1,
+        # An AI key set in the environment works without one in the browser.
+        "env_key": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("AI_API_KEY")),
+        "tools": {
+            "hunt": True, "fortress_overlap": True, "struct_overlap": True,
+            "cool_stuff": (ROOT / "tier3-java" / "find_cool_stuff.py").exists(),
+            "village_building": village,
+            "casing": oregen and server,
+            "exposed_treasure": outpost,
+            "spider_village": outpost,
+            "floating": oregen,
+            "bedrock_casing": village,
+            "bedrock_outpost": any(bds),
+        },
+    }
 
 
 def _ai_gemini(body, text, system, key):
@@ -1327,11 +1374,11 @@ def api_gemini(body) -> dict:
 
     m = re.search(r"\{.*\}", answer, re.S)
     if not m:
-        raise Failure("Gemini did not return a usable query. Try rephrasing.")
+        raise Failure("The AI did not return a usable query. Try rephrasing.")
     try:
         obj = json.loads(m.group(0))
     except ValueError:
-        raise Failure("Gemini returned malformed JSON. Try rephrasing.")
+        raise Failure("The AI returned malformed JSON. Try rephrasing.")
     conds = obj.get("conditions") or []
     if not isinstance(conds, list) or not conds:
         raise Failure(obj.get("notes") or "couldn't turn that into any conditions -- try being more specific.")
@@ -1367,6 +1414,12 @@ def api_gemini(body) -> dict:
              "floating", "spider_village", "bedrock_casing", "cool_stuff"}
     t = obj.get("tool")
     if isinstance(t, dict) and t.get("name") in TOOLS:
+        # Running the ordinary search instead would answer a different question
+        # with a straight face, so say what is missing.
+        if not capabilities()["tools"].get(t["name"]):
+            raise Failure("That question needs real Minecraft world generation, "
+                          "which this download does not include. See "
+                          "docs/advanced-tools.md to add it.")
         keep = {"name": t["name"]}
         if isinstance(t.get("casing"), str) and re.match(
                 r"^(minecraft:)?[a-z0-9_]{2,40}$", t["casing"]):
@@ -1846,6 +1899,10 @@ def api_structoverlap(body) -> dict:
     rc, out, err = run([tool("structoverlap"), seed, version,
                         a, str(ax), str(az), b, str(bx), str(bz)],
                        TIMEOUTS["describe"])
+    # A crash leaves no "OVERLAP" line, which the verdict below reads as
+    # "separate": a confident answer from a tool that never finished.
+    if rc != 0 and "UNKNOWN" not in out and "ERROR" not in out:
+        raise Failure(err.strip() or f"the overlap check stopped unexpectedly (exit {rc})")
     txt = out.strip()
     engine = "cubiomes"
     # cubiomes only ships piece generators for fortress and end_city, so it
@@ -2041,13 +2098,14 @@ def _hunt_batches(job, path, batch, want, threads, secs, casing="", radius=10000
                        "--offset", str(off), "--limit", str(max(1, want)),
                        "--radius", str(radius), "--workers", "4"]
             else:
-                cmd = [str(tool("find")), str(path), str(batch), str(threads)]
+                cmd = [str(tool("find")), path.name, str(batch), str(threads)]
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                encoding="utf-8", errors="replace", cwd=str(ROOT), env=env)
+                encoding="utf-8", errors="replace",
+                cwd=str(ROOT if casing else QUERY_DIR), env=env, **POPEN_GROUP)
             job_register(job, proc)
             try:
-                out, _ = proc.communicate(timeout=secs + 900 if casing else secs + 120)
+                out, err = proc.communicate(timeout=secs + 900 if casing else secs + 120)
             except subprocess.TimeoutExpired:
                 # communicate() does not kill on timeout, and job_done below
                 # forgets the process -- so it would run on, unreachable.
@@ -2060,6 +2118,22 @@ def _hunt_batches(job, path, batch, want, threads, secs, casing="", radius=10000
             return
         finally:
             job_done(job)
+
+        # find refuses an impossible query instantly and exits 1. Treating that
+        # as a finished batch counted two million "scanned" seeds per attempt,
+        # forever, while the page reported steady progress.
+        with HUNTS_LOCK:
+            st = HUNTS.get(job)
+            stopping = not st or st.get("stop")
+        if not stopping and not casing and proc.returncode not in (0, 3):
+            detail = (err or "").strip().splitlines()
+            with HUNTS_LOCK:
+                if job in HUNTS:
+                    HUNTS[job]["error"] = re.sub(r"^(query|plan) error:\s*", "",
+                                                 detail[-1] if detail else
+                                                 f"the search stopped (exit {proc.returncode})")
+                    HUNTS[job]["running"] = False
+            return
 
         if casing:
             # treasure_search emits one JSON object per hit, plus a summary.
@@ -2155,6 +2229,8 @@ def api_hunt(body) -> dict:
     casing = str(body.get("casing", "")).strip()
     if casing and not re.match(r"^(minecraft:)?[a-z0-9_]{2,40}$", casing):
         raise Failure("casing must be a block id, e.g. magma_block or iron_ore")
+    if "casing" in body and not casing:
+        raise Failure("choose a block for the casing")
     job = str(body.get("job", "")).strip()
     if not job:
         raise Failure("hunt needs a 'job' id so it can be polled and stopped")
@@ -2174,11 +2250,25 @@ def api_hunt(body) -> dict:
     with HUNTS_LOCK:
         if job in HUNTS and HUNTS[job].get("running"):
             raise Failure(f"hunt {job} is already running")
+        if sum(1 for h in HUNTS.values() if h.get("running")) >= MAX_SEARCHES:
+            raise Failure("Other searches are still running. Stop one first.")
+        # Finished hunts stay readable for a while, then go: they hold every
+        # hit they found, and nothing else ever removes them.
+        for old in [k for k, h in HUNTS.items() if not h.get("running")
+                    and time.time() - h.get("last_poll", 0) > HUNT_IDLE_SECONDS]:
+            del HUNTS[old]
     # A casing hunt supplies its own query (buried treasure near origin), so the
     # builder's query is neither needed nor meaningful for it. Everything else
     # gets its OWN query file, which the hunt re-reads every batch -- no other
     # request can change what it is searching for.
     path = None if casing else write_query(body)
+    if path:
+        # Refused now, in the reply, rather than as the first batch's failure.
+        try:
+            _plan_or_fail(path, ["1", "1"])
+        except Failure:
+            drop_query(path)
+            raise
     with HUNTS_LOCK:
         HUNTS[job] = {"hits": [], "seen": set(), "scanned": 0, "offset": 0,
                       "batches": 0, "running": True, "stop": False, "error": None,
@@ -2223,9 +2313,8 @@ def api_hunt_stop(body) -> dict:
 
 
 ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
-          "/api/search": api_search, "/api/describe": api_describe,
-          "/api/ask": api_ask, "/api/gemini": api_gemini,
-          "/api/aitest": api_aitest,
+          "/api/describe": api_describe, "/api/parse": api_parse,
+          "/api/gemini": api_gemini, "/api/aitest": api_aitest,
           "/api/villagesmiths": api_villagesmiths,
           "/api/exposedtreasure": api_exposedtreasure,
           "/api/casingtreasure": api_casingtreasure,
@@ -2244,9 +2333,20 @@ ROUTES = {"/api/plan": api_plan, "/api/explain": api_explain,
           "/api/hunt/stop": api_hunt_stop}
 
 
-ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}", f"[::1]:{PORT}"}
-ALLOWED_ORIGINS = {"http://" + h for h in ALLOWED_HOSTS}
-MAX_BODY = 1 << 20      # a query is a few KB; nothing legitimate is near this
+ALLOWED_HOSTS, ALLOWED_ORIGINS = set(), set()
+
+
+def allow_port(port):
+    ALLOWED_HOSTS.clear()
+    ALLOWED_HOSTS.update({f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"})
+    ALLOWED_ORIGINS.clear()
+    ALLOWED_ORIGINS.update("http://" + h for h in ALLOWED_HOSTS)
+
+
+allow_port(PORT)
+# A query is a few KB; the biggest legitimate body is a pasted list of 100,000
+# seeds, at up to 21 characters each.
+MAX_BODY = 4 << 20
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2340,7 +2440,7 @@ class Handler(BaseHTTPRequestHandler):
         if not target.is_file():
             self._send(404, {"error": "not found"}); return
         ct = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-              "gif": "image/gif", "webp": "image/webp"}.get(
+              "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml"}.get(
               target.suffix.lstrip(".").lower(), "application/octet-stream")
         self._send(200, target.read_bytes(), ct)
 
@@ -2357,6 +2457,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not UI.exists():
                     raise Failure("ui/index.html missing")
                 self._send(200, UI.read_bytes(), "text/html; charset=utf-8")
+            elif u.path == "/api/capabilities":
+                self._send(200, capabilities())
             elif u.path == "/api/vocab":
                 self._send(200, api_vocab(parse_qs(u.query)))
             elif u.path == "/api/map":
@@ -2388,12 +2490,23 @@ class Handler(BaseHTTPRequestHandler):
         final {"done": {...}} (or {"error": ...}). Lets the UI show seeds scroll
         past live. Uses connection-close framing, read by the browser via a
         streaming fetch()."""
+        if not SEARCHES.acquire(blocking=False):
+            self._send(429, {"error": "Other searches are still running. Stop one first."})
+            return
+        try:
+            self._stream_search_slot(body)
+        finally:
+            SEARCHES.release()
+
+    def _stream_search_slot(self, body):
+        path = None
         try:
             find = tool("find")
             path = write_query(body)
-        except Failure as e:
+            rng = str(max(1, min(500_000_000, int(body.get("range", 3_000_000)))))
+        except (Failure, TypeError, ValueError) as e:
+            drop_query(path)
             self._send(400, {"error": str(e)}); return
-        rng = str(max(1, min(500_000_000, int(body.get("range", 3_000_000)))))
         threads = str(clamp_threads(body))
         env = find_env({"FIND_STREAM": "1"})
         # A time budget lets the caller say "look for ten minutes" instead of
@@ -2424,6 +2537,20 @@ class Handler(BaseHTTPRequestHandler):
         if offset:
             env["FIND_OFFSET"] = str(offset)
 
+        # Started before the headers go out: if antivirus or a missing library
+        # stops it, the browser still gets one clean error, not a second
+        # response written into the first one's stream.
+        try:
+            p = subprocess.Popen([str(find), path.name, rng, threads],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, encoding="utf-8", errors="replace",
+                                 cwd=str(QUERY_DIR), env=env, bufsize=1, **POPEN_GROUP)
+        except OSError as e:
+            drop_query(path)
+            self._send(500, {"error": f"could not start the search engine: {e}. "
+                                      "If antivirus quarantined it, restore build/find.exe."})
+            return
+
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -2432,10 +2559,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
 
-        p = subprocess.Popen([str(find), str(path), rng, threads],
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, encoding="utf-8", errors="replace",
-                             cwd=str(ROOT), env=env, bufsize=1)
         job = str(body.get("job", "")).strip()
         job_register(job, p)
         # First line: how long find was given, so the progress line can say
@@ -2502,7 +2625,7 @@ class Handler(BaseHTTPRequestHandler):
                 # 0 = found, 3 = searched and found nothing. Anything else is a
                 # crash, and "no seeds" would be a false statement about the seeds.
                 tail = out.strip().splitlines()[-3:]
-                self._write_line({"error": f"find.exe failed (exit {p.returncode})"
+                self._write_line({"error": f"the search engine stopped unexpectedly (exit {p.returncode})"
                                            + (": " + " / ".join(tail) if tail else ""),
                                   "seeds": streamed})
             else:
@@ -2540,6 +2663,11 @@ class Handler(BaseHTTPRequestHandler):
             if fn is None:
                 self._send(404, {"error": "not found"}); return
             body = self._read_body()
+            # /api/cancel names the job to kill, not a job of its own, and a
+            # hunt registers its own process under the same id.
+            REQUEST.job = (str(body.get("job", "")).strip() or None
+                           if u.path not in ("/api/cancel", "/api/hunt", "/api/hunt/stop",
+                                             "/api/hunt/status") else None)
             result = fn(body)
         except Failure as e:
             self.close_connection = True     # the body may be partly unread
@@ -2555,14 +2683,63 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
-def main():
-    for name in ("find", "vocab", "describe", "map", "lootitems"):
+class Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second process bind a port already in use,
+    # and requests then land on either copy at random.
+    allow_reuse_address = os.name != "nt"
+    daemon_threads = True
+
+
+def _already_running(port) -> bool:
+    """Is a copy of this app answering on `port`?"""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/capabilities", timeout=2) as r:
+            return json.load(r).get("app") == APP_NAME
+    except (OSError, ValueError):
+        return False
+
+
+def _bind():
+    """(server, port) on the first free port, or (None, port) when this app is
+    already there. Double-clicking twice should reach the running copy, and some
+    other program holding the default port is no reason not to start."""
+    explicit = "SEED_UI_PORT" in os.environ
+    for port in [PORT] if explicit else range(PORT, PORT + 20):
         try:
-            tool(name)
-        except Failure as e:
-            print(f"! {e}", file=sys.stderr)
-            print("  run: ./build.sh all", file=sys.stderr)
-            return 1
+            return Server(("127.0.0.1", port), Handler), port       # loopback only
+        except OSError:
+            if _already_running(port):
+                return None, port
+    raise OSError(f"port {PORT} is in use" if explicit else
+                  f"ports {PORT}-{PORT + 19} are all in use")
+
+
+def _self_test() -> str:
+    """Run the smallest tool once, and return what went wrong in words.
+
+    A binary that cannot run on this machine otherwise shows up later, as
+    "vocab failed" on a page with no menus."""
+    try:
+        done = subprocess.run([str(tool("vocab")), "1.21"], capture_output=True, timeout=60)
+    except Failure as e:
+        return f"{e}\n  This folder is incomplete. Download it again, or run: ./build.sh all"
+    except OSError as e:
+        return (f"The search engine cannot run on this computer: {e}\n"
+                "  Check that this download matches your system, and that antivirus "
+                "has not quarantined the build folder.")
+    except subprocess.TimeoutExpired:
+        return "The search engine did not respond. Antivirus may be holding it for a scan."
+    if done.returncode != 0:
+        return (f"The search engine stopped on startup (exit {done.returncode}).\n"
+                "  This download may be built for a different kind of processor.")
+    return ""
+
+
+def main():
+    problem = _self_test()
+    if problem:
+        print(f"! {problem}", file=sys.stderr)
+        return 1
     stale = _stale_tools()
     if stale:
         # A binary older than its sources still runs -- and silently ignores
@@ -2570,11 +2747,28 @@ def main():
         print(f"! older than their sources: {', '.join(stale)} -- run ./build.sh all",
               file=sys.stderr)
 
-    url = f"http://127.0.0.1:{PORT}"
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)   # loopback only
-    srv.daemon_threads = True
-    print(f"seed finder UI -> {url}")
-    print("  ctrl-c to stop\n")
+    try:
+        srv, port = _bind()
+    except OSError as e:
+        print(f"! could not start: {e}. Set SEED_UI_PORT to another port.", file=sys.stderr)
+        return 1
+    url = f"http://127.0.0.1:{port}"
+    if srv is None:
+        print(f"{APP_NAME} is already running -> {url}")
+        if not os.environ.get("SEED_UI_NO_BROWSER"):
+            webbrowser.open(url)
+        return 0
+    allow_port(port)
+    print(f"{APP_NAME} {APP_VERSION} -> {url}", flush=True)
+    print("  close this window, or press ctrl-c, to stop\n", flush=True)
+
+    def _terminated(*_):
+        _stop_everything()
+        os._exit(0)
+    signal.signal(signal.SIGTERM, _terminated)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _terminated)     # the console window closing
+
     # SEED_UI_NO_BROWSER: the test suite starts this server, and every run used
     # to open a browser tab on the developer's screen.
     if not os.environ.get("SEED_UI_NO_BROWSER"):
@@ -2618,13 +2812,15 @@ def _stop_everything():
         for st in HUNTS.values():
             st["stop"] = True
     with JOBS_LOCK:
-        procs = list(JOBS.values())
+        procs = set(JOBS.values()) | RUNNING
         JOBS.clear()
+        RUNNING.clear()
     for p in procs:
         p.sc_cancelled = True
         _kill_tree(p)
     if procs:
         print(f"  stopped {len(procs)} running job(s)")
+    shutil.rmtree(WORK, ignore_errors=True)
 
 
 if __name__ == "__main__":

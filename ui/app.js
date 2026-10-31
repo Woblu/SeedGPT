@@ -19,6 +19,13 @@
   // otherwise hear nothing while results replace each other on screen.
   const announce = msg => { const s = document.getElementById('srStatus');
     if (s) { s.textContent = ''; setTimeout(() => { s.textContent = msg; }, 30); } };
+  // Blocked or full storage (a private window, a locked-down profile) should
+  // cost the memory of past searches, not the page.
+  const store = {
+    get(k) { try { return window.localStorage.getItem(k); } catch (_) { return null; } },
+    set(k, v) { try { window.localStorage.setItem(k, v); } catch (_) {} },
+    del(k) { try { window.localStorage.removeItem(k); } catch (_) {} },
+  };
   const esc = s => String(s).replace(/[&<>"]/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -103,18 +110,22 @@
   }
 
   let vocab = { structures:{}, biomes:{} }, lootVocab = { structures:{} };
+  // What this install can run (/api/capabilities). The search works everywhere;
+  // the tools that drive real Minecraft need game files the download cannot
+  // include, so a tool that cannot run here is not offered at all.
+  let caps = { tools: {}, env_key: false };
   let conds = [], nextId = 1;
 
   // ---- history sidebar + shell -------------------------------------------
   const HIST_LS = 'sf-history';
-  const getHistory = () => { try { return JSON.parse(localStorage.getItem(HIST_LS) || '[]'); } catch (_) { return []; } };
+  const getHistory = () => { try { return JSON.parse(store.get(HIST_LS) || '[]'); } catch (_) { return []; } };
   function addHistory(text) {
     let h = getHistory().filter(x => x.text !== text);
     h.unshift({ text, ts: Date.now() });
-    localStorage.setItem(HIST_LS, JSON.stringify(h.slice(0, 60)));
+    store.set(HIST_LS, JSON.stringify(h.slice(0, 60)));
     renderHistory();
   }
-  const setHistory = h => { localStorage.setItem(HIST_LS, JSON.stringify(h)); renderHistory(); };
+  const setHistory = h => { store.set(HIST_LS, JSON.stringify(h)); renderHistory(); };
   // Attach the query a prompt resolved to, so the entry can be replayed.
   function rememberQuery(text, query, notes) {
     const h = getHistory(), it = h.find(x => x.text === text);
@@ -156,6 +167,7 @@
   renderHistory();
 
   $('#newSearch').onclick = () => {
+    abortRun(); setBusyUI(false);
     $('#nl').value = ''; $('#nl').style.height = 'auto'; aiNote('');
     out.innerHTML = ''; stopScroll();
     $('#main').classList.remove('searched'); closeSidebar();
@@ -181,7 +193,7 @@
         const lr = await fetch('/api/lootitems?v=' + encodeURIComponent(v));
         lootVocab = await lr.json();
       } catch (e) { lootVocab = { structures:{} }; }
-      const line = `cubiomes · MC ${d.version} · ${Object.keys(d.structures).length} structures · ${Object.keys(d.biomes).length} biomes`;
+      const line = `MC ${d.version} · ${Object.keys(d.structures).length} structures · ${Object.keys(d.biomes).length} biomes`;
       $('#engine').textContent = line;
       $('#engineInfo').textContent = line;
       vocabTries = 0;
@@ -370,6 +382,17 @@
     }
     conds.forEach((c, i) => {
       const d = el('div', 'cond ' + c.kind);
+      // Between two cards: both must hold, or either one will do.
+      if (i) {
+        const link = el('button', 'cond-link' + (c.or ? ' or' : ''), c.or ? 'OR' : 'AND');
+        link.type = 'button';
+        link.title = c.or ? 'Either of these will do. Click to need both.'
+                          : 'Both of these are needed. Click to accept either.';
+        link.setAttribute('aria-label', (c.or ? 'either condition will do' : 'both conditions needed')
+                                        + ', click to change');
+        link.onclick = () => { c.or = !c.or; render(); };
+        d.append(link);
+      }
       if (c.kind === 'loot') {
         const top = el('div','top');
         top.append(mkIcon('item', c.item), el('span','cid', c.id), el('span','dim','CHEST LOOT'));
@@ -798,7 +821,7 @@
           ? '✓ Exact: samples Minecraft’s real block-level terrain (not the smoothed estimate), so it sees sharp cliffs right under a structure’s footprint. Use a SMALL radius (~8-12 = the footprint) with of: a structure. Costly per seed — the planner runs it last, so always pair it with a cheap filter first (e.g. an approx terrain-height ≥150 at the same structure). 1.18+ Overworld only.'
           : (c.relief||0) > 0
           ? '⚠ Approximate (smoothed 1:4 estimate). Good as a cheap pre-filter, but it CANNOT see sharp cliffs — for a real cliff-edge result tick “exact terrain” below and use a small radius. Overworld only; best on 1.18+.'
-          : '⚠ Approximate. Terrain height is cubiomes’ estimate (as used for spawn finding), not exact game height — it can be off by a few blocks, so leave headroom. Overworld only; most accurate on 1.18+. For clifftop / cliff-edge placement use “relief” + “exact terrain”.';
+          : '⚠ Approximate. Terrain height is an estimate (as used for spawn finding), not exact game height — it can be off by a few blocks, so leave headroom. Overworld only; most accurate on 1.18+. For clifftop / cliff-edge placement use “relief” + “exact terrain”.';
         d.append(note);
         box.append(d);
         return;
@@ -990,7 +1013,7 @@
   function buildConditions() {
     const q = {
       version: $('#version').value,
-      conditions: conds.map(c => {
+      conditions: groupOr(conds.map(c => {
         if (c.kind === 'eyes') return { id: c.id, eyes: c.eyes };
         if (c.kind === 'loot') return { id: c.id, within: c.within,
           loot: { structure: c.struct, item: c.item, count: c.count } };
@@ -1054,10 +1077,23 @@
         }
         else { o.biome = c.name; o.precision = c.precision; if (c.not) o.not = true; }
         return o;
-      })
+      }))
     };
     if (largeBiomes()) q.large_biomes = true;
     return q;
+  }
+
+  // Cards joined by OR become one {"any":[...]} group; the engine turns that
+  // into separate searches and reports whichever alternative held (src/anyof.h).
+  function groupOr(list) {
+    const out = [];
+    list.forEach((c, i) => {
+      if (!conds[i].or || !out.length) { out.push(c); return; }
+      const last = out[out.length - 1];
+      if (last.any) last.any.push(c);
+      else out[out.length - 1] = { id: 'any' + i, any: [last, c] };
+    });
+    return out;
   }
 
   // The world preset is a property of the world, so it rides along with every
@@ -1153,8 +1189,8 @@
     const c = el('div', 'card');
     c.append(el('h3', null, 'Execution plan — reordered by measured cost'));
     const maxNs = Math.max(1, ...[...plan.pass1, ...plan.pass2].map(s => s.ns));
-    [['pass1','pass 1 · 48-bit geometry · no biome generator yet'],
-     ['pass2','pass 2 · biome-dependent · only for pass-1 survivors']]
+    [['pass1','step 1 · structure positions · fast'],
+     ['pass2','step 2 · biomes and terrain · only for seeds that passed step 1']]
     .forEach(([k, title]) => {
       if (!plan[k].length) return;
       const p = el('div', 'pass');
@@ -1178,9 +1214,9 @@
     if (t1 > 0 && t2 > 0) {
       const ratio = t2 / t1;
       c.append(el('div','note',
-        `Pass 1 totals ${nsFmt(t1)} per seed; pass 2 totals ${nsFmt(t2)} — ` +
+        `Step 1 totals ${nsFmt(t1)} per seed; step 2 totals ${nsFmt(t2)} — ` +
         `${ratio >= 10 ? Math.round(ratio).toLocaleString() : ratio.toFixed(1)}× more expensive. ` +
-        `The bars share one scale, so pass 1 looks like a sliver: that gap is exactly why it runs first.`));
+        `The bars share one scale, so step 1 looks like a sliver: that gap is exactly why it runs first.`));
     }
     if (plan.conditions.length) {
       const written = plan.conditions.map(x => x.id).join(', ');
@@ -1261,7 +1297,7 @@
       out.innerHTML = '';
       const tone = v => v == null ? '' : v > 50 ? 'bad' : v > 5 ? 'warn' : 'good';
       out.append(statsCard('Estimate — will this finish?', [
-        ['pass 1 survival', (e.pass1_pct ?? '—') + '%', tone(e.pass1_pct)],
+        ['seeds passing step 1', (e.pass1_pct ?? '—') + '%', tone(e.pass1_pct)],
         ['seeds per hit', e.seeds_per_hit != null ? Math.round(e.seeds_per_hit).toLocaleString() : '—'],
         ['predicted rate', e.rate || '—'],
         ['first hit', e.first_hit || '—'],
@@ -1272,9 +1308,9 @@
         out.append(el('div','note' + (bad ? ' bad' : ''), 'Verdict: ' + e.verdict));
       }
       if (e.pass1_pct > 50) out.append(el('div','note warn',
-        `Pass 1 keeps ${e.pass1_pct}% of seeds — it isn't filtering, so every seed pays full biome cost. Tighten a radius.`));
+        `Step 1 keeps ${e.pass1_pct}% of seeds, so nearly every seed needs the slow biome check. A smaller radius will be much faster.`));
       if (e.pass1_share != null) out.append(el('div','note',
-        `Time split: pass 1 ${e.pass1_share}%, pass 2 ${(100-e.pass1_share).toFixed(1)}%.`));
+        `Time split: step 1 ${e.pass1_share}%, step 2 ${(100-e.pass1_share).toFixed(1)}%.`));
       out.append(...noteCards(d.notes), planCard(d.plan), rawCard(d.raw));
     } catch (e) { fail(e.message); }
   };
@@ -1389,8 +1425,11 @@
       renderResults({ seeds: kept, funnel: { stopped: true }, notes: [] });
     } else {
       out.innerHTML = '';
-      out.append(el('div', 'note warn',
-        'Search stopped before it found anything. Ask something else, or press ➜ to run it again.'));
+      const n = el('div', 'note warn', 'Search stopped before it found anything. ');
+      const again = el('button', 'tiny', 'run it again'); again.type = 'button';
+      again.onclick = () => runSearch(shownQuery);
+      n.append(again);
+      out.append(n);
     }
     announce('search stopped' + (kept.length ? `, ${kept.length} seeds kept` : ''));
   };
@@ -1441,6 +1480,8 @@
   // also the server's ceiling; 0 means "no clock, use the seed count".
   const budgetSeconds = () =>
     Math.max(0, Math.min(360, +$('#budgetMin').value || 0)) * 60;
+  // A budget the AI set belongs to that one question, not to the next.
+  let aiBudget = false;
 
   // `extra` carries per-run options the controls do not hold -- the offset a
   // "continue" run resumes from.
@@ -1460,7 +1501,7 @@
     // A budget from the natural-language layer drives the same controls the
     // user would have set by hand, so what runs is visible rather than hidden.
     if (query.budget) {
-      if (query.budget.minutes) $('#budgetMin').value = query.budget.minutes;
+      if (query.budget.minutes) { $('#budgetMin').value = query.budget.minutes; aiBudget = true; }
       if (query.budget.seeds)   $('#range').value = query.budget.seeds;
       delete query.budget;                  // not part of the engine's schema
     }
@@ -1518,6 +1559,7 @@
   // the interpretation at the top of every result, with ways to change it.
   const ofLabel = of => !of || of === 'origin' ? 'origin' : of === 'spawn' ? 'spawn' : of;
   function condText(c) {
+    if (c.any) return c.any.map(condText).join(' or ');
     if (c.not) return 'NO ' + condText(Object.assign({}, c, { not: false }));
     const w = c.within !== undefined ? ` ≤${c.within} from ${ofLabel(c.of)}` : '';
     if (c.eyes !== undefined) return `end portal with ≥${c.eyes} eyes`;
@@ -1731,7 +1773,7 @@
         + `x=${r[3]} z=${r[4]}${r[5] ? ' -- ' + r[5] : ''}   ${tpCommand(r[3], r[4], dim)}`);
     });
     lines.push('Finder: ');
-    lines.push(`Found with SeedGPT (cubiomes engine) on ${new Date().toISOString().slice(0, 10)}.`
+    lines.push(`Found with Seedsmith on ${new Date().toISOString().slice(0, 10)}.`
       + ' Positions are exact engine output; verify in game before claiming a record.');
     return lines.join('\n');
   }
@@ -1809,7 +1851,7 @@
       // is parsed as JSON so the line never reached anyone -- and a
       // spawn-relative result is the one a player checks IMMEDIATELY, by loading
       // the world and looking. Rendered from the query instead of the stream.
-      if (((shownQuery && shownQuery.conditions) || []).some(c => c && c.of === 'spawn'))
+      if (((shownQuery && shownQuery.conditions) || []).flatMap(c => (c && c.any) || [c]).some(c => c && c.of === 'spawn'))
         out.append(el('div', 'note warn',
           'Distances from WORLD SPAWN are approximate. The spawn point depends on '
           + 'grass placement, which is decoration and is not simulated here, so the '
@@ -1818,15 +1860,15 @@
 
       if (f.pass1_pct != null) {
         const c = el('div', 'card');
-        c.append(el('h3', null, 'Funnel'));
+        c.append(el('h3', null, 'How the search went'));
         const bar = el('div', 'funnel'), i = el('i');
         i.style.width = Math.max(1.5, Math.min(100, f.pass1_pct)) + '%';
         if (f.pass1_pct > 50) i.style.background = 'var(--gold)';
         bar.append(i); c.append(bar);
         c.append(el('div', 'funnel-l',
-          `pass 1 kept ${f.pass1_pct}% (${(f.pass1 || 0).toLocaleString()}) · pass 2 confirmed ${(f.pass2 || 0).toLocaleString()}`));
+          `structure positions kept ${f.pass1_pct}% (${(f.pass1 || 0).toLocaleString()}) · biomes and terrain confirmed ${(f.pass2 || 0).toLocaleString()}`));
         if (f.too_loose) c.append(el('div', 'note warn',
-          "Pass 1 isn't filtering — every seed paid full biome cost. Tighten a radius."));
+          "Nearly every seed needed the slow biome check. A smaller radius will be much faster."));
         out.append(c);
       }
 
@@ -1917,6 +1959,7 @@
     const o = opts || {};
     let cx = o.cx || 0, cz = o.cz || 0, radius = o.radius || 2000;
     let dim = o.dim || 'overworld';
+    let homeSpawn = null;       // this world's spawn, once the markers say where
     const v = $('#version').value;
     reveal(); out.innerHTML = '';
     const card = el('div', 'card');
@@ -2039,7 +2082,7 @@
       layer.innerHTML = ''; inview.innerHTML = '';
       const span = 2 * view.radius;
       const ms = (d.markers || []).slice();
-      if (d.spawn) ms.push({ type: 'spawn', x: d.spawn.x, z: d.spawn.z });
+      if (d.spawn) { homeSpawn = d.spawn; ms.push({ type: 'spawn', x: d.spawn.x, z: d.spawn.z }); }
       const counts = {};
       ms.forEach(m => {
         counts[m.type] = (counts[m.type] || 0) + 1;
@@ -2089,7 +2132,8 @@
     zin.onclick  = () => { radius = Math.max(200, Math.round(radius / 2)); load(); };
     zout.onclick = () => { radius = Math.min(20000, radius * 2); load(); };
     zin.setAttribute('aria-label', 'zoom in'); zout.setAttribute('aria-label', 'zoom out');
-    home.onclick = () => { cx = 0; cz = 0; radius = 2000; dim = 'overworld'; syncDim(); load(); };
+    home.onclick = () => { cx = homeSpawn ? homeSpawn.x : 0; cz = homeSpawn ? homeSpawn.z : 0;
+      radius = 2000; dim = 'overworld'; syncDim(); load(); };
 
     let drag = null, moved = false;
     vp.onpointerdown = e => { drag = { x: e.clientX, y: e.clientY }; moved = false;
@@ -2247,15 +2291,15 @@
   // one being sent.
   const LEGACY_KEY_LS = 'sf-gemini-key';
   const keyKey = p => 'sf-ai-key-' + p;
-  const getKey = () => localStorage.getItem(keyKey(getProvider())) || '';
+  const getKey = () => store.get(keyKey(getProvider())) || '';
   function migrateLegacyKey() {
-    const old = localStorage.getItem(LEGACY_KEY_LS);
+    const old = store.get(LEGACY_KEY_LS);
     if (!old) return;
     // Hand it to whichever provider it plainly belongs to, rather than guessing
     // from whatever happens to be selected right now.
     const dest = /^AIza/.test(old) ? 'gemini' : 'compatible';
-    if (!localStorage.getItem(keyKey(dest))) localStorage.setItem(keyKey(dest), old);
-    localStorage.removeItem(LEGACY_KEY_LS);
+    if (!store.get(keyKey(dest))) store.set(keyKey(dest), old);
+    store.del(LEGACY_KEY_LS);
   }
   migrateLegacyKey();
   function refreshKeyState() {
@@ -2283,11 +2327,11 @@
       toast('that looks like a Google key — switch the provider to Google Gemini first');
       return;
     }
-    localStorage.setItem(keyKey(p), v); $('#geminiKey').value = ''; refreshKeyState();
+    store.set(keyKey(p), v); $('#geminiKey').value = ''; refreshKeyState();
     toast('key saved for ' + p + ' (this browser only)');
   };
   $('#keyClear').onclick = () => {
-    localStorage.removeItem(keyKey(getProvider())); refreshKeyState();
+    store.del(keyKey(getProvider())); refreshKeyState();
     toast('key cleared for ' + getProvider());
   };
 
@@ -2299,13 +2343,13 @@
   // Gemini carried a Groq model name with it, and Gemini's 404 for a model it
   // has never heard of is indistinguishable from a dead key.
   const modelKey = p => 'sf-ai-model-' + p;
-  const getProvider = () => localStorage.getItem(PROV_LS) || 'gemini';
-  const getModel = () => localStorage.getItem(modelKey(getProvider())) || '';
+  const getProvider = () => store.get(PROV_LS) || 'gemini';
+  const getModel = () => store.get(modelKey(getProvider())) || '';
   function refreshProvider() {
     const p = getProvider();
     $('#aiProvider').value = p;
     $('#aiCompatFields').classList.toggle('hidden', p !== 'compatible');
-    $('#aiBase').value = localStorage.getItem(BASE_LS) || '';
+    $('#aiBase').value = store.get(BASE_LS) || '';
     $('#aiModel').value = getModel();
     $('#aiModel').placeholder = p === 'gemini'
       ? 'model (blank = server default)' : 'model, e.g. llama-3.3-70b-versatile';
@@ -2319,15 +2363,15 @@
     refreshKeyState();
   }
   $('#aiProvider').onchange = e => {
-    localStorage.setItem(PROV_LS, e.target.value); refreshProvider();
+    store.set(PROV_LS, e.target.value); refreshProvider();
     $('#keyTestOut').textContent = '';
   };
   $('#aiBase').onchange  = e => {
-    localStorage.setItem(BASE_LS, e.target.value.trim());
+    store.set(BASE_LS, e.target.value.trim());
     refreshSetup();   // a local Ollama base needs no key, so the nudge clears
   };
   $('#aiModel').onchange = e =>
-    localStorage.setItem(modelKey(getProvider()), e.target.value.trim());
+    store.set(modelKey(getProvider()), e.target.value.trim());
   refreshProvider();
 
   $('#keyTest').onclick = async () => {
@@ -2340,7 +2384,7 @@
       const typed = $('#geminiKey').value.trim();
       const d = await post('/api/aitest', {
         provider: getProvider(), key: typed || getKey(),
-        base: localStorage.getItem(BASE_LS) || '', model: getModel(),
+        base: store.get(BASE_LS) || '', model: getModel(),
       });
       if (typed) box.textContent = '(testing the key in the box, not the saved one) ';
       let msg = (d.ok ? '✓ ' : '✗ ') + (d.verdict || '');
@@ -2369,16 +2413,16 @@
   // The drawer is `inert` while closed, so Tab cannot wander into a panel you
   // cannot see; opening moves focus in, closing hands it back to where it was.
   let drawerReturnFocus = null;
-  function openDrawer(pane) {
+  function openDrawer(pane, focusEl) {
     if (pane) showPane(pane);
     const d = $('#drawer');
     const wasOpen = !d.classList.contains('hidden');
     d.classList.remove('hidden'); d.inert = false; $('#scrim').classList.remove('hidden');
     if (!wasOpen) {
       drawerReturnFocus = document.activeElement;
-      const first = d.querySelector('.tab.on') || d.querySelector('button, select, input');
+      const first = focusEl || d.querySelector('.tab.on') || d.querySelector('button, select, input');
       if (first) setTimeout(() => first.focus(), 0);
-    }
+    } else if (focusEl) focusEl.focus();
   }
   function closeDrawer() {
     const d = $('#drawer');
@@ -2409,32 +2453,30 @@
     if (e.key === 'Escape') { closeDrawer(); closeSidebar(); }
   });
 
-  // ---- first run: say the key is needed BEFORE the question is typed -------
-  // The gate used to fire only on submit, so the first thing a new visitor got
-  // back from their first question was a refusal.
-  function refreshSetup() {
-    const local = /localhost|127\.0\.0\.1/.test(localStorage.getItem(BASE_LS) || '');
-    const ready = !!getKey() || (getProvider() === 'compatible' && local);
-    $('#setup').classList.toggle('hidden', ready);
-    // The examples stay up even without a key: they are what tells a visitor
-    // what this thing can be asked. Clicking one leaves the sentence in the box
-    // and opens settings, so the key gets added to a question already written.
-    $('#nl').placeholder = ready
-      ? 'e.g. a woodland mansion within 300 blocks of spawn, with a village next to it'
-      : 'Add an AI key to ask in words — or build the search by hand →';
+  // ---- which path a sentence takes ------------------------------------------
+  // No key is the normal case, not an error: the prompt works on this machine.
+  // A key adds the requests the local reader cannot follow.
+  function aiReady() {
+    const base = store.get(BASE_LS) || '';
+    if (getProvider() === 'compatible')
+      return !!base && (!!getKey() || /localhost|127\.0\.0\.1/.test(base));
+    return !!getKey() || !!caps.env_key;
   }
-  $('#setupKey').onclick   = () => { openDrawer('settings'); $('#geminiKey').focus(); };
+  function refreshSetup() { $('#setup').classList.toggle('hidden', aiReady()); }
+  $('#setupKey').onclick   = () => openDrawer('settings', $('#geminiKey'));
   $('#setupBuild').onclick = () => openDrawer('build');
 
   // ---- example prompts ----------------------------------------------------
   // A blank box with a blank placeholder answered none of "what can I ask?",
   // "how specific may I be?", or "does it know about loot?".
+  // Every one of these runs on a fresh download with no key, and finishes in
+  // seconds: an example that needs setup or an hour is a bad first impression.
   const EXAMPLES = [
-    'a woodland mansion within 300 blocks of spawn',
-    'village right next to a mansion',
-    'stronghold with 12 eyes already in the portal',
-    'a village with at least 5 smiths',
-    'buried treasure encased in magma',
+    'a woodland mansion within 1000 blocks of spawn',
+    'a village right next to a mansion',
+    'a desert pyramid with an enchanted golden apple',
+    'a cherry grove near spawn',
+    'a mansion or an ocean monument within 800 blocks of spawn',
     'diamonds within 64 blocks of spawn',
   ];
   (function buildChips() {
@@ -2464,7 +2506,15 @@
   const builderSnapshot = () => JSON.stringify({ c: conds, v: $('#version').value,
     lb: largeBiomes(), r: rank.on ? [rank.of, rank.by, rank.top] : null });
   function loadQueryIntoBuilder(query) {
-    conds = (query.conditions || []).map(c => {
+    // An "any" group is a run of cards joined by OR, so it stays editable.
+    const flat = (query.conditions || []).flatMap(c => c.any
+      ? c.any.map((m, i) => i ? Object.assign({}, m, { orPrev: true }) : m) : [c]);
+    conds = flat.map(c => {
+      const card = oneCard(c);
+      if (c.orPrev) card.or = true;
+      return card;
+    });
+    function oneCard(c) {
       if (c.eyes !== undefined) return { id: c.id, kind: 'eyes', eyes: c.eyes };
       if (c.loot) return { id: c.id, kind: 'loot', struct: c.loot.structure,
         item: c.loot.item, count: c.loot.count, within: c.within || 3000 };
@@ -2518,7 +2568,7 @@
         within: c.within || 400, of: c.of || 'origin', precision: c.precision || 'fine' };
       if (c.not) b.not = true;
       return b;
-    });
+    }
     nextId = conds.reduce((m, c) =>
       Math.max(m, parseInt(String(c.id).replace(/\D/g, '')) || 0), conds.length) + 1;
     $('#largeBiomes').checked = !!query.large_biomes;
@@ -2535,21 +2585,10 @@
   async function submitPrompt() {
     const text = $('#nl').value.trim();
     if (!text) return;
+    if (aiBudget) { $('#budgetMin').value = 0; aiBudget = false; }
+    if (!aiReady()) return askLocally(text);
     const key = getKey();
     const prov = getProvider();
-    // A local Ollama has no key and never will, so the gate asks for one only
-    // where one is actually required. It still catches the common case: a
-    // remote provider selected with nothing filled in.
-    if (!key && !(prov === 'compatible' && /localhost|127\.0\.0\.1/.test(localStorage.getItem(BASE_LS) || ''))) {
-      aiNote(prov === 'gemini'
-        ? 'Add a free Gemini key to search by description — opening settings…'
-        : 'Add a key for your provider, or point the base URL at a local model — opening settings…', true);
-      openDrawer('settings'); $('#geminiKey').focus(); return;
-    }
-    if (prov === 'compatible' && !(localStorage.getItem(BASE_LS) || '').trim()) {
-      aiNote('Set the API base URL for your provider — opening settings…', true);
-      openDrawer('settings'); $('#aiBase').focus(); return;
-    }
     // Asking something new replaces what came before, the way a chat does:
     // stop whatever is still running, empty the results, and clear the box so
     // the next question starts from a blank prompt rather than the last one.
@@ -2557,7 +2596,9 @@
     addHistory(text);
     $('#nl').value = ''; $('#nl').style.height = 'auto';
     out.innerHTML = ''; stopScroll();
-    aiNote('thinking…'); setBusyUI(true);
+    aiNote(''); setBusyUI(true);
+    // Up to a couple of minutes on a busy free tier, so it needs a Stop too.
+    startScroll(); $('#scrollMeta').textContent = 'asking the AI…';
     try {
       const d = await post('/api/gemini',
                            // The model is per-provider, so it is always safe to
@@ -2567,10 +2608,11 @@
                              { text, version: $('#version').value, key,
                                provider: prov, model: getModel() },
                              prov === 'compatible'
-                               ? { base: localStorage.getItem(BASE_LS) || '' }
+                               ? { base: store.get(BASE_LS) || '' }
                                : {}),
                            runCtl && runCtl.signal);
       if (token !== runToken) return;
+      stopScroll();
       aiNote(d.notes ? d.notes : '');
       // A prompt that needs a different engine now RUNS it, rather than being
       // told which panel to click. The conditions still populate the builder so
@@ -2595,14 +2637,61 @@
       // while the ordinary search runs is worse than no route at all, so say so.
       if (/routed?/i.test(d.notes || '')) {
         aiNote((d.notes || '') + '  — but no tool was actually selected, so this '
-             + 'is the ORDINARY search, not that tool. Use the sidebar panel directly.', true);
+             + 'is the ordinary search, not that tool. Open it from the Tools tab instead.', true);
       }
       await runSearch(d.query, token);
     } catch (e) {
       if (token !== runToken) return;
-      setBusyUI(false); endRun();
-      if (!isAbort(e)) aiNote(e.message, true);
+      setBusyUI(false); endRun(); stopScroll();
+      // A failed question keeps its words, so a typo costs one edit.
+      if (!isAbort(e)) { aiNote(e.message, true); $('#nl').value = text; }
     }
+  }
+
+  // The same question without a key, read on this machine (nlparse.py). It only
+  // knows so much, so whatever it could not read comes back to the person rather
+  // than being dropped: a search for half of what was asked looks like an answer
+  // to all of it.
+  async function askLocally(text) {
+    const token = beginRun();
+    out.innerHTML = ''; stopScroll(); aiNote('');
+    let d;
+    try { d = await post('/api/parse', { text, version: $('#version').value }, runCtl && runCtl.signal); }
+    catch (e) { if (token === runToken) { endRun(); if (!isAbort(e)) aiNote(e.message, true); } return; }
+    if (token !== runToken) return;
+    endRun();
+    const go = () => {
+      addHistory(text); rememberQuery(text, d.query, d.notes);
+      $('#nl').value = ''; $('#nl').style.height = 'auto';
+      aiNote(d.notes || '');
+      return runSearch(d.query);
+    };
+    if (d.query && !(d.ignored || []).length) { await go(); return; }
+    reveal();
+    const box = el('div', 'unread');
+    if (d.query) {
+      box.append(el('p', null, 'I understood this part:'));
+      const u = understoodCard(d.query);
+      u.querySelectorAll('button').forEach(b => b.remove());
+      box.append(u);
+      box.append(el('p', null, `But not: “${d.ignored.join(' ')}”. Searching without it would answer a different question.`));
+    } else {
+      box.append(el('p', null, 'I could not find a structure, biome, ore or chest item in that.'));
+    }
+    if (d.notes) box.append(el('p', 'dim', d.notes));
+    const row = el('div', 'btnrow');
+    if (d.query) {
+      const run = el('button', 'primary', 'Search anyway'); run.type = 'button';
+      run.onclick = go;
+      row.append(run);
+    }
+    const build = el('button', null, 'Build it by hand'); build.type = 'button';
+    build.onclick = () => { if (d.query) loadQueryIntoBuilder(d.query); openDrawer('build'); };
+    const key = el('button', null, 'Add an AI key'); key.type = 'button';
+    key.onclick = () => openDrawer('settings', $('#geminiKey'));
+    row.append(build, key);
+    box.append(row);
+    out.append(box);
   }
   $('#promptForm').addEventListener('submit', e => { e.preventDefault(); submitPrompt(); });
 
@@ -2647,8 +2736,7 @@
           const box = el('div', 'seed'), n = el('div', 'n');
           const num = el('span', 'num', String(h.seed));
           num.title = 'copy';
-          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
-            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          num.onclick = () => copySeed(num, String(h.seed));
           n.append(num, el('span', 'dim', h.cobblestone_height + ' blocks of cobblestone'));
           box.append(n);
           const t = el('table'), tr = el('tr');
@@ -2752,8 +2840,7 @@
           const n = el('div', 'n');
           const num = el('span', 'num', String(h.seed));
           num.title = 'copy';
-          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
-            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          num.onclick = () => copySeed(num, String(h.seed));
           n.append(num, el('span', 'dim', `${h.spawners} spawner corridor(s)`));
           box.append(n);
           const t = el('table'), tr = el('tr');
@@ -2937,9 +3024,7 @@
         $('#huBtn').click();
         return;
       default:
-        aiNote(`I routed this to "${t.name}", which is not a tool I have. `
-             + `Running the ordinary search instead.`, true);
-        await runSearch({ version: $('#version').value, conditions: [] }, token);
+        aiNote(`That needs a tool this page has no panel for ("${t.name}"), so nothing was searched.`, true);
     }
   }
 
@@ -2976,8 +3061,7 @@
           const n = el('div', 'n');
           const num = el('span', 'num', String(h.seed));
           num.title = 'copy';
-          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
-            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          num.onclick = () => copySeed(num, String(h.seed));
           n.append(num, el('span', 'dim', h.smiths + ' ' + label)); box.append(n);
           const t = el('table');
           const tr = el('tr');
@@ -3024,8 +3108,7 @@
           const n = el('div', 'n');
           const num = el('span', 'num', String(h.seed));
           num.title = 'copy';
-          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
-            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          num.onclick = () => copySeed(num, String(h.seed));
           n.append(num, el('span', 'dim',
             pretty(casing) + (h.faces ? ` \u00d7${h.faces} of 6 faces` : '')));
           box.append(n);
@@ -3103,7 +3186,7 @@
     const job = tcJob;
     $('#tcKeep').disabled = true; $('#tcBtn').disabled = true; $('#tcStop').disabled = false;
     busy(`hunting a ${pretty(casing)} casing across batch after batch of fresh seeds. `
-       + `At ~0.015% for the rare ones this is the only way it can succeed.`);
+       + `The rare casings need many batches, and this is the only way to get there.`);
     try {
       const tcRad = Math.max(1000, Math.min(60000, +$('#tcRadius').value || 10000));
       await post('/api/hunt', { job, casing, batch, want, secs: 600, radius: tcRad,
@@ -3231,7 +3314,8 @@
     busy(seed ? `measuring how far the fortresses in ${seed} grow through each other`
               : `building every fortress in ${seeds.toLocaleString()} seeds and ranking them by real piece overlap`);
     try {
-      const d = await post('/api/fortressoverlap', seed ? { seed } : { seeds });
+      const version = $('#version').value;
+      const d = await post('/api/fortressoverlap', seed ? { seed, version } : { seeds, version });
       out.innerHTML = '';
       if (seed) {
         out.append(statsCard('Fortress interpenetration · seed ' + seed, [
@@ -3264,8 +3348,7 @@
           const box = el('div', 'seed'), n = el('div', 'n');
           const num = el('span', 'num', String(r.seed));
           num.title = 'copy';
-          num.onclick = () => { navigator.clipboard?.writeText(String(r.seed));
-            num.textContent = 'copied'; setTimeout(() => num.textContent = r.seed, 800); };
+          num.onclick = () => copySeed(num, String(r.seed));
           n.append(num, el('span', 'dim',
             `${r.pairs} piece pairs · ${r.blocks.toLocaleString()} blocks · ${r.fortresses} fortresses`));
           box.append(n); c.append(box);
@@ -3301,8 +3384,7 @@
           const box = el('div', 'seed'), n = el('div', 'n');
           const num = el('span', 'num', String(h.seed));
           num.title = 'copy';
-          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
-            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
+          num.onclick = () => copySeed(num, String(h.seed));
           n.append(num, el('span', 'dim', `x=${h.x}  z=${h.z}`));
           box.append(n); c.append(box);
         });
@@ -3312,6 +3394,25 @@
   };
 
   // ---- start -------------------------------------------------------------
+  // Panels and threads follow the machine. Asked first, because a tool hidden
+  // after the page has drawn it is a flash of something that does not work.
+  const TOOL_FOR_PANEL = { village: 'village_building', casing: 'casing', hunt: 'hunt',
+    fortress: 'fortress_overlap', exposed: 'exposed_treasure', cool: 'cool_stuff',
+    spider: 'spider_village', bedrock: 'bedrock_outpost', overlap: 'struct_overlap',
+    floating: 'floating' };
+  async function loadCaps() {
+    try {
+      const r = await fetch('/api/capabilities');
+      if (!r.ok) return;
+      caps = await r.json();
+    } catch (e) { return; }
+    const hidden = Object.entries(TOOL_FOR_PANEL).filter(([p, t]) => !caps.tools[t]);
+    hidden.forEach(([p]) => { const d = $('#tool-' + p); if (d) d.remove(); });
+    $('#toolsMore').classList.toggle('hidden', !hidden.length);
+    if (caps.threads) { $('#threads').value = caps.threads; $('#threads').max = caps.cores; }
+    if (caps.version) $$('.app-version').forEach(n => { n.textContent = caps.version; });
+    refreshSetup();
+  }
   async function loadAssets() {
     try {
       const r = await fetch('/api/assets');
@@ -3321,33 +3422,6 @@
         // the palette, rather than being a second hard-coded near-black here.
         document.documentElement.style.setProperty('--backdrop-url', "url('/assets/backdrop.png')");
         document.body.classList.add('has-backdrop');
-      }
-      if (assets.logo) {
-        const src = '/assets/' + assets.logo;
-        // Small logo in the top bar, which is on screen the whole time.
-        const tb = $('#topBrand .logo');
-        if (tb) {
-          tb.textContent = '';
-          const im = el('img'); im.src = src; im.alt = '';
-          im.onerror = () => { tb.textContent = '🌱'; };
-          tb.append(im);
-        }
-        // Big logo in the centre of the landing screen; fall back to the seed
-        // emoji if the image is missing or broken.
-        const hl = $('#heroLogo');
-        if (hl) {
-          const im = el('img'); im.src = src; im.alt = 'SeedGPT';
-          im.onerror = () => { hl.innerHTML = ''; hl.append(el('span', 'logo-emoji', '🌱')); };
-          hl.innerHTML = ''; hl.append(im);
-        }
-        // Small logo beside the sidebar brand.
-        const brand = $('.side-brand .logo');
-        if (brand) {
-          brand.textContent = '';
-          const im = el('img'); im.src = src; im.alt = '';
-          im.style.cssText = 'width:22px;height:22px;object-fit:contain;image-rendering:pixelated;display:block';
-          brand.append(im);
-        }
       }
     } catch (e) { /* graphics are optional — the built-in look stands alone */ }
   }
@@ -3408,13 +3482,13 @@
       await navigator.clipboard.writeText(url);
       if (btn) { const was = btn.textContent; btn.textContent = 'link copied';
                  setTimeout(() => { btn.textContent = was; }, 1200); }
-      toast('link copied — it reopens this search on any copy of SeedGPT running locally', 'good');
+      toast('link copied — it reopens this search in anyone\'s copy of Seedsmith', 'good');
     } catch (_) {
       toast('could not copy; the link is in the address bar now');
     }
   }
-  function getSaved() { try { return JSON.parse(localStorage.getItem('sf-saved') || '[]'); } catch (e) { return []; } }
-  function setSaved(a) { localStorage.setItem('sf-saved', JSON.stringify(a)); renderSaved(); }
+  function getSaved() { try { return JSON.parse(store.get('sf-saved') || '[]'); } catch (e) { return []; } }
+  function setSaved(a) { store.set('sf-saved', JSON.stringify(a)); renderSaved(); }
   function renderSaved() {
     const box = $('#savedList'); box.innerHTML = '';
     const a = getSaved();
@@ -3500,8 +3574,7 @@
     json.onclick = () => download('seeds.json', JSON.stringify(seeds, null, 2), 'application/json');
     const copy = el('button', 'tiny', 'copy CSV');
     copy.onclick = async () => {
-      try { await navigator.clipboard.writeText(toCSV(seedRows(seeds)));
-        copy.textContent = 'copied'; setTimeout(() => copy.textContent = 'copy CSV', 900); } catch (e) {}
+      copyText(copy, toCSV(seedRows(seeds)));
     };
     bar.append(csv, json, copy);
     return bar;
@@ -3525,6 +3598,7 @@
   });
 
   // ---- start -------------------------------------------------------------
+  loadCaps();
   loadAssets();
   renderSaved();
   // A shared link (#q=...) rebuilds its query. Its version is set BEFORE the
