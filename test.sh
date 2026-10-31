@@ -102,6 +102,9 @@ if grep -q 'warning:' /tmp/sc_test/blib; then
 else
   ok "our code compiles without warnings under -Wall"
 fi
+[ "$(./build/find.exe --version)" = "seedsmith $(tr -d '[:space:]' < VERSION) (engine: cubiomes, up to MC 26.2)" ] \
+  && ok "find --version reports this release" \
+  || bad "find --version" "$(./build/find.exe --version 2>&1)"
 
 javac -d "$JC" tools/XVal.java tools/Verify.java 2>/tmp/sc_test/jc \
   && ok "java reference compiles" \
@@ -732,11 +735,13 @@ section "web ui"
 UIPORT=8791
 SEED_UI_PORT=$UIPORT SEED_UI_NO_BROWSER=1 python serve.py >/tmp/sc_test/ui.log 2>&1 &
 uipid=$!
-for _ in $(seq 1 30); do
-  curl -s -m 1 "http://127.0.0.1:$UIPORT/api/vocab?v=1.21" >/dev/null 2>&1 && break
-  sleep 0.3
+# A slow first start is normal on a machine that has to scan new binaries, so
+# wait for a real answer rather than a fixed time.
+for _ in $(seq 1 120); do
+  curl -s -m 5 "http://127.0.0.1:$UIPORT/api/vocab?v=1.21" 2>/dev/null | grep -q fortress && break
+  sleep 0.25
 done
-if curl -s -m 3 "http://127.0.0.1:$UIPORT/api/vocab?v=1.21" | grep -q '"fortress": "nether"'; then
+if curl -s -m 10 "http://127.0.0.1:$UIPORT/api/vocab?v=1.21" | grep -q '"fortress": "nether"'; then
   ok "server serves version-aware vocabulary"
 else
   bad "ui vocab endpoint failed" "$(tail -3 /tmp/sc_test/ui.log)"

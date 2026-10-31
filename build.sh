@@ -22,6 +22,8 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) LIBS=""; PLATFLAGS="-D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE" ;;
   *)                    LIBS="-lm -pthread"; PLATFLAGS="" ;;
 esac
+# LDFLAGS=-static gives a Linux binary that does not depend on the host's glibc.
+LIBS="$LIBS ${LDFLAGS:-}"
 
 # -ffp-contract=off: Java never fuses a*b+c into a single rounding. clang does by
 # default once -march=native exposes FMA -- 393 fused multiply-adds turned up in
@@ -36,7 +38,8 @@ case "$(uname -m)" in
   arm64|aarch64) CPUFLAG="-mcpu=$MARCH" ;;
   *)             CPUFLAG="-march=$MARCH" ;;
 esac
-BASEFLAGS="-O3 $CPUFLAG -ffp-contract=off $PLATFLAGS -I$CUB -I$CUB/compat -Isrc -I$CUB/loot/cjson"
+APP_VERSION=$(tr -d '[:space:]' < VERSION)
+BASEFLAGS="-O3 $CPUFLAG -ffp-contract=off $PLATFLAGS -DAPP_VERSION=\"$APP_VERSION\" -I$CUB -I$CUB/compat -Isrc -I$CUB/loot/cjson"
 # Upstream's code is not ours to lint, so it builds quietly; ours gets -Wall,
 # and its warnings are printed rather than swallowed.
 CUBFLAGS="$BASEFLAGS -Wno-parentheses -Wno-unused-function"

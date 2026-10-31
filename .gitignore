@@ -64,3 +64,6 @@ boot165/
 # Fetch them with the download+SHA1 steps in tier3-java/README.md instead.
 *.jar
 !**/gradle/wrapper/gradle-wrapper.jar
+
+# Packaged downloads (./package.sh)
+dist/

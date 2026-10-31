@@ -1,0 +1,90 @@
+# Build what players download, prove each one works, and put them on a DRAFT
+# release. A draft is visible only to people with write access, so nothing
+# reaches the public until someone presses Publish.
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [release-prep]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86-64-v2 runs on nearly every PC since about 2010. -march=native
+          # would crash on any processor older than the build machine's.
+          - { platform: windows-x86_64, os: windows-latest, march: x86-64-v2 }
+          # Statically linked, so it does not depend on the player's glibc.
+          - { platform: linux-x86_64, os: ubuntu-latest, march: x86-64-v2, ldflags: -static }
+          - { platform: linux-arm64, os: ubuntu-24.04-arm, march: generic, ldflags: -static }
+          - { platform: macos-arm64, os: macos-latest, march: apple-m1 }
+    defaults:
+      run:
+        shell: bash
+    env:
+      MARCH: ${{ matrix.march }}
+      LDFLAGS: ${{ matrix.ldflags }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: engine (pinned cubiomes + patches)
+        run: ./setup.sh
+      - name: build
+        run: ./build.sh all
+      - name: the release binaries generate the same worlds
+        run: python tests/golden.py
+      - name: package
+        run: ./package.sh ${{ matrix.platform }}
+      - name: the package works on its own
+        run: python tests/smoke_package.py "dist/seedsmith-$(tr -d '[:space:]' < VERSION)-${{ matrix.platform }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            dist/seedsmith-*.zip
+            dist/seedsmith-*.tar.gz
+          if-no-files-found: error
+
+  draft:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloads
+          merge-multiple: true
+      - name: replace the draft
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          tag="v$version"
+          (cd downloads && sha256sum seedsmith-* > SHA256SUMS.txt)
+          # The notes are this version's section of the changelog.
+          awk -v v="## $version" '$0 ~ "^## " { p = (index($0, v) == 1) ; if (p) next } p' \
+            CHANGELOG.md > notes.md
+          # Only ever replaces a draft: a published release is left alone, and
+          # creating one with the same tag then fails, which is the right outcome.
+          if [ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
+            gh release delete "$tag" --yes
+          fi
+          gh release create "$tag" downloads/* --draft --target main \
+            --title "Seedsmith $version" --notes-file notes.md

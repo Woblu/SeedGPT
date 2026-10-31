@@ -20,6 +20,7 @@
 #include <math.h>
 #include <limits.h>
 #include <inttypes.h>
+#include <errno.h>
 #include "platform.h"
 
 #define MAX_HITS      12
@@ -868,7 +869,12 @@ static void writeTsv(const Query *q, uint64_t ws, const Match *mm, FILE *tsv)
 
 static char *slurp(const char *path)
 {
-    FILE *f = fopen(path, "rb");
+    // The page writes a query file and runs this at once, and on Windows
+    // antivirus can hold a new file open for a moment, which refuses the open
+    // with EACCES. That is worth a short wait; a missing file is not.
+    FILE *f = NULL;
+    for (int tries = 0; tries < 40 && !(f = fopen(path, "rb")) && errno == EACCES; tries++)
+        Sleep(50);
     if (!f) return NULL;
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
     char *b = malloc(n + 1);
@@ -879,6 +885,10 @@ static char *slurp(const char *path)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--version")) {
+        printf("seedsmith %s (engine: cubiomes, up to MC %s)\n", APP_VERSION, mc2str(MC_NEWEST));
+        return 0;
+    }
     if (argc < 2) {
         fprintf(stderr,
             "usage: find <query.json> [range] [threads]\n"
