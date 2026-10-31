@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+# An older run finishing last would replace a newer draft.
+concurrency:
+  group: release
+  cancel-in-progress: true
+
 jobs:
   package:
     name: ${{ matrix.platform }}
@@ -87,5 +92,6 @@ jobs:
           if [ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
             gh release delete "$tag" --yes
           fi
-          gh release create "$tag" downloads/* --draft --target main \
+          # The commit these were built from: publishing must not tag anything else.
+          gh release create "$tag" downloads/* --draft --target "$GITHUB_SHA" \
             --title "Seedsmith $version" --notes-file notes.md

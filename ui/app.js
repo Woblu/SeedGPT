@@ -1090,6 +1090,10 @@
   function groupOr(list) {
     const out = [];
     list.forEach((c, i) => {
+      // Fields the cards have no control for travel with the card they came on.
+      // A family belongs to its biome, so choosing another biome ends it.
+      Object.assign(c, conds[i].extra);
+      if (conds[i].familyOf && conds[i].familyOf === c.biome) c.family = true;
       if (!conds[i].or || !out.length) { out.push(c); return; }
       const last = out[out.length - 1];
       if (last.any) last.any.push(c);
@@ -2525,6 +2529,10 @@
     conds = flat.map(c => {
       const card = oneCard(c);
       if (c.orPrev) card.or = true;
+      card.extra = {};
+      if (c.metric) card.extra.metric = c.metric;
+      if (c.loot && c.of) card.extra.of = c.of;
+      if (c.family) card.familyOf = c.biome;
       return card;
     });
     function oneCard(c) {
@@ -2609,7 +2617,7 @@
     addHistory(text);
     $('#nl').value = ''; $('#nl').style.height = 'auto';
     out.innerHTML = ''; stopScroll();
-    aiNote(''); setBusyUI(true);
+    aiNote(''); setBusyUI(true); liveSeeds = [];
     // Up to a couple of minutes on a busy free tier, so it needs a Stop too.
     startScroll(); $('#scrollMeta').textContent = 'asking the AI…';
     try {

@@ -2554,12 +2554,15 @@ class Handler(BaseHTTPRequestHandler):
                                       "If antivirus quarantined it, restore build/find.exe."})
             return
 
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("X-Accel-Buffering", "no")
-        self.send_header("Connection", "close")
-        self.end_headers()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
+            self.end_headers()
+        except OSError:                 # the page went away: nobody can stop this
+            _kill_tree(p); drop_query(path); return
         self.close_connection = True
 
         job = str(body.get("job", "")).strip()
@@ -2769,8 +2772,11 @@ def main():
         _stop_everything()
         os._exit(0)
     signal.signal(signal.SIGTERM, _terminated)
-    if hasattr(signal, "SIGBREAK"):
-        signal.signal(signal.SIGBREAK, _terminated)     # the console window closing
+    # The console window closing, on each system. Children run in their own
+    # process group on POSIX, so nothing else would reach them.
+    for name in ("SIGBREAK", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), _terminated)
 
     # SEED_UI_NO_BROWSER: the test suite starts this server, and every run used
     # to open a browser tab on the developer's screen.

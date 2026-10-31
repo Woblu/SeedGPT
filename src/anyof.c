@@ -148,34 +148,41 @@ int queryCompile(const char *json, Query **out, char *err, size_t errlen)
         return one(json, out, err, errlen);
     }
 
-    int rc = 0;
     int nalt = checkGroups(root, conds, err, errlen);
     Query *plans = nalt ? malloc(nalt * sizeof *plans) : NULL;
     if (nalt && !plans) snprintf(err, errlen, "out of memory");
     if (!plans) { cJSON_Delete(root); return 0; }
 
     int kept = 0, dropped = 0;
-    char note[256] = "", planErr[256] = "";
+    char note[400] = "", first[400] = "";
     for (int k = 0; k < nalt; k++) {
         char *text = alternative(root, conds, k);
-        int bad = queryParse(&plans[kept], text, err, errlen);
+        char why[400] = "";
+        int parsed = !queryParse(&plans[kept], text, why, sizeof why);
         cJSON_free(text);
-        if (bad) { free(plans); cJSON_Delete(root); return 0; }
-        char why[256];
-        if (queryPlan(&plans[kept], why, sizeof why)) {
-            if (!dropped) {
-                snprintf(planErr, sizeof planErr, "%s", why);
-                snprintf(note, sizeof note, "an alternative can never match and was "
-                         "left out: %s", why);
-            }
-            dropped++;
+        if (parsed && !queryPlan(&plans[kept], why, sizeof why)) {
+            kept++;
             continue;
         }
-        kept++;
+        // Only "impossible" means this alternative can never match. Anything else
+        // (a typo in "of", a misspelt biome) is a mistake in the query, and
+        // dropping it would hide that behind the other alternatives.
+        if (strncmp(why, "impossible", 10)) {
+            snprintf(err, errlen, "%s", why);
+            free(plans);
+            cJSON_Delete(root);
+            return parsed ? -1 : 0;
+        }
+        if (!dropped) {
+            snprintf(first, sizeof first, "%s", why);
+            snprintf(note, sizeof note, "an alternative can never match and was "
+                     "left out: %.300s", why);
+        }
+        dropped++;
     }
     cJSON_Delete(root);
     if (!kept) {
-        snprintf(err, errlen, "%s", planErr);
+        snprintf(err, errlen, "%s", first);
         free(plans);
         return -1;
     }
@@ -184,7 +191,6 @@ int queryCompile(const char *json, Query **out, char *err, size_t errlen)
         snprintf(plans[0].warn + len, sizeof plans[0].warn - len, "%s%s",
                  len ? "; " : "", note);
     }
-    rc = kept;
     *out = plans;
-    return rc;
+    return kept;
 }

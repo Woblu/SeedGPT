@@ -1787,6 +1787,14 @@ any_refuse "more combinations than one search takes" \
   '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"a","structure":"village"},{"id":"b","structure":"igloo"},{"id":"c","structure":"mansion"},{"id":"d","structure":"monument"},{"id":"e","structure":"shipwreck"}]},{"id":"h","any":[{"id":"f","biome":"forest"},{"id":"i","biome":"plains"},{"id":"j","biome":"desert"},{"id":"k","biome":"jungle"}]}]}' \
   'too many alternatives'
 
+any_refuse "a mistake inside one alternative, which must not just drop it" \
+  '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"a","structure":"village","within":500,"of":"nowhere"},{"id":"b","structure":"igloo","within":500}]}]}' \
+  'nowhere'
+printf '%s' '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"a","stronghold":"exposed"},{"id":"b","structure":"igloo","within":800}]}]}' > /tmp/sc_test/any.json
+./build/find.exe /tmp/sc_test/any.json 20000 4 2>&1 | grep -q 'can never match' \
+  && ok "an impossible alternative is dropped, and says so" \
+  || bad "impossible alternative" "$(./build/find.exe /tmp/sc_test/any.json 10 1 2>&1 | tail -2)"
+
 # ---------------------------------------------------------------- summary
 section "summary"
 printf '\n\033[1m%d passed, %d skipped, %d failed\033[0m (%ss total)\n' \

@@ -27,6 +27,6 @@
 // Compile a query into the plain queries it stands for. Returns how many (1 when
 // it has no groups; *out is malloc'd). On failure *out is NULL and the return is
 // 0 for a bad query or -1 for one the planner refused, with err set either way.
-// An alternative the planner alone refuses cannot match, so it is dropped with a
-// note in the first alternative's warn, unless that leaves none.
+// An alternative the planner calls impossible cannot match, so it is dropped with
+// a note in the first alternative's warn, unless that leaves none.
 int queryCompile(const char *json, Query **out, char *err, size_t errlen);

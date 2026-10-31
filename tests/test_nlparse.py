@@ -208,5 +208,94 @@ class Honesty(unittest.TestCase):
             nlparse.parse("an ancient city", "1.12", old)
 
 
+class NeverSilentlyWrong(unittest.TestCase):
+    """Each of these once came back with nothing ignored and a query for something
+    other than what was asked, which is the one thing this reader must not do."""
+
+    def asks_first(self, text):
+        r = ask(text)
+        self.assertTrue(r["ignored"], f"{text!r} ran silently as {r['query']['conditions']}")
+        return r
+
+    def test_a_version_is_not_a_distance(self):
+        self.assertEqual(conds("a village in 1.20")[0]["within"], 2000)
+        self.assertEqual(nlparse.want_version("a village within 1.5 chunks"), None)
+        self.assertEqual(conds("a village within 1.5 chunks")[0]["within"], 24)
+
+    def test_a_minimum_distance_is_not_a_maximum(self):
+        self.asks_first("a village at least 1000 blocks from spawn")
+        self.asks_first("a village more than 500 blocks from spawn")
+        self.asks_first("a village away from an ocean")
+
+    def test_without_is_not_with(self):
+        self.asks_first("a village without diamonds")
+        self.asks_first("a mansion without a stronghold")
+        self.asks_first("no slime chunks")
+
+    def test_neither_means_both_absent(self):
+        c = conds("no ocean or river within 300 blocks of spawn")
+        self.assertEqual(len(c), 2)
+        self.assertTrue(all(x["not"] and x["within"] == 300 and x["of"] == "spawn" for x in c))
+
+    def test_chunks_survive_sharing_and_turning_around(self):
+        c = conds("a mansion and a village within 5 chunks of spawn")
+        self.assertEqual({(x["within"], x["metric"]) for x in c}, {(80, "chebyshev")})
+        by = {("biome" if "biome" in x else "structure"): x for x in conds("a mansion within 5 chunks of a jungle")}
+        self.assertEqual((by["biome"]["within"], by["biome"]["metric"]), (80, "chebyshev"))
+        self.assertEqual(by["structure"]["within"], 2000)
+
+    def test_a_list_with_or_is_all_alternatives(self):
+        c = conds("a village, a mansion, or a monument")
+        self.assertEqual(len(c), 1)
+        self.assertEqual(len(c[0]["any"]), 3)
+
+    def test_loot_keeps_its_place_in_a_group(self):
+        c = conds("a desert pyramid with 2 diamonds or a buried treasure")
+        self.assertEqual(len(c), 1)
+        self.assertEqual(len(c[0]["any"]), 2)
+
+    def test_a_link_into_a_group_is_not_guessed(self):
+        self.asks_first("a mansion in a jungle or a desert")
+        self.asks_first("a village near a mansion or a monument")
+        self.asks_first("a village or a monument near a mansion")
+
+    def test_a_biome_between_two_structures_keeps_both_links(self):
+        by = {x.get("structure") or "biome": x for x in conds("a village in a jungle near a mansion")}
+        self.assertEqual(by["biome"]["of"], by["village"]["id"])
+        self.assertEqual(by["village"]["of"], by["mansion"]["id"])
+
+    def test_a_stronghold_distance_is_not_lost_to_its_eyes(self):
+        self.asks_first("a stronghold within 1000 blocks of spawn with 8 eyes")
+
+    def test_a_place_and_a_link_both_count(self):
+        by = {x["structure"]: x for x in conds("a village within 500 blocks of spawn near a mansion")}
+        self.assertEqual((by["village"]["of"], by["village"]["within"]), ("spawn", 500))
+        self.assertEqual(by["mansion"]["of"], by["village"]["id"])
+
+    def test_how_close_to_spawn(self):
+        self.assertEqual(conds("a village near spawn")[0]["within"], 400)
+        self.assertEqual(conds("a village next to spawn")[0]["within"], 200)
+        self.assertEqual(conds("a village right at spawn")[0]["within"], 96)
+        self.assertEqual(conds("i want to spawn in a village")[0]["of"], "spawn")
+
+    def test_every_ore_name_is_read(self):
+        self.assertEqual(conds("copper within 64 blocks")[0]["ore"], "copper")
+        self.assertEqual(conds("ancient debris within 64 blocks")[0]["ore"], "ancient_debris")
+
+    def test_a_count_is_not_a_stray_word(self):
+        self.assertEqual(ask("12 diamonds within 48 blocks")["ignored"], [])
+        self.asks_first("less than 5 diamonds within 48 blocks")
+
+    def test_the_nether_is_not_measured_from_spawn(self):
+        r = ask("a fortress or a village within 1000 blocks of spawn")
+        members = {x["structure"]: x for x in r["query"]["conditions"][0]["any"]}
+        self.assertEqual((members["fortress"]["of"], members["village"]["of"]), ("origin", "spawn"))
+        self.assertIn("nether", r["notes"])
+
+    def test_words_that_change_meaning_are_never_filler(self):
+        for word in ("without", "near", "under", "more", "less", "than", "least", "away", "not", "no"):
+            self.assertNotIn(word, nlparse.FILLER)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
