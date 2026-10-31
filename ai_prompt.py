@@ -82,6 +82,17 @@ than as an error. 1024 is a reasonable ask for a rare biome or spawn condition;
 it costs proportionally more time per structure seed. Do NOT set it for queries
 that are only about structures: those do not use sister seeds at all.
 
+ANY OF (OR). When EITHER of two things will do, put them in one group, which
+takes the place of a condition in the list:
+  {"id":"g","any":[{"id":"a","structure":"mansion","within":1000,"of":"spawn"},
+                   {"id":"b","structure":"monument","within":1000,"of":"spawn"}]}
+Use it for "a mansion or a monument", "either a village or an outpost". A group
+holds only "id" and "any". Conditions outside a group must all hold as usual, so
+"a village, and a mansion or a monument" is one condition plus one group. Groups
+cannot be nested, nothing may use a group member as "of", they cannot be ranked,
+and groups multiply: at most 16 combinations in one search. A hit reports the
+alternative that actually held.
+
 Condition types (use EXACTLY these keys):
 - Structure:      {"id","structure":<name>,"within","of"}
     variants (only where valid): "surface":true (ruined_portal, skip buried),

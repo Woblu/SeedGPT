@@ -98,11 +98,6 @@ static inline void DeleteCriticalSection(CRITICAL_SECTION *c)     { pthread_mute
 #define InterlockedExchange(p, v)  __atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST)
 
 // ---- clocks
-static inline void Sleep(DWORD ms)
-{
-    struct timespec ts = { (time_t)(ms / 1000), (long)(ms % 1000) * 1000000L };
-    nanosleep(&ts, NULL);
-}
 static inline ULONGLONG GetTickCount64(void)
 {
     struct timespec ts;

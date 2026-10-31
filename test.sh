@@ -1550,11 +1550,16 @@ printf '{"version":"1.21","conditions":[{"id":"s","stronghold":"exposed","land":
   && ok "generateRegion agrees with 1x1 generation on rectangular regions" \
   || bad "generateRegion disagrees on a rectangular region (stride patch missing?)" "$(head -3 /tmp/sc_test/region.txt)"
 
-# find interleaves its threads, so a stopped run has one clean resume point.
-printf '{"version":"1.21","conditions":[{"id":"b","biome":"jungle","within":250}]}\n' > /tmp/sc_test/cov.json
-FIND_SECONDS=2 ./build/find.exe /tmp/sc_test/cov.json 500000000 8 2>/dev/null | grep -qE '^covered *: indices 0\.\.[0-9]+ -- resume with FIND_OFFSET=[1-9]' \
+# find interleaves its threads, so a stopped run has one clean resume point. The
+# query must outlast the budget: a common one hits its 12 results in milliseconds,
+# and a thread that never got to start then rightly reports an offset of 0, which
+# failed this check on slow machines.
+printf '{"version":"1.21","conditions":[{"id":"m","biome":"mushroom_fields","within":64},{"id":"i","biome":"ice_spikes","within":64}]}\n' > /tmp/sc_test/cov.json
+FIND_SECONDS=2 ./build/find.exe /tmp/sc_test/cov.json 500000000 8 2>/tmp/sc_test/cov.err > /tmp/sc_test/cov.out
+grep -q 'time budget expired' /tmp/sc_test/cov.out \
+  && grep -qE '^covered *: indices 0\.\.[0-9]+ -- resume with FIND_OFFSET=[1-9]' /tmp/sc_test/cov.out \
   && ok "a time-budgeted run reports a gap-free resume offset" \
-  || bad "no resume offset after a budgeted run" ""
+  || bad "no resume offset after a budgeted run" "$(tail -2 /tmp/sc_test/cov.out) $(tail -2 /tmp/sc_test/cov.err)"
 
 # FIND_JSON: every hit is also one @JSON line, built from the engine's result
 # structs. Several kinds interleaved in one query, and a leaderboard, must all
