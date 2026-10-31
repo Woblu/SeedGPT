@@ -14,6 +14,7 @@
 #include "finders.h"
 #include "generator.h"
 #include "util.h"
+#include "seed.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,7 +36,8 @@ int main(int argc, char **argv)
             "usage: nearest <seed> <version> structure|biome <name> [x] [z] [radius] [large]\n");
         return 2;
     }
-    uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
+    uint64_t seed;
+    if (!parseWorldSeed(argv[1], &seed)) { fprintf(stderr, "no seed given\n"); return 2; }
     int mc = str2mc(argv[2]);
     if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     const char *kind = argv[3], *name = argv[4];

@@ -17,6 +17,7 @@
 #include "generator.h"
 #include "util.h"
 #include "platform.h"
+#include "seed.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -401,7 +402,8 @@ int main(int argc, char **argv)
                         " [large|-] [nether|end] [nomarkers]\n");
         return 2;
     }
-    uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
+    uint64_t seed;
+    if (!parseWorldSeed(argv[1], &seed)) { fprintf(stderr, "no seed given\n"); return 2; }
     int mc     = (argc > 2) ? str2mc(argv[2]) : MC_1_21;
     if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     int radius = (argc > 3) ? atoi(argv[3]) : 2000;

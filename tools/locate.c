@@ -28,7 +28,8 @@ int main(int argc, char **argv)
                         "[centreX] [centreZ] [--all]\n");
         return 2;
     }
-    uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
+    uint64_t seed;
+    if (!parseWorldSeed(argv[1], &seed)) { fprintf(stderr, "no seed given\n"); return 2; }
     int mc = str2mc(argv[2]);
     if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
 

@@ -11,6 +11,7 @@
 #include "finders.h"
 #include "generator.h"
 #include "util.h"
+#include "seed.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,13 +29,21 @@ typedef struct { const char *name; Pos pos; int dist; int biome; char note[40]; 
 
 static int by_dist(const void *a, const void *b)
 {
-    return ((const Found*)a)->dist - ((const Found*)b)->dist;
+    const Found *x = a, *y = b;
+    if (x->dist != y->dist) return x->dist < y->dist ? -1 : 1;
+    // Equal whole-block distances are common, and qsort leaves their order to
+    // the C library, so the same seed listed differently on Windows and Linux.
+    int n = strcmp(x->name, y->name);
+    if (n) return n;
+    if (x->pos.x != y->pos.x) return x->pos.x < y->pos.x ? -1 : 1;
+    return (x->pos.z > y->pos.z) - (x->pos.z < y->pos.z);
 }
 
 int main(int argc, char **argv)
 {
     if (argc < 2) { fprintf(stderr, "usage: describe <seed> [version] [radius] [large] [json]\n"); return 2; }
-    uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
+    uint64_t seed;
+    if (!parseWorldSeed(argv[1], &seed)) { fprintf(stderr, "no seed given\n"); return 2; }
     int mc = (argc > 2) ? str2mc(argv[2]) : MC_1_21;
     if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version %s\n", argv[2]); return 2; }
     int radius = (argc > 3) ? atoi(argv[3]) : 2000;
