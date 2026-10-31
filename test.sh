@@ -194,7 +194,8 @@ cat > /tmp/sc_test/prec.json <<'EOF'
 {"version":"1.21","conditions":[{"id":"j","biome":"jungle","within":400,"of":"origin"}]}
 EOF
 cfine=$(./build/find.exe /tmp/sc_test/prec.json 1 1 2>&1 | sed -n 's/.*jungle.*\[fine\] *~\([0-9]*\) ns.*/\1/p' | head -1)
-sed -i 's/"of":"origin"}/"of":"origin","precision":"fast"}/' /tmp/sc_test/prec.json
+sed 's/"of":"origin"}/"of":"origin","precision":"fast"}/' /tmp/sc_test/prec.json > /tmp/sc_test/prec2.json
+mv /tmp/sc_test/prec2.json /tmp/sc_test/prec.json
 cfast=$(./build/find.exe /tmp/sc_test/prec.json 1 1 2>&1 | sed -n 's/.*jungle.*\[fast\] *~\([0-9]*\) ns.*/\1/p' | head -1)
 if [ -n "$cfine" ] && [ -n "$cfast" ] && [ "$cfine" -gt "$cfast" ]; then
   ok "biome precision affects cost model (fine ${cfine}ns > fast ${cfast}ns)"

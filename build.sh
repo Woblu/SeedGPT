@@ -29,10 +29,14 @@ esac
 # difference at a boundary flips a biome or a block that Minecraft would not.
 # Matching Java's arithmetic is the whole point of the engine.
 #
-# MARCH overrides -march=native, e.g. MARCH=x86-64-v2 for a binary that has to
-# run on a different machine.
+# MARCH overrides the native target, e.g. MARCH=x86-64-v3 for a binary that has
+# to run on a different machine. ARM spells the same idea -mcpu.
 MARCH=${MARCH:-native}
-BASEFLAGS="-O3 -march=$MARCH -ffp-contract=off $PLATFLAGS -I$CUB -I$CUB/compat -Isrc -I$CUB/loot/cjson"
+case "$(uname -m)" in
+  arm64|aarch64) CPUFLAG="-mcpu=$MARCH" ;;
+  *)             CPUFLAG="-march=$MARCH" ;;
+esac
+BASEFLAGS="-O3 $CPUFLAG -ffp-contract=off $PLATFLAGS -I$CUB -I$CUB/compat -Isrc -I$CUB/loot/cjson"
 # Upstream's code is not ours to lint, so it builds quietly; ours gets -Wall,
 # and its warnings are printed rather than swallowed.
 CUBFLAGS="$BASEFLAGS -Wno-parentheses -Wno-unused-function"
