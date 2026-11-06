@@ -28,12 +28,20 @@
 // right on paper and are wrong in game.
 #define PARENT_ORIGIN (-1)
 #define PARENT_SPAWN  (-2)
+// An explicit world position: "of":"1200000,-800000". Origin and spawn are both
+// near 0,0, so without this every search was confined to the middle of the
+// world -- and a great many notable finds sit hundreds of thousands of blocks
+// out. Cost is identical to origin: it is the same disc, somewhere else.
+#define PARENT_AT     (-3)
 
 // Spawn is a 64-bit, biome-dependent quantity, so pass 1 cannot know it. For
 // spawn-relative conditions pass 1 filters against origin widened by this
 // margin (a conservative over-admit), and pass 2 recomputes the match around
 // the true spawn exactly. Sized past the observed maximum.
 #define SPAWN_MARGIN 1100
+
+#define MET_EUCLID    0
+#define MET_CHEBYSHEV 1
 
 typedef enum {
     CT_STRUCTURE,   // structure of a type within `within` blocks of parent
@@ -47,6 +55,7 @@ typedef enum {
     CT_ISLAND,      // land at the reference, ocean covering >= N% of the disc
     CT_OVERLAP,     // two structures whose footprint boxes intersect
     CT_CACTUS,      // a cactus at least N blocks tall within `within`
+    CT_STRONGHOLD,  // a stronghold whose roof is near (or above) the surface
 } CondType;
 
 // What a leaderboard search ranks by. AUTO picks the condition's natural
@@ -85,10 +94,26 @@ typedef struct {
     char     id[ID_LEN];
     CondType type;
     int      structType;    // CT_STRUCTURE
-    int      biomeId;       // CT_BIOME
+    int      biomeId;       // CT_BIOME -- the single biome, or the first member
+                            // of a category (kept for dimension inference)
+    // A CATEGORY match: "badlands" should mean badlands + wooded + eroded, the
+    // way a player means it, not one of the three. Empty unless a category name
+    // was given, in which case biomeId is only a representative and THIS is the
+    // thing to test.
+    unsigned char biomeSet[256];
+    int      biomeIsSet;    // biomeSet carries the answer, not biomeId
+    char     biomeLabel[32];// what the user typed, for honest reporting
     int      within;        // radius, blocks
+    // How `within` measures distance. EUCLIDEAN is a disc and is the default,
+    // because "within 200 blocks" in plain English means a disc. CHEBYSHEV is a
+    // SQUARE -- max(|dx|,|dz|) -- and is what seed finders mean by "within N on
+    // any axis" or "within N chunks", because structure regions are a chunk
+    // grid. The two differ by up to sqrt(2): a Euclidean 100 misses a structure
+    // 90 east and 90 north, which a Chebyshev 100 finds.
+    int      metric;        // MET_EUCLID (default) | MET_CHEBYSHEV
     char     ofId[ID_LEN];  // parent condition id, or "spawn"/"origin"
-    int      parent;        // resolved index, or PARENT_ORIGIN / PARENT_SPAWN
+    int      parent;        // resolved index, or PARENT_ORIGIN / PARENT_SPAWN / PARENT_AT
+    int      atX, atZ;      // PARENT_AT only: the world position to measure from
     int      dim;           // DIM_OVERWORLD / DIM_NETHER / DIM_END, inferred
     int      scanStep;      // CT_BIOME: sample spacing in blocks (see below)
     int      eyesMin;       // CT_EYES: minimum filled frames required
@@ -102,6 +127,9 @@ typedef struct {
     int      reqExposed;    // CT_STRUCTURE (buried_treasure): chest on dry land
                             // at/above sea level (exposed), not submerged
     int      reqShip;       // CT_STRUCTURE (end_city): require an end ship (elytra)
+    int      floatVoid;     // CT_STRUCTURE: require a FLOATING island under it
+    int      floatRing;     // how far out the air gap is checked (blocks)
+    int      floatNeed;     // how many of 8 directions must be open
     int      caveBelow;     // CT_STRUCTURE: require an open void at least this
                             // many blocks tall UNDER the structure -- a village
                             // perched over a cavern. Real block terrain, 1.18+.
@@ -109,6 +137,28 @@ typedef struct {
     int      cactusMin;     // CT_CACTUS: minimum cactus height in blocks. One
                             // placement is 1-3, so anything above ~6 needs
                             // several patches stacking on one column.
+    // CT_OVERLAP with a stronghold operand. A stronghold is not a region
+    // structure -- it has no getStructurePos and no fixed footprint -- so the
+    // overlap is tested against its actual PIECE bounding boxes. minRoofY then
+    // asks how high the highest piece reaches, which is the version-independent
+    // way to say "shallow" or "exposed": a stronghold whose roof is at y=62 is
+    // at the surface in any version, with no terrain generator needed.
+    int      hasRoofMin;    // CT_OVERLAP/CT_STRONGHOLD: minRoofY is meaningful
+    int      minRoofY;      // CT_OVERLAP/CT_STRONGHOLD: top piece at or above this
+    // CT_STRONGHOLD: how far the roof may sit BELOW the surface. 0 means the
+    // stronghold breaks ground; small positive numbers mean "a few blocks of
+    // dirt over it". This is the honest form of the question -- a bare Y
+    // threshold calls a stronghold at y=60 shallow whether the ground above it
+    // is at 63 or at 130.
+    int      hasMaxDepth;
+    int      maxDepth;
+    // CT_STRONGHOLD: require DRY LAND above it. Default ON, and that default is
+    // deliberate: most strongholds whose roof reaches the surface do so because
+    // the surface there is an ocean floor, so "exposed" without this returns
+    // mostly sites you fly to and find nothing but water over. Same failure the
+    // ruined portals had. "land": false includes the sea-floor ones, and either
+    // way the report says which.
+    int      landOnly;
     int      overlapPad;    // CT_OVERLAP: slack in blocks. 0 = the two footprint
                             // boxes must genuinely intersect; N = within N blocks
                             // of each other, for "practically on top of".
@@ -120,6 +170,9 @@ typedef struct {
                             // mineable blob), not the scattered total
     int      oreExposed;    // CT_ORE: count only blocks open to air -- a cave
                             // wall you can see the ore in. 1.18+ overworld, SLOW.
+    int      oreYMin;       // CT_ORE: inclusive Y band. "deepslate emerald" is
+    int      oreYMax;       // just emerald with oreYMax = -1, since the block
+                            // form follows the stone it replaced.
     int      slimeMin;      // CT_SLIME: minimum slime chunks in range
     int      areaPct;       // CT_BIOME_AREA: min % of the disc that is biomeId
     int      structMin;     // CT_STRUCTURE: min instances in range (1 = single)
@@ -136,6 +189,13 @@ typedef struct {
                             // cluster anywhere in `within`), not just within
                             // `within` of the reference. 0 = anchored cluster.
     int      isParent;      // some other condition is measured from this one
+    // "not": true -- the condition holds when there is NO such structure or
+    // biome within `within` of its reference ("no ocean within 300 of spawn").
+    // Checked entirely in pass 2, against every attempt that really generates,
+    // because an attempt existing in pass 1 does not prove the structure does.
+    // A negated biome always scans every quart: a coarse lattice can step over
+    // a small patch, and "none found" would then be a false positive.
+    int      negate;
 } Cond;
 
 // Biome scan precision. A biome condition samples points across the disc; the
@@ -181,6 +241,11 @@ typedef struct {
     // is a property of the WORLD, not of any one condition, so it lives here
     // and every generator this query creates has to be told about it.
     int  largeBiomes;
+
+    // Non-fatal parse findings -- keys the parser does not know -- for the
+    // caller to print. A misspelt "withn" used to be skipped silently, and the
+    // condition searched its default radius instead.
+    char warn[512];
 
     // --- leaderboard ("what is the biggest X anywhere?") ---
     //
@@ -242,10 +307,15 @@ typedef struct {
     int veinMax[MAX_COND];    // CT_ORE: largest single connected vein found
     int geodeSize[MAX_COND];  // CT_STRUCTURE (geode): the matched geode's size
     int caveHeight[MAX_COND]; // CT_STRUCTURE: tallest void found under it
+    int floatCap[MAX_COND];   // CT_STRUCTURE: world Y of the island's underside
+    Pos floatAt[MAX_COND];    // where the island IS -- up to 16 blocks from
+                              // the anchor, because five offsets are sampled
     Pos partner[MAX_COND];    // CT_OVERLAP: position of the SECOND structure
     int overlapArea[MAX_COND];// CT_OVERLAP: footprint intersection, blocks^2
     int cactusTall[MAX_COND]; // CT_CACTUS: tallest cactus found, in blocks
     int cactusBase[MAX_COND]; // CT_CACTUS: world Y its lowest block stands on
+    int shRoof[MAX_COND];     // CT_STRONGHOLD: world Y of its highest piece
+    int shDepth[MAX_COND];    // CT_STRONGHOLD: surface - roof. <=0 breaks ground
 } Match;
 
 // Leaderboard scoring. Returns the ranked condition's measurement for this
@@ -275,6 +345,16 @@ const char *dimName(int dim);
 // that builds a Generator for a query must use this rather than passing 0, or
 // it silently searches the default world while claiming to search another.
 uint32_t    queryGenFlags(const Query *q);
+
+// Does a structure attempt at p really generate in this world? The same gate
+// every search uses: the placement exclusions cubiomes omits (outposts near
+// villages), biome viability, and the 1.18 terrain floor for pyramids, jungle
+// temples and mansions. `g` must have the seed applied in the structure's
+// dimension. Exported so the map and the finder cannot disagree -- the map
+// used to mark by biome viability alone and drew structures the finder had
+// (correctly) ruled out.
+int         structureGenerates(int mc, uint32_t gflags, uint64_t worldSeed,
+                               Generator *g, int stype, Pos p);
 
 // Vocabulary accessors -- the NL layer reads these instead of hardcoding names.
 int         queryStructureCount(void);

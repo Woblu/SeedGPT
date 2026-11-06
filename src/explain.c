@@ -23,10 +23,23 @@
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
-#include <windows.h>
+#include "platform.h"
 
+#ifndef MASK48             // finders.h defines the same mask
 #define MASK48 ((1ULL << 48) - 1)
-#define UPPER_SAMPLES 64        // must match tools/find.c
+#endif
+// Must match tools/find.c's DEFAULT. The real searcher can be raised with
+// FIND_UPPERS, in which case the estimate below is conservative -- it predicts
+// fewer hits than a raised run will find, never more.
+#define UPPER_SAMPLES 64
+
+// This estimator SAMPLES the real predicate -- queryStage1 and queryStage2, the
+// same functions the search runs -- rather than modelling it. So it needs no
+// updating when a condition gains a new semantic: distance metric and biome
+// families were both added without touching this file and both show up
+// correctly (chebyshev 59.7% vs euclidean 42.0% hit rate on the same query;
+// badlands family 4.98% pass against 3.88% for the single biome). Resist the
+// urge to teach it about individual features -- it already knows.
 #define MAX_KEEP 512            // survivors retained from phase A
 #define PROBE_BUDGET 40000      // total phase-B upper probes (upper bound)
 #define PHASE_B_SECONDS  4.0    // wall-clock cap: a fine biome scan is ~6ms, so
@@ -86,8 +99,13 @@ static DWORD WINAPI workerB(LPVOID arg)
         for (int p = 0; p < s->probesEach; p++) {
             uint64_t up = (splitmix64(&s->rngState) >> 16) & 0xFFFF;
             s->tried++;
-            // queryStage2 applies the seed itself, once per dimension.
-            if (queryStage2(s->q, &g, (up << 48) | s->seeds[i], &s->matches[i], lc)) s->passed++;
+            // queryStage2 applies the seed itself, once per dimension. It
+            // writes the match back on success -- including the cached eye
+            // count -- so every probe starts from a fresh copy of pass 1's
+            // match; reusing one made later sisters inherit an earlier
+            // sister's portal and inflated eye-count estimates.
+            Match mt = s->matches[i];
+            if (queryStage2(s->q, &g, (up << 48) | s->seeds[i], &mt, lc)) s->passed++;
             // A fine/exact biome scan costs milliseconds, so a fixed probe
             // budget can run for minutes. Stop on wall clock instead and
             // report the smaller sample honestly.
@@ -131,13 +149,14 @@ static double runPhaseA(const Query *q, uint64_t total, int nthreads, int sequen
     return sec;
 }
 
-void explainQuery(const Query *q, uint64_t samples, int nthreads, FILE *f)
+void explainQuery(const Query *q, uint64_t samples, int nthreads, FILE *f, ExplainResult *res)
 {
     Estimate e; memset(&e, 0, sizeof e);
     uint64_t keep[MAX_KEEP]; Match keepM[MAX_KEEP]; int nkeep = 0;
 
     double secA = runPhaseA(q, samples, nthreads, 0, &e, keep, keepM, &nkeep);
     double tA = e.drawn ? secA / e.drawn : 0;              // sec per geometry check
+    if (res) { res->p1 = e.p1; res->pHit = 0; res->secPerSeed = tA; }
 
     fprintf(f, "--- explain ---\n");
     fprintf(f, "phase A  %llu structure seeds, geometry only, %.2fs\n",
@@ -212,6 +231,7 @@ void explainQuery(const Query *q, uint64_t samples, int nthreads, FILE *f)
     double coreSecPerSeed = tA * nthreads + e.p1 * eUp * tB;
     double secPerSeed = coreSecPerSeed / nthreads;
     double perHit = e.pHit > 0 ? 1.0 / e.pHit : INFINITY;
+    if (res) { res->pHit = e.pHit; res->secPerSeed = secPerSeed; }
 
     fprintf(f, "\nmodel (mirrors the real searcher: cap %d upper probes, stop at first hit)\n",
             UPPER_SAMPLES);
@@ -244,6 +264,53 @@ void explainQuery(const Query *q, uint64_t samples, int nthreads, FILE *f)
     if (e.p1 > 0.5)
         fprintf(f, "\nWARNING: pass 1 keeps %.1f%% of seeds -- it is not filtering, so every\n"
                    "         seed pays full biome cost. Tighten a radius.\n", 100.0 * e.p1);
+    if (secPerHit > 86400.0 * 7)      fprintf(f, "\nVERDICT: too rare to search this way.\n");
+    else if (secPerHit > 600.0)       fprintf(f, "\nVERDICT: slow but feasible.\n");
+    else if (secPerHit < 1.0)         fprintf(f, "\nVERDICT: very common. Instant results.\n");
+    else                              fprintf(f, "\nVERDICT: tractable.\n");
+}
+
+void explainAny(const Query *plans, int nplans, uint64_t samples, int nthreads, FILE *f)
+{
+    // The per-alternative report is discarded: its figures are about a search
+    // that is not the one being run, and readers take the first number they see.
+#ifdef _WIN32
+    FILE *sink = fopen("NUL", "w");
+#else
+    FILE *sink = fopen("/dev/null", "w");
+#endif
+    if (!sink) sink = f;
+
+    fprintf(f, "--- explain ---\n");
+    double missP1 = 1.0, missHit = 1.0, secPerSeed = 0.0;
+    for (int p = 0; p < nplans; p++) {
+        ExplainResult r;
+        explainQuery(&plans[p], samples, nthreads, sink, &r);
+        missP1 *= 1.0 - r.p1;
+        missHit *= 1.0 - r.pHit;
+        secPerSeed += r.secPerSeed;
+        if (r.pHit > 0)
+            fprintf(f, "  alternative %d of %d : 1 in %.0f structure seeds\n", p + 1, nplans,
+                    1.0 / r.pHit);
+        else
+            fprintf(f, "  alternative %d of %d : none seen in the sample\n", p + 1, nplans);
+    }
+    if (sink != f) fclose(sink);
+
+    // Alternatives are treated as independent. They rarely are, but the error is
+    // small exactly where a figure matters: rare targets, which barely overlap.
+    double pHit = 1.0 - missHit;
+    fprintf(f, "\n  pass 1 survival : %.5f%%\n", 100.0 * (1.0 - missP1));
+    if (pHit <= 0) {
+        fprintf(f, "\nVERDICT: no alternative showed a hit in the sample. Rare, or impossible.\n");
+        return;
+    }
+    double perHit = 1.0 / pHit, secPerHit = perHit * secPerSeed;
+    fprintf(f, "  structure seeds per hit       : %.0f\n", perHit);
+    fprintf(f, "  predicted search rate         : %s on %d threads\n",
+            humanRate(secPerSeed > 0 ? 1.0 / secPerSeed : 0), nthreads);
+    fprintf(f, "\ntime to first hit : %s\n", humanTime(secPerHit));
+    fprintf(f, "time to 12 hits   : %s\n", humanTime(secPerHit * 12));
     if (secPerHit > 86400.0 * 7)      fprintf(f, "\nVERDICT: too rare to search this way.\n");
     else if (secPerHit > 600.0)       fprintf(f, "\nVERDICT: slow but feasible.\n");
     else if (secPerHit < 1.0)         fprintf(f, "\nVERDICT: very common. Instant results.\n");

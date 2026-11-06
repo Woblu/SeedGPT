@@ -1,3 +1,4 @@
+#include "biomeat.h"
 // checkbiome -- report the surface biome at a point, from scratch, for one
 // seed. Independent of the search path: it re-inits the generator and probes
 // the same way viability checks do (y=319>>2 quart column). Used to confirm a
@@ -18,7 +19,7 @@ int main(int argc, char **argv)
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     int mc = str2mc(argv[2]);
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     int x = atoi(argv[3]), z = atoi(argv[4]);
     const char *expect = (argc > 5 && strcmp(argv[5], "large")) ? argv[5] : NULL;
     // "large" anywhere in the tail selects the Large Biomes world preset, so a
@@ -38,7 +39,12 @@ int main(int argc, char **argv)
 
     Generator g; setupGenerator(&g, mc, large ? LARGE_BIOMES : 0);
     applySeed(&g, dim, seed);
-    int id = getBiomeAt(&g, 0, (x>>4)*4 + 2, 319 >> 2, (z>>4)*4 + 2);
+    // The 1:4 quart that CONTAINS (x, z). The finder reports the centre block
+    // of the quart it sampled -- a chunk-centre quart for fast/fine scans, any
+    // quart for "exact" -- so this reads exactly the cell it matched on. (It
+    // used to round every point to its chunk centre, which agreed for chunk
+    // scans and could not check an "exact" one.)
+    int id = surfaceBiomeQ(&g, x >> 2, z >> 2);
     const char *name = biome2str(mc, id);
 
     printf("%lld x=%d z=%d biome=%s%s", (long long)seed, x, z,

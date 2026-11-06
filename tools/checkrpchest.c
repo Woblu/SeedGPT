@@ -21,6 +21,7 @@
 #include "loot.h"
 #include "loot/loot_tables.h"
 #include "loot/loot_table_context.h"
+#include "biomeat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,15 +68,44 @@ static void rpChestXZ(const StructureVariant *sv, int minBlockX, int minBlockZ,
 //     false, and there is one chest (index 0) -- so, unlike igloo (which
 //     discards a nextLong) or desert pyramid (nextInt(3)), there is NO
 //     pre-consumption: set the decorator seed, then read one nextLong.
-static uint64_t rpLootSeed(int mc, uint64_t s48, const StructureVariant *sv,
+static uint64_t rpLootSeed(int mc, uint64_t seed, const StructureVariant *sv,
                            int chestX, int chestZ)
 {
     StructureSaltConfig ss;
     if (!getStructureSaltConfig(Ruined_Portal, mc, sv->biome, &ss)) return 0;
-    uint64_t pop = getPopulationSeed(mc, s48, chestX & ~15, chestZ & ~15);
+    uint64_t pop = getPopulationSeed(mc, seed, chestX & ~15, chestZ & ~15);  // all 64 bits on 1.18+
     CREATE_RANDOM_SOURCE(rnd, mc <= MC_1_17);
     rnd.setSeed(rnd.state, pop + ss.decoratorIndex + 10000ULL * ss.generationStep);
     return rnd.nextLong(rnd.state);
+}
+
+// Where the portal actually IS, and whether you will see it standing there.
+//
+// This tool reported x and z and nothing else, and that is the whole reason
+// ruined portals read as hallucinated: at (32,112) in seed 20094 the portal is
+// real and sits at y=37 on the seabed under 26 blocks of ocean. Fly to the
+// coordinates, look around, see water, conclude the finder invented it.
+//
+// The height is cubiomes' surface estimate, which matched the measured portal
+// blocks at both spots checked (36 vs 37, 64 vs 64). It is an ESTIMATE and is
+// printed as one.
+static void portal_visibility(Generator *g, int mc, int x, int z,
+                              int underground, char *out, size_t n)
+{
+    (void)mc;
+    // mapApproxHeight is what checkheight.exe uses and what cubiomes offers for
+    // a surface estimate; there is no exact block-height call here. Pre-1.18
+    // also needs a SurfaceNoise, which 1.18+ does not.
+    float fy = 0;
+    SurfaceNoise sn; SurfaceNoise *snp = NULL;
+    if (mc < MC_1_18) { initSurfaceNoise(&sn, DIM_OVERWORLD, g->seed); snp = &sn; }
+    mapApproxHeight(&fy, NULL, g, snp, x >> 2, z >> 2, 1, 1);
+    int y = (int)fy;
+    const char *how;
+    if (underground)   how = "BURIED -- underground variant, dig down";
+    else if (y < 60)   how = "SUBMERGED -- on the sea floor, look underwater";
+    else               how = "surface";
+    snprintf(out, n, "y~%d %s", y, how);
 }
 
 int main(int argc, char **argv)
@@ -87,7 +117,7 @@ int main(int argc, char **argv)
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     int mc = (argc > 2) ? str2mc(argv[2]) : MC_1_21;
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     uint64_t s48 = seed & ((1ULL << 48) - 1);
 
     Generator g; setupGenerator(&g, mc, 0);
@@ -97,21 +127,36 @@ int main(int argc, char **argv)
     if (argc >= 6 && !strcmp(argv[3], "--at")) {
         Pos best = { atoi(argv[4]), atoi(argv[5]) };
         const char *want = (argc > 6) ? argv[6] : NULL;
-        int biomeID = getBiomeAt(&g, 0, (best.x>>4)*4+2, 319>>2, (best.z>>4)*4+2);
+        int biomeID = chunkBiome(&g, best.x, best.z);
         StructureVariant sv;
         getVariant(&sv, Ruined_Portal, mc, s48, best.x, best.z, biomeID);
         int cx, cz;
         rpChestXZ(&sv, best.x & ~15, best.z & ~15, &cx, &cz);
-        uint64_t lootSeed = rpLootSeed(mc, s48, &sv, cx, cz);
+        uint64_t lootSeed = rpLootSeed(mc, seed, &sv, cx, cz);
         LootTableContext *ctx = NULL;
         if (!init_loot_table_name(&ctx, "ruined_portal", mc) || !ctx) return 1;
         set_loot_seed(ctx, lootSeed); generate_loot(ctx);
         int wc = 0;
+        char vis[96];
+        portal_visibility(&g, mc, best.x, best.z, sv.underground, vis, sizeof vis);
+        printf("  %s\n", vis);
         printf("%lld ruined_portal x=%d z=%d chest x=%d z=%d loot:",
                (long long)seed, best.x, best.z, cx, cz);
         for (int k = 0; k < ctx->generated_item_count; k++) {
             const char *nm = get_item_name(ctx, ctx->generated_items[k].item);
             printf(" %dx%s", ctx->generated_items[k].count, nm);
+            // Enchantments inline, in the same {name level} form checkloot uses.
+            // A ruined portal's golden sword is the classic enchanted-loot case
+            // -- it is half of what CoolStuffFinder looks for -- and this tool
+            // printed it as a bare "golden_sword", which is a different and much
+            // weaker claim than "Looting III golden sword".
+            const ItemStack *is = &ctx->generated_items[k];
+            for (int e = 0; e < is->enchantment_count && e < 16; e++) {
+                int rawid = is->enchantments[e].enchantment;
+                const char *en = get_enchantment_name(rawid);
+                if (en) printf("{%s %d}", en, is->enchantments[e].level);
+                else    printf("{enchant#%d %d}", rawid, is->enchantments[e].level);
+            }
             if (want && strstr(nm, want)) wc += ctx->generated_items[k].count;
         }
         printf("\n");
@@ -138,14 +183,17 @@ int main(int argc, char **argv)
     }
     if (!found) { printf("%lld no ruined_portal within %d\n", (long long)seed, radius); return 1; }
 
-    int biomeID = getBiomeAt(&g, 0, (best.x>>4)*4+2, 319>>2, (best.z>>4)*4+2);
+    int biomeID = chunkBiome(&g, best.x, best.z);
     StructureVariant sv;
     getVariant(&sv, Ruined_Portal, mc, s48, best.x, best.z, biomeID);
 
     int cx, cz;
     rpChestXZ(&sv, best.x & ~15, best.z & ~15, &cx, &cz);
-    uint64_t lootSeed = rpLootSeed(mc, s48, &sv, cx, cz);
+    uint64_t lootSeed = rpLootSeed(mc, seed, &sv, cx, cz);
 
+    char vis0[96];
+    portal_visibility(&g, mc, best.x, best.z, sv.underground, vis0, sizeof vis0);
+    printf("  %s\n", vis0);
     printf("%lld ruined_portal x=%d z=%d biome=%s start=%d giant=%d rot=%d mir=%d underground=%d\n",
            (long long)seed, best.x, best.z, biome2str(mc, biomeID),
            sv.start, sv.giant, sv.rotation, sv.mirror, sv.underground);
@@ -161,6 +209,13 @@ int main(int argc, char **argv)
         const char *nm = get_item_name(ctx, ctx->generated_items[k].item);
         int cnt = ctx->generated_items[k].count;
         printf(" %dx%s", cnt, nm);
+        const ItemStack *is = &ctx->generated_items[k];
+        for (int e = 0; e < is->enchantment_count && e < 16; e++) {
+            int rawid = is->enchantments[e].enchantment;
+            const char *en = get_enchantment_name(rawid);
+            if (en) printf("{%s %d}", en, is->enchantments[e].level);
+            else    printf("{enchant#%d %d}", rawid, is->enchantments[e].level);
+        }
         if (want && (strstr(nm, want))) wantCount += cnt;
     }
     printf("\n");

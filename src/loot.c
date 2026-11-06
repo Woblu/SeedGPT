@@ -9,54 +9,80 @@
 #define MAX_TABLES 24
 
 // cubiomes' loot contexts are SINGLETONS: init_*() returns &staticContext, so
-// every thread (and every LootCache) shares one context per table. generate_loot
-// mutates that context's prng_state and generated_items, so concurrent rolls
-// race and produce nondeterministic counts. The table data itself is read-only
-// once built, so a single lock around the roll+read (and the lazy first init)
-// makes loot generation correct under threads. A roll is ~5 us and the biome/
-// structure work stays parallel, so the serialised section is a small fraction.
+// every thread (and every LootCache) shares one context per table, and
+// generate_loot mutates that context. Concurrent rolls raced and produced
+// nondeterministic counts, which a global lock around every roll fixed -- at
+// the price of serialising every roll in the program, which capped a loot
+// search at about twice single-thread speed however many threads ran.
+//
+// What a roll writes is small and all INSIDE the struct: prng_state,
+// generated_item_count and generated_items[27]. The pools, names and
+// functions it points to are read-only once built (generate_loot_pool reads
+// pool->... and lf->params, and writes only through the context's own fields).
+// So each thread takes a PRIVATE COPY of the struct (getCtx) and rolls it with
+// no lock at all. The lock remains only around init_*, whose first call builds
+// the shared tables and is not thread-safe.
 static volatile int g_loot_lock = 0;
 static inline void loot_lock(void)   { while (__atomic_exchange_n(&g_loot_lock, 1, __ATOMIC_ACQUIRE)) {} }
 static inline void loot_unlock(void) { __atomic_store_n(&g_loot_lock, 0, __ATOMIC_RELEASE); }
+
+// Nether fortresses are far bigger than any other piece structure here: over a
+// 3.6-million-fortress sample the largest had 257 pieces and 84% had more than
+// 64, so the old stack array was overrun by most fortresses rather than a rare
+// one. 1024 is ~4x the observed maximum, and the engine now REFUSES to exceed
+// whatever bound it is given (patches/fortress-piece-bound.patch), so going
+// over is a detectable refusal instead of a write past the end of the array.
+#define PIECE_CAP 1024
 
 struct LootCache {
     char             *names[MAX_TABLES];
     LootTableContext *ctx[MAX_TABLES];
     int               n;
     int               mc;
+    Piece            *pieces;    // per-thread scratch, so no allocation per roll
 };
 
 LootCache *lootCacheNew(void)
 {
     LootCache *lc = calloc(1, sizeof *lc);
+    if (!lc) return NULL;
     lc->mc = -1;
+    // Callers treat the cache as infallible, so a failed piece buffer must not
+    // turn into a NULL cache they don't check. lootCountItem refuses instead.
+    lc->pieces = malloc((size_t)PIECE_CAP * sizeof(Piece));
     return lc;
 }
 
 void lootCacheFree(LootCache *lc)
 {
     if (!lc) return;
-    for (int i = 0; i < lc->n; i++) free(lc->names[i]);
-    // cubiomes loot contexts are heap-allocated by init_*; free_loot_table
-    // exists but freeing a context that init_* built from static tables can
-    // double-free shared arrays and crash. A worker holds one cache for the
-    // whole run (<=24 contexts), so leaking them is bounded and safe.
+    free(lc->pieces);
+    // Our private copies are plain structs we allocated; free those. Never
+    // free_loot_table: the arrays they point to belong to the shared context
+    // init_* built, and freeing those double-frees and crashes.
+    for (int i = 0; i < lc->n; i++) { free(lc->names[i]); free(lc->ctx[i]); }
     free(lc);
 }
 
 static LootTableContext *getCtx(LootCache *lc, int mc, const char *table)
 {
     if (lc->mc != mc) {          // version changed: cached tables no longer valid
-        for (int i = 0; i < lc->n; i++) free(lc->names[i]);
-        lc->n = 0;   // leak the old contexts (see lootCacheFree); bounded + safe
+        for (int i = 0; i < lc->n; i++) { free(lc->names[i]); free(lc->ctx[i]); }
+        lc->n = 0;
         lc->mc = mc;
     }
     for (int i = 0; i < lc->n; i++)
         if (!strcmp(lc->names[i], table)) return lc->ctx[i];
     if (lc->n >= MAX_TABLES) return NULL;
 
-    LootTableContext *ctx = NULL;
-    if (!init_loot_table_name(&ctx, table, mc) || !ctx) return NULL;
+    LootTableContext *shared = NULL;
+    loot_lock();                 // init_* builds shared static tables: not thread-safe
+    int ok = init_loot_table_name(&shared, table, mc) && shared;
+    loot_unlock();
+    if (!ok) return NULL;
+    LootTableContext *ctx = malloc(sizeof *ctx);
+    if (!ctx) return NULL;
+    *ctx = *shared;              // private mutable state; read-only tables shared
     lc->names[lc->n] = strdup(table);
     lc->ctx[lc->n] = ctx;
     lc->n++;
@@ -78,16 +104,33 @@ int lootStructureSupported(int structType)
     // and cubiomes, so it meets the same bar as the five above.
     case Ruined_Portal:
         return 1;
-    // The nether structures are deliberately excluded, each for a hard reason:
-    //   - Fortress: getFortressPieces stores its buffer bound (env.nmax) but
-    //     never enforces it, so a large fortress overflows the piece array and
-    //     crashes the search.
-    //   - Bastion: getStructurePieces only simulates some pieces, and the loot
-    //     the search reported did NOT reproduce under independent verification
-    //     (find over-counted vs checkloot). See README "Chest loot".
+    // Fortress: the engine simulates the whole corridor/bridge graph, so every
+    // chest is found. What blocked it was the buffer overrun, now fixed on both
+    // sides -- the engine honours its bound, and PIECE_CAP is 4x the largest
+    // fortress in a 3.6M sample. Counts are exact.
+    case Fortress:
+        return 1;
+    // Bastion: the engine simulates only the starting piece of each of the four
+    // bastion types -- the chests that ALWAYS generate (2 for units, 1 for
+    // hoglin stable, 2 for treasure, 1 for bridge). Those chests are exact; the
+    // ones in the randomly-assembled remainder are not modelled at all. So a
+    // bastion loot count is a LOWER BOUND: every hit is real, but a bastion
+    // whose only copy of the item sits in a generated-later chest is missed.
+    // That asymmetry is stated in the README and in /api/lootitems rather than
+    // papered over.
+    case Bastion:
+        return 1;
     default:
         return 0;
     }
+}
+
+// Only the guaranteed starting-piece chests are modelled for these types, so
+// the count is a floor rather than a total. Callers that must not overstate
+// coverage ask here instead of hardcoding the list.
+int lootCountIsLowerBound(int structType)
+{
+    return structType == Bastion;
 }
 
 // ---- ruined portal chest, computed from template data ----------------------
@@ -129,24 +172,26 @@ static void rpChestXZ(const StructureVariant *sv, int minBlockX, int minBlockZ,
     *cz = minBlockZ + rz;
 }
 
-static uint64_t rpLootSeed(int mc, uint64_t s48, const StructureVariant *sv,
+// `seed` is the full world seed: on 1.18+ the population seed depends on all
+// 64 bits (see loot.h).
+static uint64_t rpLootSeed(int mc, uint64_t seed, const StructureVariant *sv,
                            int chestX, int chestZ)
 {
     StructureSaltConfig ss;
     if (!getStructureSaltConfig(Ruined_Portal, mc, sv->biome, &ss)) return 0;
-    uint64_t pop = getPopulationSeed(mc, s48, chestX & ~15, chestZ & ~15);
+    uint64_t pop = getPopulationSeed(mc, seed, chestX & ~15, chestZ & ~15);
     CREATE_RANDOM_SOURCE(rnd, mc <= MC_1_17);
     rnd.setSeed(rnd.state, pop + ss.decoratorIndex + 10000ULL * ss.generationStep);
     return rnd.nextLong(rnd.state);          // no pre-consumption for ruined portal
 }
 
-static int rpCountItem(LootCache *lc, int mc, uint64_t s48, int blockX, int blockZ,
+static int rpCountItem(LootCache *lc, int mc, uint64_t seed, int blockX, int blockZ,
                        const StructureVariant *sv, const char *item)
 {
     int cx, cz;
     rpChestXZ(sv, blockX & ~15, blockZ & ~15, &cx, &cz);
-    uint64_t lootSeed = rpLootSeed(mc, s48, sv, cx, cz);
-    loot_lock();
+    uint64_t lootSeed = rpLootSeed(mc, seed, sv, cx, cz);
+    // getCtx returns this thread's private copy, so the roll needs no lock.
     LootTableContext *ctx = getCtx(lc, mc, "ruined_portal");
     int total = -1;
     if (ctx) {
@@ -161,14 +206,13 @@ static int rpCountItem(LootCache *lc, int mc, uint64_t s48, int blockX, int bloc
                     total += ctx->generated_items[k].count;
         }
     }
-    loot_unlock();
     return total;
 }
 
 int lootCountItem(LootCache *lc, int mc, uint64_t seed, int structType,
                   int blockX, int blockZ, StructureVariant *sv, const char *item)
 {
-    if (!lootStructureSupported(structType)) return -1;
+    if (!lc || !lootStructureSupported(structType)) return -1;
 
     // Ruined portals aren't in getStructurePieces; compute their single chest
     // from the template data instead.
@@ -176,15 +220,25 @@ int lootCountItem(LootCache *lc, int mc, uint64_t seed, int structType,
         return rpCountItem(lc, mc, seed, blockX, blockZ, sv, item);
 
     StructureSaltConfig ss;
-    // Loot placement uses a decoration salt config; the biome argument only
-    // matters for the position salt (already resolved), so -1 is fine here.
-    if (!getStructureSaltConfig(structType, mc, -1, &ss)) return -1;
+    // The decoration salt can depend on the biome: from 1.18 an ocean
+    // shipwreck and a beached one are separate structures with separate
+    // decoration indices, and biome -1 reads as "not oceanic", so every wreck
+    // got the beached salt and every ocean wreck's chests the wrong loot seeds
+    // (a real 1.21.1 server: 3/3 chests right on a beached wreck, 0/2 on an
+    // ocean one). getVariant keeps the biome for exactly this.
+    if (!getStructureSaltConfig(structType, mc, sv ? sv->biome : -1, &ss)) return -1;
 
-    Piece pieces[64];
-    int n = getStructurePieces(pieces, 64, structType, ss, sv, mc, seed, blockX, blockZ);
+    Piece *pieces = lc->pieces;
+    if (!pieces) return -1;
+    int n = getStructurePieces(pieces, PIECE_CAP, structType, ss, sv, mc, seed, blockX, blockZ);
+    if (n < 0) return -1;
+    // A fortress that fills the buffer was cut short, and the pieces after the
+    // cut would have consumed RNG -- so the chests we did roll are right but the
+    // total is not. Refuse rather than report a number we know is short.
+    if (n >= PIECE_CAP) return -1;
 
     int total = 0;
-    loot_lock();   // the loot contexts are shared singletons -- serialise rolls
+    // No lock: getCtx hands back this thread's private copy of each context.
     for (int i = 0; i < n; i++) {
         for (int c = 0; c < pieces[i].chestCount; c++) {
             const char *table = pieces[i].lootTables[c];
@@ -202,6 +256,5 @@ int lootCountItem(LootCache *lc, int mc, uint64_t seed, int structType,
                     total += ctx->generated_items[k].count;
         }
     }
-    loot_unlock();
     return total;
 }

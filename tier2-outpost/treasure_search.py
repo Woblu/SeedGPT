@@ -15,6 +15,7 @@ import argparse, json, os, queue, subprocess, sys, tempfile, threading
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FIND = os.path.join(ROOT, "build", "find.exe")
+LOCATE = os.path.join(ROOT, "build", "locate.exe")
 CP_FILE = os.path.join(HERE, "cp.txt")
 
 
@@ -40,10 +41,29 @@ def main():
     ap.add_argument("--range", type=int, default=80_000_000)
     ap.add_argument("--limit", type=int, default=4, help="stop after this many EXPOSED hits")
     ap.add_argument("--workers", type=int, default=6)
+    # The block the chest LANDED ON, which becomes its casing. Omit for the
+    # original "chest touching air" search. Rates measured over 6646 chests:
+    # sand 78%, gravel 18%, dirt 2.7%, stone 0.9%, and the interesting ones --
+    # copper_ore, magma_block -- at roughly 0.015% each, so a magma casing costs
+    # ~6600 chests of scanning per expected hit.
+    ap.add_argument("--casing", default="",
+                    help="e.g. magma_block, iron_ore, copper_ore, gravel")
+    # Where in the seed walk to start. Without it every run rescans the same
+    # seeds, which for a ~0.015% casing means running it again buys nothing.
+    ap.add_argument("--offset", type=int, default=0)
+    # How far out in each world to look. The old hardcoded 1500 gave 6 treasures
+    # per seed; 20000 gives 1431. Only meaningful with --per-seed.
+    ap.add_argument("--radius", type=int, default=10000)
+    # Check EVERY treasure in a seed rather than the single one find.exe
+    # reported. On by default: a casing hunt is bounded by chests examined, and
+    # one chest per world was leaving almost every world unexamined.
+    ap.add_argument("--per-seed", dest="per_seed", action="store_true", default=True)
+    ap.add_argument("--first-only", dest="per_seed", action="store_false")
     args = ap.parse_args()
 
     q = {"version": args.version, "conditions": [
-        {"id": "t", "structure": "buried_treasure", "within": 1500, "of": "origin"}]}
+        {"id": "t", "structure": "buried_treasure",
+         "within": min(args.radius, 2000), "of": "origin"}]}
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
                                      dir=os.path.join(ROOT, "build")) as f:
         json.dump(q, f); qpath = f.name
@@ -56,9 +76,34 @@ def main():
     checked = [0]
 
     env = dict(os.environ); env["FIND_HITSTREAM"] = "1"
+    if args.offset:
+        env["FIND_OFFSET"] = str(args.offset)
     finder = subprocess.Popen([FIND, qpath, str(args.range), "16"],
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               text=True, cwd=ROOT, bufsize=1, env=env)
+
+    def all_treasures(seed):
+        """Every treasure in the seed within --radius, not just the one find sent.
+
+        find.exe reports m.pos[0] -- the FIRST matched position -- so one HIT is
+        one chest, and the pipeline was checking a single treasure per world. For
+        a casing at ~0.015% that is the difference between searching a world and
+        glancing at it: seed 4 has 6 treasures within 1500 blocks and 1431 within
+        20000. Expanding each seed here also lets a worker reuse the seed's
+        generator state across chests instead of paying for it once per chest.
+        """
+        try:
+            r = subprocess.run([LOCATE, str(seed), args.version, "buried_treasure",
+                                str(args.radius)],
+                               capture_output=True, text=True, timeout=120)
+            out = []
+            for ln in r.stdout.splitlines():
+                p = ln.split()
+                if len(p) == 2:
+                    out.append((int(p[0]), int(p[1])))
+            return out
+        except Exception:
+            return []
 
     def producer():
         try:
@@ -67,7 +112,13 @@ def main():
                     break
                 if line.startswith("HIT "):
                     p = line.split()
-                    cand_q.put((p[1], int(p[2]), int(p[3])))
+                    if args.per_seed:
+                        for (tx, tz) in all_treasures(p[1]):
+                            if stop.is_set():
+                                break
+                            cand_q.put((p[1], tx, tz))
+                    else:
+                        cand_q.put((p[1], int(p[2]), int(p[3])))
         except Exception:
             pass
         finally:
@@ -75,8 +126,30 @@ def main():
                 try: cand_q.put(None)
                 except Exception: pass
 
+    # Two predicates over the same pipeline. "exposed" asks what is ABOVE the
+    # chest and needs only terrain+surface, so OutpostWorldgen answers it.
+    # "casing" asks what the chest LANDED ON -- the block the structure then
+    # writes into every air or water face around it -- and ore and magma are
+    # placed in decoration, so it needs OreGen, which runs applyBiomeDecoration.
+    casing = (args.casing or "").strip()
+    if casing and not casing.startswith("minecraft:"):
+        casing = "minecraft:" + casing
+    # `final`, not `fill`. The fill is the block the STRUCTURE writes; `final`
+    # is what is there once decoration has run over the top of it, and those are
+    # routinely different because buried treasure is placed in
+    # SURFACE_STRUCTURES and ore in UNDERGROUND_ORES. Seed 4 (1737,44,153) is
+    # written with stone x4 and dug up as andesite x4.
+    #
+    # It also changes what is FINDABLE. With placement running before ore, as
+    # the game does it, the fill can never be an ore block at all -- an 8057
+    # chest census had ore as the fill exactly zero times. Matching on `fill`
+    # would make every ore casing search return nothing, forever, and look like
+    # a rarity result rather than a bug.
+    mode = ("OreGen", "oreserver", "final") if casing \
+        else ("OutpostWorldgen", "treasure", "above")
+
     def worker():
-        p = subprocess.Popen([java_bin(), "-cp", cp, "OutpostWorldgen", "treasure"],
+        p = subprocess.Popen([java_bin(), "-Xmx2g", "-cp", cp, mode[0], mode[1]],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, text=True, cwd=HERE, bufsize=1)
         for line in p.stdout:               # READY
@@ -89,17 +162,37 @@ def main():
                     break
                 seed, x, z = item
                 p.stdin.write(f"{seed} {x} {z}\n"); p.stdin.flush()
-                cls = None
+                cls, y = None, None
+                key = "\t" + mode[2] + "="
                 for line in p.stdout:
-                    if "\tabove=" in line:
+                    if key in line:
                         kv = dict(kvp.split("=", 1) for kvp in line.strip().split("\t") if "=" in kvp)
-                        cls = kv.get("above")
+                        cls = kv.get(mode[2])
+                        y = kv.get("chestY")
+                        faces = (cls or "").split(",")
                         break
+                    if "\terr=" in line:
+                        break               # this chest is unknown, not absent
                 with lock:
                     checked[0] += 1
-                    if cls == "air":
+                    # `final` is six comma-separated faces, so a casing
+                    # matches when it is ON one of them. Comparing the whole
+                    # string would only ever match a chest whose six faces are
+                    # identical, which is a much rarer and different question
+                    # than the one being asked.
+                    if casing:
+                        n = faces.count(casing) if faces else 0
+                        hit = n > 0
+                    else:
+                        hit = (cls == "air")
+                    if hit:
                         found[0] += 1
-                        print(json.dumps({"seed": seed, "x": x, "z": z}), flush=True)
+                        rec = {"seed": seed, "x": x, "z": z}
+                        if casing:
+                            rec.update({"y": int(y) if y else None,
+                                        "casing": casing, "faces": n,
+                                        "all_faces": faces})
+                        print(json.dumps(rec), flush=True)
                         if found[0] >= args.limit:
                             stop.set()
         finally:
@@ -112,12 +205,26 @@ def main():
     for w in ws: w.start()
     for w in ws: w.join()
     stop.set()
-    try: finder.terminate()
-    except Exception: pass
+    # Kill the finder's whole tree, not just the handle we hold. An orphaned
+    # find.exe keeps an open handle on build/find.exe and the next build fails
+    # with "permission denied" -- a stopped hunt should not break the build.
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(finder.pid)],
+                           capture_output=True, timeout=30)
+        else:
+            finder.terminate()
+    except Exception:
+        try: finder.terminate()
+        except Exception: pass
     try: os.unlink(qpath)
     except Exception: pass
     print(json.dumps({"summary": True, "exposed": found[0], "checked": checked[0],
-                      "range": args.range}), flush=True)
+                      "range": args.range, "casing": args.casing or None,
+                      # OreGen's fill agrees with the server on 88% of chests, so
+                      # a casing hit is a LEAD to confirm, not a settled result --
+                      # and a miss is not evidence of absence.
+                      "confirm": bool(args.casing)}), flush=True)
 
 
 if __name__ == "__main__":

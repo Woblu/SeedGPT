@@ -24,8 +24,20 @@ void       lootCacheFree(LootCache *lc);
 // Count how many of `item` (e.g. "minecraft:diamond") the given structure
 // instance yields across all its chests, on this seed/version. Returns -1 if
 // the structure type has no loot support. `lc` must be this thread's cache.
+//
+// `seed` is the FULL 64-bit world seed, never the 48-bit structure seed. Chest
+// loot seeds come from getPopulationSeed, which on 1.18+ seeds Xoroshiro with
+// all 64 bits and XORs the whole seed back in -- so two sister seeds with the
+// same structures roll different chests. Pre-1.18 the Java LCG drops the upper
+// bits anyway, which is why a truncated seed passed every 1.17 cross-check and
+// still described the wrong world on 1.18+.
 int lootCountItem(LootCache *lc, int mc, uint64_t seed, int structType,
                   int blockX, int blockZ, StructureVariant *sv, const char *item);
 
 // Is `name` a structure this module can search loot for?
 int lootStructureSupported(int structType);
+
+// True when only some of the structure's chests are modelled, so the count is a
+// floor: every hit is real, but a miss is not proof of absence. Bastions are the
+// one such case -- the engine simulates their guaranteed starting piece only.
+int lootCountIsLowerBound(int structType);

@@ -46,3 +46,11 @@ int terrainVoidBelow(int mc, uint64_t worldSeed, uint32_t flags, int x, int z,
 // reads higher there than here -- see the placement checks in query.c for why
 // that difference is deliberately left in the safe direction.
 int terrainSurfaceY(int mc, uint64_t worldSeed, uint32_t flags, int x, int z, int *ok);
+
+// A floating island at (x,z): a solid cap with a void of >= minVoid beneath it
+// AND open air at the cap's own height in at least `need` of 8 directions,
+// `ring` blocks out. The horizontal gap is what separates an island from the
+// roof of a cave, which terrainVoidBelow alone cannot distinguish. Returns the
+// void height (0 = not floating) and writes the cap's world Y to *capOut.
+int terrainFloating(int mc, uint64_t worldSeed, uint32_t flags, int x, int z,
+                    int minVoid, int ring, int need, int *capOut);

@@ -1,0 +1,24 @@
+# Chests as a real 1.21.1 server generated them (2026-10-21), for world seed
+# -7311924356716553218 -- above 2^48, so a 48-bit loot seed cannot pass.
+# Read with tier3-java/check_loot_seed.py: every line is a chest the server
+# placed at that x/z, the LootTableSeed it stored, and the items it rolled from
+# it (item totals and enchantments compared; the per-roll split shown is
+# checkloot's). test.sh compares `checkloot --chests` with this file, so the
+# loot fixes it records (64-bit seed, ocean-shipwreck salt, 1.21 enchant list,
+# goat horn draw, chest positions) cannot quietly regress.
+#
+#   checkloot.exe -7311924356716553218 <structure> <x> <z> 1.21.1 --chests
+# desert_pyramid 1184 144
+chest 1192 154 desert_pyramid -5573210632072961543: 1xminecraft:enchanted_book{silk_touch:1} 1xminecraft:emerald 7xminecraft:rotten_flesh 1xminecraft:string 8xminecraft:gunpowder 6xminecraft:string
+chest 1194 156 desert_pyramid 1501204678175160839: 1xminecraft:golden_apple 5xminecraft:rotten_flesh 1xminecraft:iron_horse_armor 1xminecraft:golden_apple 5xminecraft:rotten_flesh 3xminecraft:string 5xminecraft:bone 4xminecraft:rotten_flesh
+chest 1196 154 desert_pyramid -6967656392793956088: 1xminecraft:diamond_horse_armor 1xminecraft:golden_horse_armor 2xminecraft:emerald 3xminecraft:sand 5xminecraft:bone 2xminecraft:string 7xminecraft:bone
+chest 1194 152 desert_pyramid 4780866252527736580: 1xminecraft:emerald 1xminecraft:enchanted_golden_apple 3xminecraft:gunpowder 4xminecraft:bone 5xminecraft:rotten_flesh 1xminecraft:sand
+# outpost 320 256
+chest 330 247 pillager_outpost 6866295200367293837: 2xminecraft:potato 3xminecraft:wheat 3xminecraft:dark_oak_log 2xminecraft:dark_oak_log 3xminecraft:tripwire_hook 6xminecraft:arrow 1xminecraft:goat_horn
+# shipwreck -1008 880 (beached)
+chest -1004 889 shipwreck_supply 4884818549262883158: 6xminecraft:potato 6xminecraft:potato 5xminecraft:coal 7xminecraft:coal
+chest -1003 898 shipwreck_map 3105362743061347951: 1xminecraft:map 6xminecraft:paper 8xminecraft:paper 4xminecraft:book
+chest -1002 904 shipwreck_treasure -4715157226570240652: 5xminecraft:emerald 2xminecraft:iron_ingot 2xminecraft:iron_ingot 4xminecraft:iron_ingot 3xminecraft:iron_ingot 5xminecraft:iron_nugget 5xminecraft:lapis_lazuli 10xminecraft:lapis_lazuli
+# shipwreck -608 880 (ocean)
+chest -602 896 shipwreck_map 3511402770709136712: 1xminecraft:map 2xminecraft:paper 4xminecraft:book 3xminecraft:paper
+chest -611 895 shipwreck_supply 1410765638774901044: 11xminecraft:paper 13xminecraft:wheat 10xminecraft:paper 8xminecraft:carrot

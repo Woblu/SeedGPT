@@ -3,444 +3,67 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Seed Finder</title>
-<style>
-  /* ---- Minecraft GUI aesthetic -------------------------------------------
-     Beveled stone panels, item-slot cards, pixel-rendered icons. Two themes:
-     "cave" (dark stone, default) and "day" (Overworld). Committed to one
-     cohesive visual world rather than a neutral document look. ---------- */
-  :root {
-    /* cave (dark) */
-    --bg0:      #17181c;
-    --bg1:      #202127;
-    --stone:    #3b3d44;
-    --stone-lt: #55575f;
-    --stone-dk: #2a2b31;
-    --slot:     #1b1c20;
-    --slot-edge:#101014;
-    --ink:      #ECECEC;
-    --ink-soft: #B9BCC4;
-    --ink-faint:#7E828C;
-    --edge-lt:  rgba(255,255,255,.16);
-    --edge-dk:  rgba(0,0,0,.45);
-    --grass:    #6DBE45;   /* XP / grass green */
-    --grass-dk: #4E8F2E;
-    --dirt:     #8A5A3B;
-    --diamond:  #4DD0E1;
-    --gold:     #F5C542;
-    --redstone: #D64545;
-    --emerald:  #17C964;
-    --sky:      #7FB4E6;
-    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  }
-  :root[data-theme="day"] {
-    --bg0:      #A8C7E8;
-    --bg1:      #cfe0f2;
-    --stone:    #C6B48C;   /* sandstone */
-    --stone-lt: #DECBA0;
-    --stone-dk: #A8946A;
-    --slot:     #efe6cf;
-    --slot-edge:#b8a677;
-    --ink:      #232018;
-    --ink-soft: #4A4636;
-    --ink-faint:#7C755E;
-    --edge-lt:  rgba(255,255,255,.5);
-    --edge-dk:  rgba(0,0,0,.28);
-    --grass:    #4E8F2E;
-    --grass-dk: #3B6E22;
-    --diamond:  #1E88A8;
-    --gold:     #B8860B;
-    --redstone: #B23A3A;
-    --emerald:  #128a45;
-    --sky:      #3A6EA5;
-  }
-
-  * { box-sizing: border-box; }
-  html { image-rendering: pixelated; }
-  body {
-    margin: 0;
-    color: var(--ink);
-    font-family: var(--sans);
-    font-size: 14px;
-    line-height: 1.5;
-    background:
-      repeating-linear-gradient(0deg,  rgba(0,0,0,.05) 0 2px, transparent 2px 4px),
-      repeating-linear-gradient(90deg, rgba(0,0,0,.05) 0 2px, transparent 2px 4px),
-      var(--bg0);
-    -webkit-font-smoothing: antialiased;
-  }
-  b, strong { font-weight: 700; }
-
-  /* the pressable stone button -- the signature MC element */
-  .mcbtn, button {
-    font-family: var(--sans); font-size: 13px; font-weight: 600;
-    color: var(--ink);
-    background: linear-gradient(var(--stone-lt), var(--stone) 55%, var(--stone-dk));
-    border: 2px solid var(--slot-edge);
-    box-shadow: inset 2px 2px 0 var(--edge-lt), inset -2px -2px 0 var(--edge-dk);
-    padding: 8px 12px; cursor: pointer;
-    text-shadow: 1px 1px 0 rgba(0,0,0,.35);
-    transition: filter .08s;
-  }
-  :root[data-theme="day"] button { text-shadow: none; }
-  button:hover:not(:disabled) { filter: brightness(1.12); border-color: var(--grass-dk); }
-  button:active:not(:disabled) {
-    box-shadow: inset -2px -2px 0 var(--edge-lt), inset 2px 2px 0 var(--edge-dk);
-    filter: brightness(.94);
-  }
-  button:disabled { opacity: .45; cursor: not-allowed; }
-  button.primary {
-    background: linear-gradient(#7ed957, var(--grass) 55%, var(--grass-dk));
-    color: #10240a; text-shadow: 1px 1px 0 rgba(255,255,255,.2);
-  }
-  button.tiny { padding: 4px 8px; font-size: 11px; }
-  .btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-
-  input, select, textarea {
-    font-family: var(--sans); font-size: 13px; color: var(--ink);
-    background: var(--slot);
-    border: 2px solid;
-    border-color: var(--slot-edge) var(--stone-lt) var(--stone-lt) var(--slot-edge);
-    padding: 7px 9px; width: 100%;
-  }
-  input[type=number] { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  textarea { resize: vertical; min-height: 56px; line-height: 1.45; }
-  select { cursor: pointer; }
-  :focus-visible { outline: 3px solid var(--grass); outline-offset: 1px; }
-
-  /* ---- header ---- */
-  header {
-    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-    padding: 12px 18px;
-    background: linear-gradient(var(--stone-lt), var(--stone));
-    border-bottom: 3px solid var(--slot-edge);
-    box-shadow: inset 0 2px 0 var(--edge-lt);
-  }
-  header .logo { font-size: 22px; line-height: 1; filter: drop-shadow(1px 2px 0 rgba(0,0,0,.4)); }
-  header h1 {
-    font-family: var(--mono); font-size: 15px; font-weight: 700; margin: 0;
-    letter-spacing: .06em; text-transform: uppercase;
-    text-shadow: 2px 2px 0 rgba(0,0,0,.35);
-  }
-  :root[data-theme="day"] header h1 { text-shadow: 1px 1px 0 rgba(255,255,255,.4); }
-  header .sub { font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); }
-  header .spacer { flex: 1; }
-
-  /* ---- layout ---- */
-  .wrap { display: grid; grid-template-columns: 1fr; gap: 0; }
-  @media (min-width: 980px) { .wrap { grid-template-columns: 420px minmax(0,1fr); } }
-  .col { padding: 18px; min-width: 0; }
-  .col.left {
-    background: var(--bg1);
-    border-right: 3px solid var(--slot-edge);
-  }
-  @media (max-width: 979px) { .col.left { border-right: none; border-bottom: 3px solid var(--slot-edge); } }
-
-  h2 {
-    font-family: var(--mono); font-size: 11px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .1em;
-    color: var(--grass); margin: 0 0 9px;
-    display: flex; align-items: center; gap: 7px;
-  }
-  h2::before { content: ""; width: 8px; height: 8px; background: var(--grass);
-               box-shadow: 2px 2px 0 var(--grass-dk); }
-  section + section { margin-top: 22px; }
-  label { display: block; font-size: 11px; color: var(--ink-soft); margin-bottom: 4px; }
-  .hint { font-size: 11px; color: var(--ink-faint); margin-top: 6px; }
-
-  /* ---- condition cards = item slots ---- */
-  .cond {
-    display: block; margin-bottom: 9px; padding: 10px;
-    background: var(--stone-dk);
-    border: 2px solid;
-    border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
-    border-left: 4px solid var(--grass);
-  }
-  .cond.biome { border-left-color: var(--emerald); }
-  .cond.eyes  { border-left-color: var(--diamond); }
-  .cond.loot  { border-left-color: var(--gold); }
-  .cond.ore   { border-left-color: var(--diamond); }
-  .cond.slime { border-left-color: var(--grass); }
-  .cond.area  { border-left-color: var(--emerald); }
-  .cond.height{ border-left-color: var(--stone-lt); }
-  .cond .top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-  .cond .ic { width: 22px; height: 22px; flex: none; }
-  .cond .cid {
-    font-family: var(--mono); font-size: 11px; font-weight: 700;
-    background: var(--slot); border: 1px solid var(--slot-edge);
-    padding: 2px 6px; color: var(--ink);
-  }
-  .cond .dim {
-    font-family: var(--mono); font-size: 9px; letter-spacing: .08em;
-    text-transform: uppercase; color: var(--ink-faint);
-  }
-  .cond .grid { display: grid; grid-template-columns: 1fr 76px; gap: 7px; }
-  .cond .grid.full { grid-template-columns: 1fr; }
-  .cond .x { margin-left: auto; }
-  .cond .chk {
-    display: flex; align-items: center; gap: 7px; margin-top: 9px;
-    font-size: 12px; color: var(--ink-soft); cursor: pointer;
-  }
-  .cond .chk input { width: auto; margin: 0; accent-color: var(--grass); }
-
-  .ic {
-    display: inline-flex; align-items: center; justify-content: center;
-    font-size: 17px; line-height: 1; image-rendering: pixelated;
-    filter: drop-shadow(1px 1px 0 rgba(0,0,0,.4));
-  }
-  .ic img { width: 100%; height: 100%; image-rendering: pixelated; }
-
-  .empty {
-    border: 2px dashed var(--stone-lt); padding: 16px;
-    text-align: center; color: var(--ink-faint); font-size: 12px;
-  }
-
-  .tag-exp {
-    font-family: var(--mono); font-size: 8.5px; letter-spacing: .06em;
-    text-transform: uppercase; color: var(--diamond);
-    border: 1px solid var(--diamond); padding: 1px 5px; margin-left: 6px;
-    vertical-align: middle;
-  }
-  .saved { display: flex; gap: 6px; margin-top: 6px; }
-  .saved button:first-child { text-align: left; }
-  .exportbar { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px; }
-  .exportbar .exl {
-    font-family: var(--mono); font-size: 9px; letter-spacing: .09em;
-    text-transform: uppercase; color: var(--ink-faint);
-  }
-
-  /* ---- output panel ---- */
-  .card {
-    background: var(--stone);
-    border: 2px solid;
-    border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
-    box-shadow: inset 1px 1px 0 var(--edge-lt);
-    padding: 14px 16px; margin-bottom: 14px;
-  }
-  .card h3 {
-    font-family: var(--mono); font-size: 11px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .09em;
-    color: var(--ink-soft); margin: 0 0 12px;
-  }
-  .card p { margin: 0 0 10px; font-size: 13px; color: var(--ink-soft); }
-  .card p:last-child { margin-bottom: 0; }
-
-  .pass { margin-bottom: 14px; }
-  .pass:last-child { margin-bottom: 0; }
-  .pass .hd { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); margin-bottom: 7px; }
-  .step { display: flex; align-items: center; gap: 9px; margin-bottom: 5px; }
-  .step .n { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); width: 14px; flex: none; text-align: right; }
-  .step .d { font-size: 12.5px; flex: 1; min-width: 0; }
-  .step .bar { flex: none; width: 108px; height: 8px; background: var(--slot); border: 1px solid var(--slot-edge); overflow: hidden; }
-  .step .bar i { display: block; height: 100%; background: var(--grass); }
-  .step .bar i.slow { background: var(--redstone); }
-  .step .c { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); width: 72px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
-
-  .note {
-    font-size: 12px; color: var(--ink-soft);
-    background: var(--stone-dk); border-left: 3px solid var(--grass);
-    padding: 9px 11px; margin-top: 10px;
-  }
-  .note.warn { border-left-color: var(--gold); }
-  .note.bad  { border-left-color: var(--redstone); }
-
-  .stats { display: flex; flex-wrap: wrap; gap: 18px; }
-  .stat .k { font-family: var(--mono); font-size: 9px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); }
-  .stat .v { font-family: var(--mono); font-size: 18px; font-variant-numeric: tabular-nums; margin-top: 2px; }
-  .stat .v.good { color: var(--grass); }
-  .stat .v.warn { color: var(--gold); }
-  .stat .v.bad  { color: var(--redstone); }
-
-  .funnel { height: 9px; background: var(--slot); border: 1px solid var(--slot-edge); overflow: hidden; margin: 12px 0 4px; }
-  .funnel i { display: block; height: 100%; background: var(--grass); }
-  .funnel-l { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
-
-  /* ---- seed = item entry ---- */
-  .seed {
-    display: block; margin-bottom: 8px; padding: 10px 12px;
-    background: var(--stone-dk);
-    border: 2px solid;
-    border-color: var(--stone-lt) var(--slot-edge) var(--slot-edge) var(--stone-lt);
-  }
-  .seed .n { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
-  .seed .num {
-    font-family: var(--mono); font-size: 14px; font-weight: 700;
-    cursor: pointer; color: var(--diamond); border-bottom: 1px dashed var(--stone-lt);
-  }
-  .seed .num:hover { filter: brightness(1.2); border-bottom-color: var(--diamond); }
-  .seed table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11.5px; }
-  .seed td { padding: 2px 0; color: var(--ink-soft); font-variant-numeric: tabular-nums; vertical-align: middle; }
-  .seed td.id { color: var(--ink); width: 128px; }
-  .seed td.id .ic { width: 15px; height: 15px; font-size: 12px; margin-right: 5px; vertical-align: -2px; }
-  .seed td.d { text-align: right; color: var(--ink-faint); }
-
-  pre {
-    font-family: var(--mono); font-size: 11px; line-height: 1.55;
-    background: var(--slot); border: 1px solid var(--slot-edge);
-    padding: 11px; overflow-x: auto; margin: 0; white-space: pre; color: var(--ink-soft);
-  }
-  details { margin-top: 10px; }
-  summary { cursor: pointer; font-size: 11px; color: var(--ink-faint); font-family: var(--mono); user-select: none; }
-  summary:hover { color: var(--grass); }
-  details[open] summary { margin-bottom: 8px; }
-
-  .busy { color: var(--ink-soft); font-size: 12.5px; display: flex; align-items: center; gap: 9px; }
-  .busy::before {
-    content: ""; width: 14px; height: 14px;
-    background: var(--grass);
-    box-shadow: 4px 0 0 var(--stone-dk), 0 4px 0 var(--stone-dk);
-    animation: mcspin .6s steps(4) infinite;
-  }
-  @keyframes mcspin { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .busy::before { animation: none; } }
-
-  .err {
-    border: 2px solid var(--redstone); padding: 10px 12px;
-    font-size: 12.5px; background: var(--stone-dk);
-  }
-  .err b { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--redstone); margin-bottom: 3px; }
-
-  /* ---- map ---- */
-  .map { margin-bottom: 12px; }
-  .map img {
-    display: block; width: 100%; max-width: 560px; height: auto;
-    border: 3px solid var(--slot-edge); image-rendering: pixelated;
-    box-shadow: inset 0 0 0 1px var(--stone-lt);
-  }
-  .legend { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 9px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
-  .legend span { display: flex; align-items: center; gap: 5px; }
-  .legend i { width: 10px; height: 10px; border: 1px solid rgba(0,0,0,.5); }
-  .mapctl { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
-  .mapctl label { margin: 0; font-size: 11px; }
-  .mapctl select { width: auto; padding: 4px 7px; font-size: 12px; }
-
-  /* ---- app shell: history sidebar + main --------------------------------- */
-  body { margin: 0; }
-  .app { display: flex; min-height: 100vh; }
-  /* Off-canvas: collapsed by default, slides in from the left via ☰. */
-  .sidebar { flex: none; width: 264px; background: var(--stone-dk);
-    border-right: 2px solid var(--slot-edge); display: flex; flex-direction: column;
-    padding: 14px 12px; position: fixed; left: 0; top: 0; height: 100vh; z-index: 65;
-    transform: translateX(-100%); transition: transform .2s ease;
-    box-shadow: 6px 0 26px rgba(0,0,0,.4); }
-  .app.sb-open .sidebar { transform: none; }
-  .side-brand { font-size: 18px; font-weight: 800; display: flex; align-items: center;
-    gap: 8px; padding: 4px 6px 12px; }
-  .side-brand .logo { font-size: 20px; }
-  .newbtn { width: 100%; justify-content: center; margin-bottom: 14px; }
-  .side-label { font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
-    text-transform: uppercase; color: var(--ink-faint); padding: 0 6px 6px; }
-  .history { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
-  .hist-item { display: block; width: 100%; text-align: left; font-size: 12.5px;
-    padding: 8px 10px; background: transparent; border: 1px solid transparent;
-    box-shadow: none; text-shadow: none; color: var(--ink-soft);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .hist-item:hover:not(:disabled) { background: var(--slot); border-color: var(--slot-edge); }
-  .hist-empty { font-size: 12px; color: var(--ink-faint); padding: 6px; }
-  .side-foot { padding: 10px 6px 2px; border-top: 1px solid var(--slot-edge);
-    font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
-  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .topbar { display: flex; align-items: center; padding: 10px 14px; min-height: 18px; }
-  .topbar .menu { display: inline-flex; }
-
-  /* ---- chat-style hero + prompt ---------------------------------------- */
-  /* Landing: prompt sits low on the page. After a search the hero collapses
-     to the top so results fill in below, ChatGPT-style. */
-  .hero { flex: 1 0 auto; min-height: 0; display: flex; flex-direction: column;
-    justify-content: center; align-items: center; padding: 0 20px 8vh;
-    transition: padding .25s ease; }
-  .main.searched .hero { flex: 0 0 auto; justify-content: flex-start; padding: 3vh 20px 2vh; }
-  .main.searched .hero-sub, .main.searched .hero-logo { display: none; }
-  .hero-inner { width: 100%; max-width: 680px; text-align: center; }
-  .hero-logo { margin: 0 auto 14px; line-height: 1; font-size: 52px; }
-  .hero-logo img { width: 92px; height: 92px; object-fit: contain;
-    image-rendering: pixelated; display: block; margin: 0 auto;
-    filter: drop-shadow(0 3px 7px rgba(0,0,0,.45)); }
-  .hero-title { font-size: 30px; font-weight: 800; letter-spacing: .01em; }
-  .hero-sub { margin: 10px auto 22px; max-width: 520px; color: var(--ink-soft); font-size: 14px; }
-  .prompt { display: flex; align-items: center; gap: 7px;
-    background: var(--slot); border: 2px solid var(--slot-edge); border-radius: 22px;
-    padding: 6px 8px; box-shadow: 0 8px 30px rgba(0,0,0,.28); text-align: left; }
-  .prompt:focus-within { border-color: var(--grass-dk); }
-  .prompt textarea { flex: 1; border: 0; background: transparent; resize: none;
-    color: var(--ink); font-family: inherit; font-size: 16px; line-height: 1.5;
-    padding: 4px 6px; min-height: 0; height: auto; max-height: 180px;
-    overflow-y: hidden; outline: none; display: block; }
-  .iconbtn { flex: none; width: 34px; height: 34px; border-radius: 50%; padding: 0;
-    display: flex; align-items: center; justify-content: center; font-size: 16px;
-    box-shadow: none; border-width: 2px; align-self: center; }
-  .iconbtn.go { background: linear-gradient(#7ed957, var(--grass) 55%, var(--grass-dk)); color: #10240a; }
-  .iconbtn:disabled { opacity: .5; }
-  .ai-note { margin-top: 14px; font-size: 12.5px; color: var(--ink-soft); min-height: 1em; }
-  .ai-note.err { color: #ff7a7a; }
-
-  /* ---- live seed scroll ------------------------------------------------- */
-  .scroll { max-width: 860px; margin: 0 auto 20px; padding: 0 20px; width: 100%; }
-  .scroll.hidden { display: none; }
-  .scroll-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
-    font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
-  .scroll-head .dot { width: 9px; height: 9px; border-radius: 50%;
-    background: var(--grass); animation: sfpulse 1s infinite; }
-  @keyframes sfpulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
-  /* Stop sits at the far end of the scan header: always in view while a search
-     runs, never competing with the prompt's own send button. */
-  .scroll-head .stop { margin-left: auto; }
-  .scroll-track { height: 132px; overflow: hidden; border: 2px solid var(--slot-edge);
-    background: var(--slot); border-radius: 12px; padding: 8px 14px;
-    font-family: var(--mono); font-size: 12.5px; line-height: 1.75; color: var(--ink-faint);
-    display: flex; flex-direction: column; justify-content: flex-end; }
-  @media (prefers-reduced-motion: reduce) { .scroll-head .dot { animation: none; } }
-  /* flex:none so rows keep their line height instead of being squeezed to
-     nothing once the track fills (which left it looking empty). */
-  .scroll-track .s { flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .scroll-track .s.hit { color: var(--grass); font-weight: 700; }
-
-  .results-wrap { max-width: 860px; margin: 0 auto; padding: 0 20px 70px; }
-  .results-wrap .col { display: block; }
-
-  /* ---- settings / manual-builder drawer -------------------------------- */
-  .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(470px, 94vw);
-    overflow-y: auto; background: var(--stone); border-left: 3px solid var(--slot-edge);
-    box-shadow: -10px 0 40px rgba(0,0,0,.45); z-index: 60; padding: 0 16px 48px;
-    transition: transform .2s ease; }
-  .drawer.hidden { transform: translateX(103%); }
-  .drawer-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center;
-    gap: 8px; padding: 14px 2px; background: var(--stone); border-bottom: 1px solid var(--slot-edge); }
-  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 55; }
-  .scrim.hidden { display: none; }
-</style>
+<title>Seedsmith</title>
+<meta name="description" content="Describe the Minecraft world you want. Seedsmith searches millions of seeds on your own computer.">
+<link rel="icon" type="image/svg+xml" href="/assets/logo.svg">
+<link rel="stylesheet" href="/ui/app.css">
 </head>
 <body>
 
 <div class="app" id="app">
-  <aside class="sidebar" id="sidebar">
-    <div class="side-brand"><span class="logo">🌱</span> SeedGPT</div>
+  <aside class="sidebar" id="sidebar" inert>
+    <div class="side-brand"><img class="logo" src="/assets/logo.svg" alt=""> Seedsmith</div>
     <button class="newbtn" id="newSearch">＋ New search</button>
-    <div class="side-label">History</div>
+    <div class="side-label">History <span class="spacer"></span>
+      <button id="histClear" type="button" title="forget every search">clear</button></div>
     <div class="history" id="history"></div>
-    <div class="side-foot"><span id="engine">cubiomes · loading…</span></div>
+    <div class="side-foot"><span id="engine">loading…</span></div>
   </aside>
 
   <main class="main" id="main">
-    <div class="topbar"><button class="tiny menu" id="menuBtn" title="menu">☰</button></div>
+    <div class="topbar">
+      <button class="icon-only" id="menuBtn" title="History" aria-label="Search history">☰</button>
+      <div class="brand" id="topBrand"><img class="logo" src="/assets/logo.svg" alt=""> Seedsmith</div>
+      <span class="spacer"></span>
+      <button id="buildBtn" title="Build a search by hand">🧱 <span class="lbl">Build</span></button>
+      <button id="toolsBtn" title="Specialist tools">🧰 <span class="lbl">Tools</span></button>
+      <button class="icon-only" id="gear" title="Settings" aria-label="Settings">⚙</button>
+    </div>
 
     <div class="hero" id="hero">
       <div class="hero-inner">
-        <div class="hero-logo" id="heroLogo"><span class="logo-emoji">🌱</span></div>
-        <div class="hero-title">SeedGPT</div>
-        <div class="hero-sub">Describe the Minecraft world you want. It scans millions of seeds and shows the matches.</div>
+        <div class="hero-logo"><img src="/assets/logo.svg" alt=""></div>
+        <h1 class="hero-title">Seedsmith</h1>
+        <div class="hero-sub">Describe the Minecraft world you want. Seedsmith searches millions of seeds on your own computer and shows you the matches.</div>
         <form class="prompt" id="promptForm">
-          <button type="button" id="gear" class="iconbtn" title="Settings &amp; manual builder">⚙</button>
-          <textarea id="nl" rows="1" placeholder=""></textarea>
-          <button type="submit" id="go" class="iconbtn go" title="Search">➜</button>
+          <textarea id="nl" rows="1" aria-label="Describe the world you want"
+            placeholder="a mansion near spawn"></textarea>
+          <button type="submit" id="go" class="iconbtn go" title="Search" aria-label="Search">➜</button>
         </form>
-        <div id="aiNote" class="ai-note"></div>
+        <div class="edition" id="edition">
+          Searching <b>Java Edition</b> · MC <b id="edVer">…</b><span id="edLarge"></span>
+          <button type="button" class="tiny" id="edChange">change</button>
+        </div>
+        <div id="aiNote" class="ai-note" aria-live="polite"></div>
+
+        <div class="chips" id="chips">
+          <div class="chl">Try one</div>
+        </div>
+
+        <div class="setup hidden" id="setup">
+          <div class="t">Works offline for structures, biomes, ores and chest loot.
+            For anything more involved, build it by hand or add an AI key.</div>
+          <button class="tiny" id="setupBuild">Build by hand</button>
+          <button class="tiny" id="setupKey">Add a key</button>
+        </div>
+
+        <div class="legal">Not an official Minecraft product. Not approved by or
+          associated with Mojang or Microsoft.</div>
       </div>
     </div>
 
     <div class="scroll hidden" id="scroll">
-      <div class="scroll-head"><span class="dot"></span><span id="scrollMeta">scanning…</span>
+      <div class="scroll-head"><span class="dot"></span><span id="scrollMeta" role="status">scanning…</span>
         <button id="stopBtn" class="tiny stop" type="button">■ stop</button></div>
       <div class="scroll-track" id="scrollTrack"></div>
     </div>
@@ -449,41 +72,29 @@
   </main>
 </div>
 
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<div class="sr-only" id="srStatus" role="status" aria-live="polite"></div>
 <div class="scrim hidden" id="scrim"></div>
-<aside class="drawer hidden" id="drawer">
+
+<aside class="drawer hidden" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" inert>
   <div class="drawer-head">
-    <b>Settings &amp; manual builder</b>
+    <b id="drawerTitle">Build a search</b>
     <span class="spacer"></span>
     <button class="tiny" id="drawerClose">✕ close</button>
   </div>
+  <div class="tabs">
+    <button class="tab on" data-pane="build" id="tabBuild">Build<span class="sub">query by hand</span></button>
+    <button class="tab" data-pane="tools" id="tabTools">Tools<span class="sub">special engines</span></button>
+    <button class="tab" data-pane="settings" id="tabSettings">Settings<span class="sub">AI · about</span></button>
+  </div>
+
   <div class="drawer-body">
 
-    <section>
-      <h2>Gemini API key</h2>
-      <input type="password" id="geminiKey" placeholder="paste your key (AIza…)" autocomplete="off">
-      <div class="btnrow" style="margin-top:8px">
-        <button id="keySave">Save key</button>
-        <button class="tiny" id="keyClear">clear</button>
-        <span id="keyState" class="hint" style="align-self:center;margin:0"></span>
-      </div>
-      <div class="hint">Stored only in this browser. Get a free key at
-        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> —
-        sign in, “Create API key”, copy it here. (Or set <code>GEMINI_API_KEY</code> before starting the server.)</div>
-    </section>
-
-    <section>
-      <h2>Version</h2>
-      <select id="version">
-        <option>26.2</option><option>26.1</option>
-        <option>1.21</option><option>1.20</option><option>1.19</option>
-        <option>1.18</option><option>1.17</option><option>1.16</option>
-        <option>1.15</option><option>1.14</option><option>1.13</option><option>1.12</option>
-      </select>
-      <div class="hint">A finder generates for the version you pick — it can't infer one. Defaults to the latest (26.2).</div>
-      <label class="chk"><input type="checkbox" id="largeBiomes"> large biomes world</label>
-      <div class="hint">The Large Biomes world preset — same generator at a bigger biome scale.
-        It changes every biome answer, so maps, describes and results all switch with it.</div>
-    </section>
+  <!-- ================= BUILD ================= -->
+  <div class="tabpane on" id="pane-build">
+    <p class="pane-intro">Put a search together by hand. Whatever the prompt box
+      wrote lands here too, so you can see it and adjust it. The button between two
+      conditions switches between needing both (AND) and accepting either (OR).</p>
 
     <section>
       <h2>Conditions</h2>
@@ -499,11 +110,12 @@
         <button id="addIsland">+ island spawn</button>
         <button id="addHeight">+ terrain height</button>
         <button id="addOverlap">+ structure overlap</button>
+        <button id="addStronghold">+ exposed stronghold</button>
       </div>
     </section>
 
     <section>
-      <h2>Search</h2>
+      <h2>Run it</h2>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
         <div><label for="range">seeds to scan</label>
           <input type="number" id="range" value="3000000" min="1" step="100000"></div>
@@ -514,1853 +126,416 @@
         <div><label for="budgetMin">or search for (minutes)</label>
           <input type="number" id="budgetMin" value="0" min="0" max="360" step="1"></div>
         <div style="align-self:end">
-          <div class="hint" style="margin:0">0 = no limit. With a budget the
-            seed count is just an upper bound — leave it huge and let the clock
-            decide. A leaderboard only improves the longer it runs.</div>
+          <div class="hint" style="margin:0">0 stops at about 2½ minutes. With a
+            budget the seed count is just an upper bound: leave it huge and let the
+            clock decide. A leaderboard only improves the longer it runs.</div>
         </div>
       </div>
       <div id="rankBox" style="margin-top:9px"></div>
       <div class="btnrow">
+        <button class="primary" id="searchBtn">Search</button>
         <button id="planBtn">Plan</button>
         <button id="explainBtn">Estimate</button>
-        <button class="primary" id="searchBtn">Search</button>
       </div>
+      <div class="hint"><b>Plan</b> shows the order the engine will test your
+        conditions in; <b>Estimate</b> says how long it should take and how many
+        seeds are likely to survive — both without scanning anything.</div>
+    </section>
+
+    <section>
+      <h2>Check my seeds</h2>
+      <label for="checkSeeds">seeds — one per line; numbers or text, read the way Minecraft reads them</label>
+      <textarea id="checkSeeds" rows="4" spellcheck="false"
+        placeholder="-4172144997902289642&#10;12345&#10;my cool seed"></textarea>
+      <div class="btnrow">
+        <button id="checkBtn">Check against these conditions</button>
+      </div>
+      <div class="hint">Instead of searching, tests the seeds you already have —
+        a friend's world, a server, another finder's list (up to 100,000) — and
+        shows which have everything above, with the coordinates.</div>
+    </section>
+
+    <section>
+      <h2>World version</h2>
+      <select id="version" aria-label="Minecraft version">
+        <option>26.2</option><option>26.1</option>
+        <option>1.21</option><option>1.20</option><option>1.19</option>
+        <option>1.18</option><option>1.17</option><option>1.16</option>
+        <option>1.15</option><option>1.14</option><option>1.13</option><option>1.12</option>
+      </select>
+      <div class="hint">A finder generates for the version you pick — it can't infer one. Defaults to the latest (26.2).</div>
+      <label class="chk" style="display:flex;align-items:center;gap:7px;margin-top:9px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="largeBiomes" style="width:auto;margin:0;accent-color:var(--grass)"> large biomes world</label>
+      <div class="hint">The Large Biomes world preset — same generator at a bigger biome scale.
+        It changes every biome answer, so maps, describes and results all switch with it.</div>
     </section>
 
     <section>
       <h2>Saved searches</h2>
       <div class="btnrow" style="margin-top:0">
-        <input type="text" id="saveName" placeholder="name this search" style="flex:1;min-width:0">
+        <input type="text" id="saveName" aria-label="Name this search" placeholder="name this search" style="flex:1;min-width:0">
         <button id="saveBtn">save</button>
       </div>
       <div id="savedList"></div>
-      <div class="hint">Saved in this browser. <b>Share</b> (top right) copies a link that rebuilds the query anywhere.</div>
+      <div class="hint">Saved in this browser. <b>Share</b> on a result copies a
+        link that rebuilds the query anywhere.</div>
+    </section>
+  </div>
+
+  <!-- ================= TOOLS ================= -->
+  <div class="tabpane" id="pane-tools">
+    <p class="pane-intro">The main search is fast because it never builds the
+      world. These questions need something it cannot see, so each has its own
+      engine. Open one to use it.</p>
+
+    <details class="tool" id="tool-village">
+      <summary>Village buildings <span class="tag-exp">real worldgen</span>
+        <span class="what">Seeds whose village holds N smiths — by running Minecraft's own generator (MC 1.16.5). Slow.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why this needs its own engine</summary>
+          <div class="hint">A village is a <b>jigsaw</b> structure: which buildings it
+            gets is decided while the world generates, so nothing short of the real
+            generator can see inside one. Counts tool/weapon/armorer as "any smith".</div>
+        </details>
+        <div style="display:grid;grid-template-columns:1fr 76px;gap:9px">
+          <div><label for="vsBuilding">building</label>
+            <select id="vsBuilding">
+              <option value="smith">any smith (tool/weapon/armorer)</option>
+              <option value="toolsmith">toolsmith</option>
+              <option value="weaponsmith">weaponsmith</option>
+              <option value="armorer">armorer</option>
+              <option value="library">library</option>
+              <option value="cartographer">cartographer</option>
+              <option value="mason">mason</option>
+              <option value="fletcher">fletcher</option>
+              <option value="butcher">butcher</option>
+              <option value="shepherd">shepherd</option>
+              <option value="fisher">fisher</option>
+              <option value="tannery">tannery</option>
+              <option value="temple">temple</option>
+              <option value="farm">farm</option>
+              <option value="animal_pen">animal pen</option>
+              <option value="stable">stable</option>
+            </select></div>
+          <div><label for="vsMin">at least</label>
+            <input type="number" id="vsMin" value="5" min="1" max="12"></div>
+        </div>
+        <div style="margin-top:9px"><label for="vsSeeds">seeds to scan</label>
+          <input type="number" id="vsSeeds" value="200" min="1" max="3000" step="50"></div>
+        <div class="btnrow">
+          <button class="primary" id="vsBtn">Search villages</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-casing">
+      <summary>Treasure casing <span class="tag-exp">real worldgen</span>
+        <span class="what">A buried treasure walled in by magma, copper ore, gravel… Some of these are very rare.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why this needs its own engine</summary>
+          <div class="hint">A buried treasure writes the block it <b>landed on</b> into every
+            air or water face around it — so it arrives already walled in. The main search
+            cannot ask this: its engine has no surface rules and no decoration, so sand
+            columns, ore and magma are <b>absent from it</b> rather than slow.</div>
+        </details>
+        <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
+          <div><label for="tcCasing">encased in</label>
+            <select id="tcCasing">
+              <option value="magma_block">magma block (rare)</option>
+              <option value="copper_ore">copper ore (rare)</option>
+              <option value="iron_ore">iron ore (rarer still)</option>
+              <option value="coal_ore">coal ore</option>
+              <option value="mud">mud</option>
+              <option value="stone">stone (deep / cave floor)</option>
+              <option value="gravel">gravel (common)</option>
+              <option value="dirt">dirt (uncommon)</option>
+            </select></div>
+          <div><label for="tcLimit">want</label>
+            <input type="number" id="tcLimit" value="1" min="1" max="10"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px">
+          <div><label for="tcRange">seeds to scan</label>
+            <input type="number" id="tcRange" value="3000000" min="100000" max="200000000" step="500000"></div>
+          <div><label for="tcRadius">blocks per world</label>
+            <input type="number" id="tcRadius" value="10000" min="1000" max="60000" step="1000"></div>
+        </div>
+        <div class="hint">
+          <b>Blocks per world</b> decides how much of each world is actually examined.
+          The finder reports only the <i>first</i> treasure in a seed, so this expands it
+          to every treasure within that radius — 6 chests at 1&nbsp;500, <b>1&nbsp;431 at
+          20&nbsp;000</b>. For a rare casing that is the difference between searching a
+          world and glancing at it.
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="tcBtn">Find casing</button>
+          <button id="tcKeep">Keep looking</button>
+          <button id="tcStop" disabled>Stop</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-hunt">
+      <summary>Keep looking <span class="tag-exp">open-ended</span>
+        <span class="what">Runs the search on the Build tab batch after batch on fresh seeds until it finds one, or you stop it.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why this is not just pressing Search again</summary>
+          <div class="hint">The normal search walks seeds <b>starting from the same place
+            every time</b>, so running it again re-scanned the same ground. This moves on
+            to fresh seeds each batch.</div>
+        </details>
+        <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
+          <div><label for="huBatch">seeds per batch</label>
+            <input type="number" id="huBatch" value="2000000" min="10000" max="50000000" step="500000"></div>
+          <div><label for="huWant">want</label>
+            <input type="number" id="huWant" value="1" min="1" max="50"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="huBtn">Keep looking</button>
+          <button id="huStop" disabled>Stop</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-fortress">
+      <summary>Fortresses inside each other <span class="tag-exp">piece-level</span>
+        <span class="what">Ranks seeds by how many fortress pieces actually intersect — not by how close the starts are.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why "close together" is the wrong measure</summary>
+          <div class="hint">A fortress is up to <b>257 pieces</b> sprawling 112 blocks from
+            its start, and each is generated <b>without knowing the others exist</b> — so
+            two starts 80 blocks apart do not sit near each other, they <b>grow through</b>
+            each other. This counts intersecting piece pairs.</div>
+        </details>
+        <div><label for="foSeeds">seeds to rank</label>
+          <input type="number" id="foSeeds" value="200000" min="1000" max="5000000" step="50000"></div>
+        <div style="margin-top:9px"><label for="foSeed">or inspect one seed</label>
+          <input type="text" id="foSeed" placeholder="e.g. 272750727216669"></div>
+        <div class="btnrow">
+          <button class="primary" id="foBtn">Measure overlap</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-exposed">
+      <summary>Exposed treasure <span class="tag-exp">real worldgen</span>
+        <span class="what">A buried treasure chest sitting in open air — no digging.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why this needs its own engine</summary>
+          <div class="hint">The chest is placed at the bottom of the sand column, so it is
+            almost always covered or underwater; this needs a beach with essentially no sand
+            over the stone. The main search cannot see sand or water, so real worldgen decides.</div>
+        </details>
+        <div style="display:grid;grid-template-columns:1fr 84px;gap:9px">
+          <div><label for="etRange">seeds to scan</label>
+            <input type="number" id="etRange" value="3000000" min="100000" max="200000000" step="500000"></div>
+          <div><label for="etLimit">want</label>
+            <input type="number" id="etLimit" value="3" min="1" max="20"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="etBtn">Find exposed</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-cool">
+      <summary>What is cool in my seed? <span class="tag-exp">per-seed</span>
+        <span class="what">The opposite of a search: hand it a world you already have and it reads every lootable chest in range.</span></summary>
+      <div class="body">
+        <details class="why"><summary>what it reads</summary>
+          <div class="hint">Leave the item blank for anything notable, or name one to hunt it
+            specifically. <b>Enchantments and their levels are read</b> — put an enchantment
+            in the box below to find e.g. a <i>Looting III</i> golden sword.</div>
+        </details>
+        <div><label for="csSeed">seed</label>
+          <input type="text" id="csSeed" placeholder="20094"></div>
+        <div style="display:grid;grid-template-columns:1fr 80px;gap:9px;margin-top:9px">
+          <div><label for="csItem">item (optional)</label>
+            <input type="text" id="csItem" placeholder="diamond"></div>
+          <div><label for="csMin">at least</label>
+            <input type="number" id="csMin" value="1"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 80px 90px;gap:9px;margin-top:9px">
+          <div><label for="csEnch">enchantment (optional)</label>
+            <input type="text" id="csEnch" placeholder="looting"></div>
+          <div><label for="csEnchMin">level</label>
+            <input type="number" id="csEnchMin" value="3"></div>
+          <div><label for="csRadius">radius</label>
+            <input type="number" id="csRadius" value="3000"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="csBtn">Find cool stuff</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-spider">
+      <summary>Cave spiders by a village <span class="tag-exp">real pieces</span>
+        <span class="what">Villages with mineshaft spider-spawner corridors next door.</span></summary>
+      <div class="body">
+        <details class="why"><summary>how the spawners are counted</summary>
+          <div class="hint">Cave spider spawners come from mineshaft <b>spider corridors</b>,
+            which are structure pieces — so the real generator can enumerate them and the
+            game's own <code>spiderCorridor</code> flag says which ones get a spawner.
+            Corridors the game would <b>skip</b> (a piece touching liquid is dropped
+            outright) are not counted. Distance is in <b>chunks</b>.<br><br>
+            These are spawners that <b>exist</b>. Whether you can reach one is a terrain
+            question this does not answer — ordinary mineshafts sit near y −30.</div>
+        </details>
+        <div style="display:grid;grid-template-columns:70px 70px 1fr;gap:9px">
+          <div><label for="svMin">spawners</label>
+            <input type="number" id="svMin" value="2"></div>
+          <div><label for="svRadius">chunks</label>
+            <input type="number" id="svRadius" value="3"></div>
+          <div><label for="svSeeds">seeds to scan</label>
+            <input type="number" id="svSeeds" value="20"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="svBtn">Find spider villages</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-bedrock">
+      <summary>Bedrock glitched outpost <span class="tag-exp">Bedrock Edition</span>
+        <span class="what">The outpost on a tall cobblestone pillar. Does not exist in Java. Runs a real Bedrock server — slow.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why Java can never do this</summary>
+          <div class="hint">Java drops a small dirt platform under a structure that lands in
+            air, while <b>Bedrock fills a foundation to the ground</b> out of the structure's
+            own material. This runs a real <b>Bedrock Dedicated Server</b> and measures the
+            column block by block, so the height reported is measured rather than predicted.
+            Bedrock seeds do not transfer to Java, so this never falls back to the Java search.</div>
+        </details>
+        <div><label for="boSeeds">seeds (comma separated)</label>
+          <input type="text" id="boSeeds" value="12345"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px">
+          <div><label for="boDrop">min terrain drop</label>
+            <input type="number" id="boDrop" value="20" min="4" max="120"></div>
+          <div><label for="boVerify">verify top</label>
+            <input type="number" id="boVerify" value="2" min="1" max="10"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="boBtn">Find glitched outpost</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-overlap">
+      <summary>Really overlapping? <span class="tag-exp">piece-exact</span>
+        <span class="what">Checks one pair you already found. Exact for fortress and end_city; answers UNKNOWN otherwise.</span></summary>
+      <div class="body">
+        <details class="why"><summary>why the search's own answer is not enough</summary>
+          <div class="hint">The search compares <b>nominal boxes</b>, and its distance is
+            measured <b>origin to origin</b> — a mansion sprawls far past its origin, so a
+            pair reported 57 blocks apart had buildings ~15–20 apart. This intersects the
+            structures' <b>real piece bounding boxes</b>. <b>UNKNOWN</b> is not the same as
+            “they don't overlap”.</div>
+        </details>
+        <div><label for="soSeed">seed</label>
+          <input type="text" id="soSeed" placeholder="272750727216669"></div>
+        <div style="display:grid;grid-template-columns:1fr 70px 70px;gap:9px;margin-top:9px">
+          <div><label for="soA">structure A</label>
+            <input type="text" id="soA" value="fortress"></div>
+          <div><label for="soAx">x</label><input type="number" id="soAx" value="352"></div>
+          <div><label for="soAz">z</label><input type="number" id="soAz" value="352"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 70px 70px;gap:9px;margin-top:9px">
+          <div><label for="soB">structure B</label>
+            <input type="text" id="soB" value="fortress"></div>
+          <div><label for="soBx">x</label><input type="number" id="soBx" value="352"></div>
+          <div><label for="soBz">z</label><input type="number" id="soBz" value="432"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="soBtn">Check overlap</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="tool" id="tool-floating">
+      <summary>Actually floating? <span class="tag-exp">no server</span>
+        <span class="what">Confirms one spot: is that structure genuinely in the air, or just on a hillside?</span></summary>
+      <div class="body">
+        <details class="why"><summary>why the search's floating flag was wrong</summary>
+          <div class="hint">The search's floating condition comes from a <b>density
+            function</b>, and two earlier versions of it called <b>18–24% of outposts</b>
+            floating — on a hillside the ground genuinely is missing at those heights. This
+            reads the <b>real terrain column</b> out of Minecraft's own generator and wants
+            three things at once: a solid cap, a real void beneath it, and ground that drops
+            away on nearly every side. It answers <b>UNKNOWN</b> rather than guessing when it
+            cannot see.</div>
+        </details>
+        <div style="display:grid;grid-template-columns:1fr 70px 70px 70px;gap:9px">
+          <div><label for="flSeed">seed</label>
+            <input type="text" id="flSeed" placeholder="-4707106035532250258"></div>
+          <div><label for="flX">x</label><input type="number" id="flX" value="-448"></div>
+          <div><label for="flZ">z</label><input type="number" id="flZ" value="1136"></div>
+          <div><label for="flGap">gap</label><input type="number" id="flGap" value="24"></div>
+        </div>
+        <div class="btnrow">
+          <button class="primary" id="flBtn">Check floating</button>
+        </div>
+      </div>
+    </details>
+
+    <div class="hint hidden" id="toolsMore">A few more tools run the real Minecraft
+      generator or a real server. They need a JDK and game files that cannot be
+      included in this download: see <code>docs/advanced-tools.md</code>.</div>
+  </div>
+
+  <!-- ================= SETTINGS ================= -->
+  <div class="tabpane" id="pane-settings">
+    <p class="pane-intro">An AI key is optional. It lets the prompt box follow
+      requests the built-in reader cannot. Searching, building and every tool work
+      without one.</p>
+
+    <section>
+      <h2>AI provider</h2>
+      <select id="aiProvider" aria-label="AI provider">
+        <option value="gemini">Google Gemini</option>
+        <option value="compatible">Other (Groq, OpenAI, OpenRouter, Ollama…)</option>
+      </select>
+
+      <div id="aiCompatFields" class="hidden" style="margin-top:10px">
+        <input id="aiBase" aria-label="Provider base URL" placeholder="base URL, e.g. https://api.groq.com/openai/v1" autocomplete="off">
+        <div class="hint">Groq <code>https://api.groq.com/openai/v1</code> ·
+          OpenAI <code>https://api.openai.com/v1</code> ·
+          OpenRouter <code>https://openrouter.ai/api/v1</code> ·
+          local Ollama <code>http://localhost:11434/v1</code> (leave the key blank).</div>
+      </div>
+      <input id="aiModel" aria-label="AI model" placeholder="model (blank = default)" autocomplete="off" style="margin-top:6px">
+      <div class="hint" id="aiModelHint"></div>
+
+      <input type="password" id="geminiKey" aria-label="AI key" placeholder="paste your key" autocomplete="off" style="margin-top:10px">
+      <div class="btnrow" style="margin-top:8px">
+        <button class="primary" id="keySave">Save key</button>
+        <button class="tiny" id="keyTest">Test connection</button>
+        <button class="tiny" id="keyClear">clear</button>
+        <span id="keyState" class="hint" style="align-self:center;margin:0"></span>
+      </div>
+      <div id="keyTestOut" class="hint" style="margin-top:6px"></div>
+      <div class="hint">Stored only in this browser. A free Gemini key:
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
+        (Or set <code>GEMINI_API_KEY</code> / <code>AI_API_KEY</code> before starting the server.)</div>
     </section>
 
     <section>
-      <h2>Village buildings <span class="tag-exp">real worldgen</span></h2>
-      <div class="hint" style="margin-top:0;margin-bottom:9px">
-        Finds seeds with a village holding <b>N&nbsp;smiths</b> (tool/weapon/armorer) —
-        by running Minecraft&#39;s <b>actual</b> generator, the only way to see inside a
-        jigsaw village. Separate engine (<b>MC&nbsp;1.16.5</b>), and <b>slow</b>.
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 76px;gap:9px">
-        <div><label for="vsBuilding">building</label>
-          <select id="vsBuilding">
-            <option value="smith">any smith (tool/weapon/armorer)</option>
-            <option value="toolsmith">toolsmith</option>
-            <option value="weaponsmith">weaponsmith</option>
-            <option value="armorer">armorer</option>
-            <option value="library">library</option>
-            <option value="cartographer">cartographer</option>
-            <option value="mason">mason</option>
-            <option value="fletcher">fletcher</option>
-            <option value="butcher">butcher</option>
-            <option value="shepherd">shepherd</option>
-            <option value="fisher">fisher</option>
-            <option value="tannery">tannery</option>
-            <option value="temple">temple</option>
-            <option value="farm">farm</option>
-            <option value="animal_pen">animal pen</option>
-            <option value="stable">stable</option>
-          </select></div>
-        <div><label for="vsMin">at least</label>
-          <input type="number" id="vsMin" value="5" min="1" max="12"></div>
-      </div>
-      <div style="margin-top:9px"><label for="vsSeeds">seeds to scan</label>
-        <input type="number" id="vsSeeds" value="200" min="1" max="3000" step="50"></div>
-      <div class="btnrow">
-        <button class="primary" id="vsBtn">Search villages</button>
-      </div>
+      <h2>About</h2>
+      <div class="hint" style="margin-top:0">Seedsmith <span class="app-version"></span> ·
+        <span id="engineInfo">loading…</span></div>
+      <div class="hint">Open source under the MIT license. Searches run on this
+        computer; nothing is sent anywhere unless you add an AI key, and then only
+        what you type in the prompt box.</div>
+      <div class="hint">World generation by
+        <a href="https://github.com/xpple/cubiomes" target="_blank" rel="noopener">cubiomes</a>.
+        The world version and large-biomes switch are on the <b>Build</b> tab.</div>
+      <div class="hint">Not an official Minecraft product. Not approved by or
+        associated with Mojang or Microsoft.</div>
     </section>
+  </div>
 
   </div>
 </aside>
 
-<script>
-(() => {
-  const $ = s => document.querySelector(s);
-  const el = (t, c, x) => { const n = document.createElement(t);
-    if (c) n.className = c; if (x !== undefined) n.textContent = x; return n; };
-  const esc = s => String(s).replace(/[&<>"]/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-
-  // Display-only prettifier: drop the minecraft: prefix and underscores, then
-  // Title Case. The raw id is always kept as the <option> value / query field;
-  // only the visible text is cleaned up.
-  const pretty = s => String(s).replace(/^minecraft:/, '')
-    .replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-
-  // ---- icons -------------------------------------------------------------
-  // Emoji give instant character with zero downloads; if the user drops a PNG
-  // into assets/structures/<id>.png or assets/items/<id>.png it upgrades in
-  // place. `assets` records which files actually exist so we never point an
-  // <img> at a 404 (which flickers a broken-image glyph).
-  let assets = { structures: [], items: [], backdrop: false };
-
-  const STRUCT_EMOJI = {
-    mansion:'🏰', woodland_mansion:'🏰', village:'🏘️', monument:'🔱',
-    ocean_monument:'🔱', ancient_city:'🏛️', outpost:'🏴', pillager_outpost:'🏴',
-    desert_pyramid:'🏜️', jungle_temple:'🛕', jungle_pyramid:'🛕', swamp_hut:'🧙',
-    witch_hut:'🧙', igloo:'🧊', ruined_portal:'🌀', ruined_portal_nether:'🌀',
-    shipwreck:'⛵', ocean_ruin:'🌊', treasure:'💰', buried_treasure:'💰',
-    fortress:'🔥', nether_fortress:'🔥', bastion:'🐷', bastion_remnant:'🐷',
-    end_city:'🌃', trail_ruins:'🪨', trial_chambers:'⚔️', mineshaft:'⛏️',
-    stronghold:'📕', geode:'💜', fossil:'🦴', desert_well:'🪣', end_gateway:'🌌',
-  };
-  const ITEM_EMOJI = {
-    diamond:'💎', diamond_ore:'💎', emerald:'💚', emerald_ore:'💚',
-    gold_ingot:'🟡', gold_nugget:'🟡', golden_apple:'🍎',
-    enchanted_golden_apple:'🍏', iron_ingot:'⬜', iron_nugget:'⬜',
-    saddle:'🪮', name_tag:'🏷️', bell:'🔔', book:'📖', enchanted_book:'📚',
-    trident:'🔱', heart_of_the_sea:'💙', nautilus_shell:'🐚', tnt:'🧨',
-    music_disc:'💿', bone:'🦴', arrow:'🏹', bread:'🍞', wheat:'🌾',
-    apple:'🍎', obsidian:'⬛', ender_pearl:'🟣', gunpowder:'💥', string:'🧵',
-    redstone:'🔴', lapis:'🔵', copper:'🟠', coal:'⚫', quartz:'⬜',
-    ancient_debris:'🟤', nether_gold:'🟡',
-  };
-  function biomeEmoji(name) {
-    const n = String(name || '');
-    const rules = [['mushroom','🍄'],['desert','🏜️'],['badlands','🧱'],
-      ['mesa','🧱'],['jungle','🌴'],['bamboo','🎋'],['swamp','🐸'],
-      ['mangrove','🌿'],['ocean','🌊'],['beach','🏖️'],['river','💧'],
-      ['ice','❄️'],['frozen','❄️'],['snow','⛄'],['taiga','🌲'],
-      ['spruce','🌲'],['savanna','🦁'],['cherry','🌸'],['flower','🌷'],
-      ['sunflower','🌻'],['dark_forest','🌳'],['forest','🌳'],['birch','🪵'],
-      ['plains','🌾'],['meadow','🌼'],['mountain','⛰️'],['peak','🏔️'],
-      ['hills','⛰️'],['grove','🌲'],['cave','🕳️'],['nether','🔥'],
-      ['basalt','🌋'],['soul','💀'],['crimson','🍄'],['warped','🌀'],
-      ['end','🌌'],['void','⬛'],['mangrove','🌿']];
-    for (const [k, e] of rules) if (n.includes(k)) return e;
-    return '🌱';
-  }
-  function emojiFor(cat, name) {
-    if (cat === 'eyes')   return '👁️';
-    if (cat === 'slime')  return '🟢';
-    if (cat === 'height') return '⛰️';
-    if (cat === 'spawn')  return '🧭';
-    if (cat === 'biome')  return biomeEmoji(name);
-    if (cat === 'item')   return ITEM_EMOJI[name] || '📦';
-    return STRUCT_EMOJI[name] || '📍';   // structure / place
-  }
-  function mkIcon(cat, name) {
-    const s = el('span', 'ic');
-    if (cat === 'structure' && assets.structures.includes(name)) {
-      const im = el('img'); im.src = '/assets/structures/' + name + '.png';
-      im.alt = ''; s.append(im); return s;
-    }
-    if (cat === 'item' && assets.items.includes(name)) {
-      const im = el('img'); im.src = '/assets/items/' + name + '.png';
-      im.alt = ''; s.append(im); return s;
-    }
-    s.textContent = emojiFor(cat, name);
-    return s;
-  }
-
-  // A table cell with an icon + label. Shared by search results and the village
-  // search, so it lives here rather than inside either handler.
-  function idCell(cat, name, label) {
-    const td = el('td', 'id');
-    td.append(mkIcon(cat, name), document.createTextNode(label));
-    return td;
-  }
-
-  let vocab = { structures:{}, biomes:{} }, lootVocab = { structures:{} };
-  let conds = [], nextId = 1;
-
-  // ---- history sidebar + shell -------------------------------------------
-  const HIST_LS = 'sf-history';
-  const getHistory = () => { try { return JSON.parse(localStorage.getItem(HIST_LS) || '[]'); } catch (_) { return []; } };
-  function addHistory(text) {
-    let h = getHistory().filter(x => x.text !== text);
-    h.unshift({ text, ts: Date.now() });
-    localStorage.setItem(HIST_LS, JSON.stringify(h.slice(0, 60)));
-    renderHistory();
-  }
-  function renderHistory() {
-    const box = $('#history'); box.innerHTML = '';
-    const h = getHistory();
-    if (!h.length) { box.append(el('div', 'hist-empty', 'Your searches show up here.')); return; }
-    h.forEach(item => {
-      const b = el('button', 'hist-item', item.text);
-      b.title = item.text;
-      b.onclick = () => { $('#nl').value = item.text; closeSidebar(); submitPrompt(); };
-      box.append(b);
-    });
-  }
-  renderHistory();
-
-  $('#newSearch').onclick = () => {
-    $('#nl').value = ''; $('#nl').style.height = 'auto'; aiNote('');
-    out.innerHTML = ''; stopScroll();
-    $('#main').classList.remove('searched'); closeSidebar();
-    $('#nl').focus();
-  };
-
-  // Sidebar collapses under a narrow viewport; the ☰ button toggles it.
-  const closeSidebar = () => { $('#app').classList.remove('sb-open'); $('#scrim').classList.add('hidden'); };
-  $('#menuBtn').onclick = () => {
-    const open = $('#app').classList.toggle('sb-open');
-    $('#scrim').classList.toggle('hidden', !open);
-  };
-
-  // ---- vocabulary --------------------------------------------------------
-  async function loadVocab() {
-    const v = $('#version').value;
-    try {
-      const r = await fetch('/api/vocab?v=' + encodeURIComponent(v));
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error);
-      vocab = d;
-      try {
-        const lr = await fetch('/api/lootitems?v=' + encodeURIComponent(v));
-        lootVocab = await lr.json();
-      } catch (e) { lootVocab = { structures:{} }; }
-      $('#engine').textContent =
-        `cubiomes · MC ${d.version} · ${Object.keys(d.structures).length} structures · ${Object.keys(d.biomes).length} biomes`;
-      // Drop conditions this version can't express, rather than failing later.
-      // Only structure/biome names are version-scoped; ore, eyes, loot and slime
-      // (slime placement is version-independent) carry across any version.
-      const before = conds.length;
-      conds = conds.filter(c =>
-        c.kind === 'structure'            ? c.name in vocab.structures :
-        c.kind === 'biome' || c.kind === 'area' ? c.name in vocab.biomes : true);
-      render();
-      if (conds.length !== before) toast(`${before - conds.length} condition(s) not in MC ${d.version} — removed`);
-    } catch (e) { $('#engine').textContent = 'vocab failed: ' + e.message; }
-  }
-  $('#version').onchange = loadVocab;
-
-  function toast(msg) {
-    const n = el('div', 'note warn', msg);
-    $('#out').prepend(n);
-    setTimeout(() => n.remove(), 5000);
-  }
-
-  // ---- conditions --------------------------------------------------------
-  function addCond(kind) {
-    const names = Object.keys(kind === 'structure' ? vocab.structures : vocab.biomes);
-    if (!names.length) { toast('vocabulary not loaded yet'); return; }
-    const pick = kind === 'structure'
-      ? (names.includes('mansion') ? 'mansion' : names[0])
-      : (names.includes('jungle') ? 'jungle' : names[0]);
-    conds.push({ id: kind.slice(0,1) + (nextId++), kind, name: pick,
-                 within: 400, of: 'origin', precision: 'fine' });
-    render();
-  }
-  $('#addStruct').onclick = () => addCond('structure');
-  $('#addBiome').onclick  = () => addCond('biome');
-  $('#addLoot').onclick = () => {
-    const ls = Object.keys(lootVocab.structures || {});
-    if (!ls.length) { toast('loot vocabulary not loaded'); return; }
-    const st = ls.includes('desert_pyramid') ? 'desert_pyramid' : ls[0];
-    const items = lootVocab.structures[st] || [];
-    conds.push({ id: 'c' + (nextId++), kind: 'loot', struct: st,
-                 item: items.includes('diamond') ? 'diamond' : items[0],
-                 count: 1, within: 3000 });
-    render();
-  };
-
-  $('#addEyes').onclick = () => {
-    if (conds.some(c => c.kind === 'eyes')) { toast('one eye condition is enough'); return; }
-    conds.push({ id: 'portal', kind: 'eyes', eyes: 6 });
-    render();
-  };
-
-  $('#addOre').onclick = () => {
-    conds.push({ id: 'o' + (nextId++), kind: 'ore', mat: 'diamond',
-                 count: ORE_DEFAULT.diamond, within: 64, of: 'origin' });
-    render();
-  };
-
-  $('#addSlime').onclick = () => {
-    conds.push({ id: 's' + (nextId++), kind: 'slime', count: 6, within: 128, of: 'origin' });
-    render();
-  };
-
-  $('#addArea').onclick = () => {
-    const names = Object.keys(vocab.biomes || {});
-    if (!names.length) { toast('vocabulary not loaded yet'); return; }
-    const pick = names.includes('mushroom_fields') ? 'mushroom_fields'
-               : names.includes('badlands') ? 'badlands' : names[0];
-    conds.push({ id: 'a' + (nextId++), kind: 'area', name: pick, pct: 50,
-                 within: 800, of: 'origin', precision: 'fine' });
-    render();
-  };
-
-  $('#addIsland').onclick = () => {
-    if (conds.some(c => c.kind === 'island')) { toast('one island condition is enough'); return; }
-    conds.push({ id: 'i' + (nextId++), kind: 'island', pct: 75, within: 256, of: 'spawn' });
-    render();
-  };
-
-  $('#addHeight').onclick = () => {
-    conds.push({ id: 'h' + (nextId++), kind: 'height', height: 150, relief: 0,
-                 within: 300, of: 'origin', precision: 'fine' });
-    render();
-  };
-
-  $('#addOverlap').onclick = () => {
-    const names = Object.keys(vocab.structures || {});
-    if (!names.length) { toast('vocabulary not loaded yet'); return; }
-    const a = names.includes('village') ? 'village' : names[0];
-    const b = names.includes('ruined_portal') ? 'ruined_portal' : names[1] || names[0];
-    conds.push({ id: 'x' + (nextId++), kind: 'overlap', a, b, pad: 0,
-                 within: 2000, of: 'origin' });
-    render();
-  };
-
-  // Measured on this machine at ~98 seeds/s (locating a stronghold costs ~10ms).
-  const EYE_TIME = {0:'instant',1:'instant',2:'instant',3:'instant',4:'instant',
-    5:'~3 s', 6:'~20 s', 7:'~4 min', 8:'~50 min', 9:'~18 hours',
-    10:'~22 days', 11:'~3 years', 12:'~320 years'};
-
-  function dimOf(c) {
-    return (c.kind === 'structure' ? vocab.structures[c.name] : vocab.biomes[c.name]) || '';
-  }
-
-  function render() {
-    const box = $('#conds'); box.innerHTML = '';
-    // The leaderboard offers only conditions that measure something, so it has
-    // to be re-derived whenever the condition list changes.
-    setTimeout(renderRank, 0);
-    if (!conds.length) {
-      box.append(el('div', 'empty', 'No conditions yet — add a structure or biome.'));
-      return;
-    }
-    conds.forEach((c, i) => {
-      const d = el('div', 'cond ' + c.kind);
-      if (c.kind === 'loot') {
-        const top = el('div','top');
-        top.append(mkIcon('item', c.item), el('span','cid', c.id), el('span','dim','CHEST LOOT'));
-        const x = el('button','tiny x','×');
-        x.onclick = () => { conds.splice(i,1); render(); };
-        top.append(x); d.append(top);
-
-        const g = el('div','grid');
-        const ss = el('select');
-        Object.keys(lootVocab.structures).forEach(n => {
-          const o = el('option', null, pretty(n)); o.value = n;
-          if (n === c.struct) o.selected = true; ss.append(o);
-        });
-        ss.onchange = e => {
-          c.struct = e.target.value;
-          const items = lootVocab.structures[c.struct] || [];
-          if (!items.includes(c.item)) c.item = items[0];
-          render();
-        };
-        const w = el('input'); w.type='number'; w.value=c.within; w.min=100; w.max=10000; w.step=500;
-        w.title='search radius (blocks)';
-        w.onchange = e => c.within = Math.max(100, Math.min(10000, +e.target.value||3000));
-        g.append(ss, w); d.append(g);
-
-        const g2 = el('div','grid');
-        const it = el('select');
-        (lootVocab.structures[c.struct] || []).sort().forEach(n => {
-          const o = el('option', null, pretty(n)); o.value = n;
-          if (n === c.item) o.selected = true; it.append(o);
-        });
-        it.onchange = e => { c.item = e.target.value; render(); };
-        const cnt = el('input'); cnt.type='number'; cnt.value=c.count; cnt.min=1; cnt.title='minimum count';
-        cnt.onchange = e => c.count = Math.max(1, +e.target.value||1);
-        g2.append(it, cnt); d.append(g2);
-        box.append(d);
-        return;
-      }
-      if (c.kind === 'ore') {
-        const top = el('div','top');
-        top.append(mkIcon('item', c.mat), el('span','cid', c.id), el('span','dim','ORE DENSITY'));
-        const x = el('button','tiny x','×');
-        x.onclick = () => { conds.splice(i,1); render(); };
-        top.append(x); d.append(top);
-
-        const g = el('div','grid');
-        const ms = el('select');
-        ORE_MATERIALS.forEach(n => {
-          const o = el('option', null, pretty(n)); o.value = n;
-          if (n === c.mat) o.selected = true; ms.append(o);
-        });
-        ms.onchange = e => { c.mat = e.target.value; c.count = ORE_DEFAULT[c.mat] || 1; render(); };
-        const w = el('input'); w.type='number'; w.value=c.within; w.min=16; w.max=256; w.step=16;
-        w.title='radius in blocks (all depths)';
-        w.onchange = e => c.within = Math.max(16, Math.min(256, +e.target.value||64));
-        g.append(ms, w); d.append(g);
-
-        const g2 = el('div','grid');
-        const lab = el('div');
-        lab.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        lab.textContent = 'at least (blocks)';
-        const cnt = el('input'); cnt.type='number'; cnt.value=c.count; cnt.min=1;
-        cnt.title='minimum ore blocks in range';
-        cnt.onchange = e => c.count = Math.max(1, +e.target.value||1);
-        g2.append(lab, cnt); d.append(g2);
-
-        const g3 = el('div','grid');
-        const vl = el('div');
-        vl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        vl.textContent = 'one vein ≥ (0=off)';
-        const vn = el('input'); vn.type='number'; vn.value=c.vein||0; vn.min=0; vn.max=64;
-        vn.title='minimum blocks in a SINGLE connected vein — the blob you mine in one go, far rarer than the scattered total';
-        vn.onchange = e => { c.vein = Math.max(0, Math.min(64, +e.target.value||0)); render(); };
-        g3.append(vl, vn); d.append(g3);
-
-        const xp = el('label','chk');
-        const xpc = el('input'); xpc.type='checkbox'; xpc.checked = !!c.exposed;
-        xpc.onchange = e => { c.exposed = e.target.checked; render(); };
-        xp.append(xpc, document.createTextNode(' exposed only (open to a cave, 1.18+, SLOW)'));
-        d.append(xp);
-
-        const note = el('div','note' + (c.exposed ? ' warn' : ''));
-        note.textContent = c.exposed
-          ? '⚠ Exposed counts only ore with a non-solid neighbour in Minecraft’s real block terrain — ore you could actually see in a cave wall. Generates terrain per candidate chunk, so it is the slowest filter here: radius is capped at 48 and you should pair it with something cheap first.'
-          : (c.vein||0) > 0
-          ? 'Vein size is the largest face-connected blob of this ore in the radius. Two placements that happen to touch merge into one bigger vein — which is where records come from.'
-          : 'Counts every ore block at all depths in the radius — a richness proxy, not what you’d mine. Expensive; pair with a structure to filter first.';
-        d.append(note);
-        box.append(d);
-        return;
-      }
-      if (c.kind === 'overlap') {
-        const top = el('div','top');
-        top.append(el('span','ic','💥'), el('span','cid', c.id), el('span','dim','STRUCTURE OVERLAP'));
-        const x = el('button','tiny x','×');
-        x.onclick = () => { conds.splice(i,1); render(); };
-        top.append(x); d.append(top);
-
-        const names = Object.keys(vocab.structures || {});
-        const mk = (val, set) => {
-          const s = el('select');
-          names.forEach(n => { const o = el('option', null, pretty(n)); o.value = n;
-            if (n === val) o.selected = true; s.append(o); });
-          s.onchange = e => { set(e.target.value); render(); };
-          return s;
-        };
-        const g = el('div','grid');
-        g.append(mk(c.a, v => c.a = v), mk(c.b, v => c.b = v));
-        d.append(g);
-
-        const g2 = el('div','grid');
-        const wl = el('div');
-        wl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        wl.textContent = 'search within (blocks)';
-        const w = el('input'); w.type='number'; w.value=c.within; w.min=64; w.max=30000; w.step=500;
-        w.title='how far from the reference the PAIR may be — not how close the two structures are';
-        w.onchange = e => c.within = Math.max(64, Math.min(30000, +e.target.value||2000));
-        g2.append(wl, w); d.append(g2);
-
-        const g3 = el('div','grid');
-        const pl = el('div');
-        pl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        pl.textContent = 'slack (blocks)';
-        const pd = el('input'); pd.type='number'; pd.value=c.pad||0; pd.min=0; pd.max=128; pd.step=8;
-        pd.title='0 = the footprints must actually meet; higher = "practically touching"';
-        pd.onchange = e => c.pad = Math.max(0, Math.min(128, +e.target.value||0));
-        g3.append(pl, pd); d.append(g3);
-
-        const dimA = vocab.structures[c.a] || '', dimB = vocab.structures[c.b] || '';
-        const note = el('div','note' + (dimA && dimB && dimA !== dimB ? ' warn' : ''));
-        note.textContent = (dimA && dimB && dimA !== dimB)
-          ? `⚠ ${pretty(c.a)} is in the ${dimA} and ${pretty(c.b)} is in the ${dimB} — they can never overlap.`
-          : 'Two structures generating into the same ground: a ruined portal inside a village, a shipwreck through a monument. Footprints are NOMINAL boxes (a village’s reach is approximated), so a hit is a strong candidate worth loading, not a proof.';
-        d.append(note);
-        box.append(d);
-        return;
-      }
-      if (c.kind === 'slime') {
-        const top = el('div','top');
-        top.append(mkIcon('slime'), el('span','cid', c.id), el('span','dim','SLIME CHUNKS'));
-        const x = el('button','tiny x','×');
-        x.onclick = () => { conds.splice(i,1); render(); };
-        top.append(x); d.append(top);
-
-        const g = el('div','grid');
-        const lab = el('div');
-        lab.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        lab.textContent = 'at least (chunks)';
-        const cnt = el('input'); cnt.type='number'; cnt.value=c.count; cnt.min=1;
-        cnt.title='minimum slime chunks in range';
-        cnt.onchange = e => c.count = Math.max(1, +e.target.value||1);
-        g.append(lab, cnt); d.append(g);
-
-        const g2 = el('div','grid');
-        const wl = el('div');
-        wl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        wl.textContent = 'within (blocks)';
-        const w = el('input'); w.type='number'; w.value=c.within; w.min=16; w.max=2048; w.step=16;
-        w.title='radius in blocks';
-        w.onchange = e => c.within = Math.max(16, Math.min(2048, +e.target.value||128));
-        g2.append(wl, w); d.append(g2);
-
-        const note = el('div','note');
-        note.textContent = 'Slime chunks are a per-chunk RNG check on the world seed — version-independent, so this works for any MC version. A radius-128 disc holds ~200 chunks (~20 slime on average); ask for a dense cluster for a slime-farm site.';
-        d.append(note);
-        box.append(d);
-        return;
-      }
-      if (c.kind === 'island') {
-        const top = el('div','top');
-        top.append(el('span','ic','🏝️'), el('span','cid', c.id), el('span','dim','ISLAND SPAWN'));
-        const x = el('button','tiny x','×');
-        x.onclick = () => { conds.splice(i,1); render(); };
-        top.append(x); d.append(top);
-
-        const g = el('div','grid');
-        const wl = el('div');
-        wl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        wl.textContent = 'within (blocks)';
-        const w = el('input'); w.type='number'; w.value=c.within; w.min=48; w.max=2048; w.step=64;
-        w.title='radius of open water around the island';
-        w.onchange = e => c.within = Math.max(48, Math.min(2048, +e.target.value||256));
-        g.append(wl, w); d.append(g);
-
-        const g2 = el('div','grid');
-        const lab = el('div');
-        lab.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        lab.textContent = 'ocean at least (%)';
-        const pc = el('input'); pc.type='number'; pc.value=c.pct; pc.min=1; pc.max=100;
-        pc.title='minimum % of the disc that is ocean';
-        pc.onchange = e => c.pct = Math.max(1, Math.min(100, +e.target.value||75));
-        g2.append(lab, pc); d.append(g2);
-
-        const g3 = el('div','grid');
-        const of = el('select');
-        ['spawn','origin'].forEach(o => { const n = el('option', null,
-          o === 'spawn' ? 'from world spawn' : 'from origin (0,0)'); n.value = o;
-          if (o === c.of) n.selected = true; of.append(n); });
-        of.onchange = e => { c.of = e.target.value; render(); };
-        g3.append(of); d.append(g3);
-
-        const note = el('div','note');
-        note.textContent = 'Spawn on a small island: the reference point is land, and ocean covers at least the given share of the surrounding disc. Higher % + bigger radius = a smaller, more isolated island (survival-island start).';
-        d.append(note);
-        box.append(d);
-        return;
-      }
-      if (c.kind === 'area') {
-        const top = el('div','top');
-        top.append(mkIcon('biome', c.name), el('span','cid', c.id), el('span','dim','BIOME AREA'));
-        const x = el('button','tiny x','×');
-        x.onclick = () => { conds.splice(i,1); render(); };
-        top.append(x); d.append(top);
-
-        const g = el('div','grid');
-        const sel = el('select');
-        Object.keys(vocab.biomes).sort().forEach(nm => {
-          const o = el('option', null, pretty(nm)); o.value = nm;
-          if (nm === c.name) o.selected = true; sel.append(o);
-        });
-        sel.onchange = e => { c.name = e.target.value; render(); };
-        const w = el('input'); w.type='number'; w.value=c.within; w.min=64; w.max=4000; w.step=100;
-        w.title='radius in blocks';
-        w.onchange = e => c.within = Math.max(64, Math.min(4000, +e.target.value||800));
-        g.append(sel, w); d.append(g);
-
-        const g2 = el('div','grid');
-        const lab = el('div');
-        lab.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        lab.textContent = 'covers at least (%)';
-        const pc = el('input'); pc.type='number'; pc.value=c.pct; pc.min=1; pc.max=100;
-        pc.title='minimum % of the disc that is this biome';
-        pc.onchange = e => c.pct = Math.max(1, Math.min(100, +e.target.value||50));
-        g2.append(lab, pc); d.append(g2);
-
-        const note = el('div','note');
-        note.textContent = 'Keeps seeds where this biome fills at least the given share of the disc — how you find a genuinely large biome (a huge mushroom island, a sprawling mesa). Big radius + high % = a big biome. Sampled at the chosen precision, so a coarse scan only ever misses seeds, never invents them.';
-        d.append(note);
-        box.append(d);
-        return;
-      }
-      if (c.kind === 'height') {
-        const top = el('div','top');
-        top.append(mkIcon('height'), el('span','cid', c.id), el('span','dim','TERRAIN HEIGHT'));
-        const x = el('button','tiny x','×');
-        x.onclick = () => { conds.splice(i,1); render(); };
-        top.append(x); d.append(top);
-
-        const g = el('div','grid');
-        const lab = el('div');
-        lab.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        lab.textContent = 'peak at least (Y)';
-        const hy = el('input'); hy.type='number'; hy.value=c.height; hy.min=-64; hy.max=320;
-        hy.title='minimum approximate surface height in the disc';
-        hy.onchange = e => c.height = Math.max(-64, Math.min(320, +e.target.value||150));
-        g.append(lab, hy); d.append(g);
-
-        const gr = el('div','grid');
-        const rl = el('div');
-        rl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        rl.textContent = 'relief ≥ (drop, 0=off)';
-        const rv = el('input'); rv.type='number'; rv.value=c.relief||0; rv.min=0; rv.max=320; rv.step=10;
-        rv.title='minimum peak-to-valley height spread in the disc — big = steep terrain (a structure on a cliff edge / clinging to a mountainside)';
-        rv.onchange = e => { c.relief = Math.max(0, Math.min(320, +e.target.value||0)); render(); };
-        gr.append(rl, rv); d.append(gr);
-
-        const g2 = el('div','grid');
-        const wl = el('div');
-        wl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        wl.textContent = 'within (blocks)';
-        const w = el('input'); w.type='number'; w.value=c.within; w.min=4; w.max=2048; w.step=32;
-        w.title='radius in blocks (use a small radius + of: a structure for "tall structure")';
-        w.onchange = e => c.within = Math.max(4, Math.min(2048, +e.target.value||300));
-        g2.append(wl, w); d.append(g2);
-
-        const ex = el('label','chk');
-        const exc = el('input'); exc.type='checkbox'; exc.checked = !!c.exact;
-        exc.onchange = e => { c.exact = e.target.checked; render(); };
-        ex.append(exc, document.createTextNode(' exact terrain (real block-level, 1.18+, SLOW)'));
-        d.append(ex);
-
-        const note = el('div','note' + (c.exact ? '' : ' warn'));
-        note.textContent = c.exact
-          ? '✓ Exact: samples Minecraft’s real block-level terrain (not the smoothed estimate), so it sees sharp cliffs right under a structure’s footprint. Use a SMALL radius (~8-12 = the footprint) with of: a structure. Costly per seed — the planner runs it last, so always pair it with a cheap filter first (e.g. an approx terrain-height ≥150 at the same structure). 1.18+ Overworld only.'
-          : (c.relief||0) > 0
-          ? '⚠ Approximate (smoothed 1:4 estimate). Good as a cheap pre-filter, but it CANNOT see sharp cliffs — for a real cliff-edge result tick “exact terrain” below and use a small radius. Overworld only; best on 1.18+.'
-          : '⚠ Approximate. Terrain height is cubiomes’ estimate (as used for spawn finding), not exact game height — it can be off by a few blocks, so leave headroom. Overworld only; most accurate on 1.18+. For clifftop / cliff-edge placement use “relief” + “exact terrain”.';
-        d.append(note);
-        box.append(d);
-        return;
-      }
-      if (c.kind === 'eyes') {
-        const top = el('div','top');
-        top.append(mkIcon('eyes'), el('span','cid', c.id), el('span','dim','END PORTAL'));
-        const x = el('button','tiny x','×');
-        x.onclick = () => { conds.splice(i,1); render(); };
-        top.append(x); d.append(top);
-        const g = el('div','grid');
-        const lab = el('div');
-        lab.style.cssText = 'font-size:12.5px;align-self:center';
-        lab.textContent = 'at least';
-        const n = el('input'); n.type='number'; n.min=0; n.max=12; n.value=c.eyes;
-        n.onchange = e => { c.eyes = Math.max(0, Math.min(12, +e.target.value||0)); render(); };
-        g.append(lab, n); d.append(g);
-        const est = el('div','note' + (c.eyes >= 9 ? ' warn' : ''));
-        est.textContent = `${c.eyes} of 12 frames — expect ${EYE_TIME[c.eyes] || '?'}`
-          + (c.eyes >= 11 ? '. This is a distributed-compute target, not a single machine one.' : '');
-        d.append(est);
-        box.append(d);
-        return;
-      }
-
-      const top = el('div', 'top');
-      top.append(mkIcon(c.kind, c.name), el('span', 'cid', c.id));
-      const dim = dimOf(c);
-      if (dim) top.append(el('span', 'dim', dim));
-      const x = el('button', 'tiny x', '×');
-      x.title = 'remove'; x.onclick = () => { conds.splice(i,1); render(); };
-      top.append(x);
-      d.append(top);
-
-      const g = el('div', 'grid');
-      const sel = el('select');
-      const names = Object.keys(c.kind === 'structure' ? vocab.structures : vocab.biomes);
-      names.sort().forEach(n => {
-        const o = el('option', null, pretty(n)); o.value = n;
-        if (n === c.name) o.selected = true; sel.append(o);
-      });
-      sel.onchange = e => { c.name = e.target.value; render(); };
-
-      const w = el('input'); w.type = 'number'; w.value = c.within;
-      w.min = 1; w.step = 50; w.title = 'radius in blocks';
-      w.onchange = e => c.within = Math.max(1, +e.target.value || 1);
-      g.append(sel, w); d.append(g);
-
-      const g2 = el('div', 'grid' + (c.kind === 'biome' ? '' : ' full'));
-      const of = el('select');
-      const opts = ['origin', 'spawn', ...conds.filter(o => o.id !== c.id).map(o => o.id)];
-      opts.forEach(o => {
-        const label = o === 'origin' ? 'from origin (0,0)'
-                    : o === 'spawn'  ? 'from world spawn (slower)'
-                    : 'from ' + o;
-        const n = el('option', null, label);
-        n.value = o; if (o === c.of) n.selected = true; of.append(n);
-      });
-      of.onchange = e => { c.of = e.target.value; render(); };
-      g2.append(of);
-
-      if (c.kind === 'biome') {
-        const p = el('select'); p.title = 'scan precision';
-        [['fast','fast'],['fine','fine'],['exact','exact']].forEach(([v,t]) => {
-          const o = el('option', null, t); o.value = v;
-          if (v === c.precision) o.selected = true; p.append(o);
-        });
-        p.onchange = e => c.precision = e.target.value;
-        g2.append(p);
-      }
-      d.append(g2);
-
-      // Structure cluster count: >= N of this structure within the radius.
-      if (c.kind === 'structure') {
-        const g3 = el('div','grid');
-        const cl = el('div');
-        cl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        cl.textContent = 'at least (count)';
-        const cn = el('input'); cn.type='number'; cn.value=c.count||1; cn.min=1; cn.max=12;
-        cn.title='minimum instances (1 = a normal single match)';
-        cn.onchange = e => { c.count = Math.max(1, Math.min(12, +e.target.value||1)); render(); };
-        g3.append(cl, cn); d.append(g3);
-        if ((c.count||1) > 1) {
-          const g4 = el('div','grid');
-          const sl = el('div');
-          sl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-          sl.textContent = 'tight within (0 = off)';
-          const sp = el('input'); sp.type='number'; sp.value=c.spread||0; sp.min=0; sp.max=2048; sp.step=16;
-          sp.title='0 = count within the radius of the reference; >0 = the instances must fit within this many blocks of each other, anywhere in the radius (quad-hut style)';
-          sp.onchange = e => { c.spread = Math.max(0, Math.min(2048, +e.target.value||0)); render(); };
-          g4.append(sl, sp); d.append(g4);
-          const note = el('div','note');
-          note.textContent = (c.spread||0) > 0
-            ? `Tight cluster: finds ${c.count} of this structure packed within ${c.spread} blocks of each other, anywhere within the search radius (the “quad huts” search). Rare — expect a long scan. Variant filters disabled.`
-            : `Cluster: finds ${c.count} of this structure within the radius of the reference (e.g. a triple village near spawn). Set “tight within” for a packed-together cluster anywhere. Variant filters disabled.`;
-          d.append(note);
-        }
-      }
-
-      // Variant filters, each offered only on the structure that has it.
-      if (c.kind === 'structure' && (c.count || 1) === 1) {
-        VARIANTS.filter(v => v.applies(c.name)).forEach(v => {
-          const row = el('label','chk');
-          const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!c[v.key];
-          cb.onchange = e => { c[v.key] = e.target.checked; };
-          row.append(cb, document.createTextNode(' ' + v.label));
-          d.append(row);
-        });
-      }
-      // Geode shape: size is 3 or 4, and the crack is a 95% draw -- so the
-      // interesting ask is the SEALED one, not the cracked one.
-      if (c.kind === 'structure' && c.name === 'geode') {
-        const g = el('div','grid');
-        const gl = el('div');
-        gl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        gl.textContent = 'size';
-        const gs = el('select');
-        [['any',0],['4 (big)',4],['3+',3]].forEach(([lbl,v]) => {
-          const o = el('option', null, lbl); o.value = String(v);
-          if ((c.gsize||0) === v) o.selected = true; gs.append(o);
-        });
-        gs.onchange = e => { c.gsize = +e.target.value; render(); };
-        g.append(gl, gs); d.append(g);
-
-        const g2 = el('div','grid');
-        const cl = el('div');
-        cl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-        cl.textContent = 'crack';
-        const cs = el('select');
-        [['any',''],['sealed (1 in 20)','sealed'],['cracked open','cracked']].forEach(([lbl,v]) => {
-          const o = el('option', null, lbl); o.value = v;
-          if ((c.sealed||'') === v) o.selected = true; cs.append(o);
-        });
-        cs.onchange = e => { c.sealed = e.target.value; render(); };
-        g2.append(cl, cs); d.append(g2);
-
-        d.append(el('div','note',
-          'Amethyst geodes are placed from the chunk population seed, so the finder locates them with the full world seed in pass 2 (nothing can be measured FROM one). Size is 3 or 4; 19 in 20 geodes are cracked open, so “sealed” is the rare, intact one.'));
-      }
-      box.append(d);
-    });
-  }
-
-  const isRuinedPortal = n => n === 'ruined_portal' || n === 'ruined_portal_nether';
-
-  // Structure variant filters (getVariant flags), each shown only where it applies.
-  const VARIANTS = [
-    { key:'surface',   label:'surface only (skip buried portals)', applies: isRuinedPortal },
-    { key:'giant',     label:'giant portal only',                  applies: isRuinedPortal },
-    { key:'abandoned', label:'zombie village only',                applies: n => n === 'village' },
-    { key:'basement',  label:'basement only',                      applies: n => n === 'igloo' },
-    { key:'ship',      label:'has an end ship (elytra)',           applies: n => n === 'end_city' },
-  ];
-
-  // Mirrors the material table in src/ore.c. Overworld first, then nether.
-  const ORE_MATERIALS = ['diamond','iron','gold','emerald','redstone','lapis',
-    'copper','coal','quartz','ancient_debris','nether_gold'];
-  // A sensible starting threshold per material at the default 64-block radius,
-  // so the count field isn't a mystery number. These are rough medians.
-  const ORE_DEFAULT = {diamond:1400, iron:4000, gold:1200, emerald:20,
-    redstone:1900, lapis:1300, copper:4500, coal:5500, quartz:11000,
-    ancient_debris:90, nether_gold:3800};
-
-  // ---- build the query ---------------------------------------------------
-  function buildQuery() {
-    const q = buildConditions();
-    if (rank.on && rankable().some(c => c.id === rank.of))
-      q.rank = { of: rank.of, by: rank.by || 'auto', top: rank.top || 10 };
-    return q;
-  }
-
-  function buildConditions() {
-    const q = {
-      version: $('#version').value,
-      conditions: conds.map(c => {
-        if (c.kind === 'eyes') return { id: c.id, eyes: c.eyes };
-        if (c.kind === 'loot') return { id: c.id, within: c.within,
-          loot: { structure: c.struct, item: c.item, count: c.count } };
-        if (c.kind === 'ore') {
-          const o = { id: c.id, ore: c.mat, count: c.count,
-                      within: c.within, of: c.of };
-          if ((c.vein || 0) > 0) o.vein = c.vein;
-          if (c.exposed) o.exposed = true;
-          return o;
-        }
-        if (c.kind === 'overlap') {
-          const o = { id: c.id, overlap: [c.a, c.b], within: c.within, of: c.of };
-          if ((c.pad || 0) > 0) o.pad = c.pad;
-          return o;
-        }
-        if (c.kind === 'slime') return { id: c.id, slime: c.count,
-          within: c.within, of: c.of };
-        if (c.kind === 'area') return { id: c.id, biome_area: c.name, pct: c.pct,
-          within: c.within, of: c.of, precision: c.precision };
-        if (c.kind === 'island') return { id: c.id, island: true, pct: c.pct,
-          within: c.within, of: c.of };
-        if (c.kind === 'height') {
-          const h = { id: c.id, within: c.within, of: c.of, precision: c.precision };
-          const peak = (c.height == null ? -64 : c.height);
-          if ((c.relief || 0) > 0) h.relief = c.relief;
-          // Send a peak floor only when it constrains (> world floor), so a pure
-          // relief search (steep terrain) isn't also filtered by height.
-          if (peak > -64 || h.relief === undefined) h.height = peak;
-          if (c.exact) h.exact = true;    // real block-level terrain (slow, 1.18+)
-          return h;
-        }
-        const o = { id: c.id, within: c.within, of: c.of };
-        if (c.kind === 'structure') {
-          o.structure = c.name;
-          if ((c.count || 1) > 1) {                            // cluster
-            o.count = c.count;
-            if ((c.spread || 0) > 0) o.spread = c.spread;      // tight cluster
-          }
-          else VARIANTS.forEach(v => { if (c[v.key] && v.applies(c.name)) o[v.key] = true; });
-          if (c.name === 'geode') {
-            if ((c.gsize || 0) > 0) o.size = c.gsize;
-            if (c.sealed === 'sealed') o.cracked = false;
-            if (c.sealed === 'cracked') o.cracked = true;
-          }
-        }
-        else { o.biome = c.name; o.precision = c.precision; }
-        return o;
-      })
-    };
-    if (largeBiomes()) q.large_biomes = true;
-    return q;
-  }
-
-  // The world preset is a property of the world, so it rides along with every
-  // request that generates one -- search, map and describe alike. A result found
-  // in Large Biomes and then drawn with the default generator is a picture of a
-  // different world, which is worse than no picture.
-  const largeBiomes = () => !!$('#largeBiomes').checked;
-
-  // ---- leaderboard --------------------------------------------------------
-  // A ranked search turns the finder from a filter into an optimiser: it scans
-  // the whole range and keeps the best N by one condition's measurement. Only
-  // conditions that MEASURE something can be ranked -- a plain "is there a
-  // village" has no magnitude.
-  const rank = { on: false, of: '', by: 'auto', top: 10 };
-
-  function rankable() {
-    return conds.filter(c => ['height','ore','slime','area','island','eyes','overlap'].includes(c.kind)
-      || (c.kind === 'structure' && ((c.count || 1) > 1 || c.name === 'geode')));
-  }
-
-  function rankMetrics(c) {
-    if (!c) return ['auto'];
-    if (c.kind === 'height') return ['auto','height','relief'];
-    if (c.kind === 'ore')    return ['auto','count','vein'];
-    if (c.kind === 'structure' && c.name === 'geode') return ['auto','size'];
-    if (c.kind === 'area' || c.kind === 'island')     return ['auto','pct'];
-    if (c.kind === 'overlap') return ['auto','area'];
-    return ['auto','count'];
-  }
-
-  function renderRank() {
-    const box = $('#rankBox'); if (!box) return;
-    box.innerHTML = '';
-    const opts = rankable();
-    const chk = el('label','chk');
-    const cb = el('input'); cb.type='checkbox'; cb.checked = rank.on && opts.length > 0;
-    cb.disabled = !opts.length;
-    cb.onchange = e => { rank.on = e.target.checked; renderRank(); };
-    chk.append(cb, document.createTextNode(' leaderboard: rank the whole range instead of stopping early'));
-    box.append(chk);
-    if (!opts.length) {
-      box.append(el('div','note','Add a condition that measures something — terrain height, ore, slime chunks, biome area, island, eyes, a structure cluster, a geode, or an overlap — and you can rank by it.'));
-      return;
-    }
-    if (!opts.some(c => c.id === rank.of)) rank.of = opts[0].id;
-    if (!rank.on) return;
-    const cur = opts.find(c => c.id === rank.of);
-    const g = el('div','grid');
-    const sel = el('select');
-    opts.forEach(c => { const o = el('option', null, `${c.id} · ${c.kind}`); o.value = c.id;
-      if (c.id === rank.of) o.selected = true; sel.append(o); });
-    sel.onchange = e => { rank.of = e.target.value; rank.by = 'auto'; renderRank(); };
-    const bysel = el('select');
-    rankMetrics(cur).forEach(mname => { const o = el('option', null, mname); o.value = mname;
-      if (mname === rank.by) o.selected = true; bysel.append(o); });
-    bysel.onchange = e => rank.by = e.target.value;
-    g.append(sel, bysel); box.append(g);
-    const g2 = el('div','grid');
-    const tl = el('div');
-    tl.style.cssText = 'font-size:12.5px;align-self:center;color:var(--ink-soft)';
-    tl.textContent = 'keep top';
-    const t = el('input'); t.type='number'; t.value=rank.top; t.min=1; t.max=50;
-    t.onchange = e => rank.top = Math.max(1, Math.min(50, +e.target.value||10));
-    g2.append(tl, t); box.append(g2);
-    box.append(el('div','note',
-      'Ranked runs scan every seed in the range — no early stop — so the range sets the runtime, and "best" means best of exactly that many seeds. Set the ranked condition’s own threshold LOW; a tight threshold leaves the leaderboard empty.'));
-  }
-
-  // ---- rendering output --------------------------------------------------
-  const out = $('#out');
-  const busy = t => {
-    out.innerHTML = `<div class="card"><div class="busy">${esc(t)}</div></div>`;
-  };
-  const fail = (e) => { out.innerHTML =
-    `<div class="err"><b>error</b>${esc(e)}</div>`; };
-
-  function nsFmt(n) {
-    if (n >= 1e6) return (n/1e6).toFixed(1) + ' ms';
-    if (n >= 1e3) return (n/1e3).toFixed(1) + ' µs';
-    return Math.round(n) + ' ns';
-  }
-
-  function planCard(plan) {
-    const c = el('div', 'card');
-    c.append(el('h3', null, 'Execution plan — reordered by measured cost'));
-    const maxNs = Math.max(1, ...[...plan.pass1, ...plan.pass2].map(s => s.ns));
-    [['pass1','pass 1 · 48-bit geometry · no biome generator yet'],
-     ['pass2','pass 2 · biome-dependent · only for pass-1 survivors']]
-    .forEach(([k, title]) => {
-      if (!plan[k].length) return;
-      const p = el('div', 'pass');
-      const hd = el('div', 'hd');
-      hd.append(el('span', null, title));
-      p.append(hd);
-      plan[k].forEach((s, i) => {
-        const row = el('div', 'step');
-        row.append(el('span','n', (i+1)+'.'), el('span','d', s.desc));
-        const bar = el('div','bar'), fill = el('i');
-        fill.style.width = Math.max(2, 100*s.ns/maxNs) + '%';
-        if (s.ns > 1e5) fill.className = 'slow';
-        bar.append(fill);
-        row.append(bar, el('span','c', nsFmt(s.ns)));
-        p.append(row);
-      });
-      c.append(p);
-    });
-    const t1 = plan.pass1.reduce((a,s)=>a+s.ns, 0);
-    const t2 = plan.pass2.reduce((a,s)=>a+s.ns, 0);
-    if (t1 > 0 && t2 > 0) {
-      const ratio = t2 / t1;
-      c.append(el('div','note',
-        `Pass 1 totals ${nsFmt(t1)} per seed; pass 2 totals ${nsFmt(t2)} — ` +
-        `${ratio >= 10 ? Math.round(ratio).toLocaleString() : ratio.toFixed(1)}× more expensive. ` +
-        `The bars share one scale, so pass 1 looks like a sliver: that gap is exactly why it runs first.`));
-    }
-    if (plan.conditions.length) {
-      const written = plan.conditions.map(x => x.id).join(', ');
-      const execd = plan.pass1.map(s => {
-        const hit = plan.conditions.find(x => s.desc.startsWith(x.desc.split(' ')[0]));
-        return hit ? hit.id : null;
-      }).filter(Boolean).join(', ');
-      if (execd && written !== execd)
-        c.append(el('div','note',
-          `Written: ${written} — executed: ${execd}. The planner reordered them.`));
-    }
-    return c;
-  }
-
-  function statsCard(title, items) {
-    const c = el('div','card'); c.append(el('h3', null, title));
-    const s = el('div','stats');
-    items.forEach(([k, v, tone]) => {
-      const d = el('div','stat');
-      d.append(el('div','k', k));
-      const val = el('div','v' + (tone ? ' ' + tone : ''), v);
-      d.append(val); s.append(d);
-    });
-    c.append(s); return c;
-  }
-
-  function noteCards(notes) {
-    return (notes || []).map(n => el('div','note warn', n));
-  }
-
-  function rawCard(raw) {
-    const d = el('details');
-    d.append(el('summary', null, 'raw tool output'));
-    const p = el('pre'); p.textContent = raw; d.append(p);
-    return d;
-  }
-
-  // ---- actions -----------------------------------------------------------
-  // `signal` is optional: pass a run's AbortSignal to make the request stoppable.
-  async function post(path, body, signal) {
-    const r = await fetch(path, { method:'POST', signal,
-      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || 'request failed');
-    return d;
-  }
-
-  function guard() {
-    if (!conds.length) { fail('Add at least one condition first.'); return false; }
-    return true;
-  }
-
-  $('#planBtn').onclick = async () => {
-    if (!guard()) return;
-    closeDrawer(); busy('planning…');
-    try {
-      const d = await post('/api/plan', { query: buildQuery() });
-      out.innerHTML = ''; out.append(...noteCards(d.notes), planCard(d.plan), rawCard(d.raw));
-    } catch (e) { fail(e.message); }
-  };
-
-  $('#explainBtn').onclick = async () => {
-    if (!guard()) return;
-    closeDrawer(); busy('sampling the seed space…');
-    try {
-      const d = await post('/api/explain',
-        { query: buildQuery(), threads: +$('#threads').value });
-      const e = d.explain;
-      out.innerHTML = '';
-      const tone = v => v == null ? '' : v > 50 ? 'bad' : v > 5 ? 'warn' : 'good';
-      out.append(statsCard('Estimate — will this finish?', [
-        ['pass 1 survival', (e.pass1_pct ?? '—') + '%', tone(e.pass1_pct)],
-        ['seeds per hit', e.seeds_per_hit != null ? Math.round(e.seeds_per_hit).toLocaleString() : '—'],
-        ['predicted rate', e.rate || '—'],
-        ['first hit', e.first_hit || '—'],
-        ['12 hits', e.twelve || '—'],
-      ]));
-      if (e.verdict) {
-        const bad = /too rare|impossible|not/i.test(e.verdict);
-        out.append(el('div','note' + (bad ? ' bad' : ''), 'Verdict: ' + e.verdict));
-      }
-      if (e.pass1_pct > 50) out.append(el('div','note warn',
-        `Pass 1 keeps ${e.pass1_pct}% of seeds — it isn't filtering, so every seed pays full biome cost. Tighten a radius.`));
-      if (e.pass1_share != null) out.append(el('div','note',
-        `Time split: pass 1 ${e.pass1_share}%, pass 2 ${(100-e.pass1_share).toFixed(1)}%.`));
-      out.append(...noteCards(d.notes), planCard(d.plan), rawCard(d.raw));
-    } catch (e) { fail(e.message); }
-  };
-
-  // ---- streaming search + live seed scroll -------------------------------
-  function setBusyUI(on) {
-    $('#go').disabled = on;
-    const sb = $('#searchBtn'); if (sb) sb.disabled = on;
-  }
-  function startScroll() {
-    const s = $('#scroll'); s.classList.remove('hidden');
-    $('#scrollTrack').innerHTML = ''; $('#scrollMeta').textContent = 'scanning…';
-  }
-  function stopScroll() { $('#scroll').classList.add('hidden'); }
-  let scanRange = 0;   // seeds requested this run, for the progress %
-  function pushSeed(seed, hit, scanned) {
-    const t = $('#scrollTrack');
-    const d = el('div', 's' + (hit ? ' hit' : ''), (hit ? '✓ found  ' : 'seed  ') + seed);
-    t.appendChild(d);                                  // newest at the bottom
-    while (t.childElementCount > 20) t.removeChild(t.firstChild);
-    if (!hit && scanned !== undefined) {
-      const n = Number(scanned);
-      const pct = scanRange > 0 ? Math.min(100, Math.floor(n * 100 / scanRange)) : 0;
-      $('#scrollMeta').textContent =
-        `scanning… ${n.toLocaleString()} seeds` + (scanRange > 0 ? ` (${pct}%)` : '');
-    }
-  }
-
-  // Read the newline-delimited stream from /api/stream: {"t":seed} heartbeats,
-  // then a final {"done":{...}} (or {"error":...}).
-  // ---- stopping a run ------------------------------------------------------
-  //
-  // A run is a chain of requests (Gemini, then the search), so "stop" has to
-  // survive across them: one controller per run, aborted by the Stop button.
-  // Aborting the fetch is only half of it -- the search process on the other end
-  // keeps burning CPU until someone kills it, so we also tell the server the job
-  // id to terminate. Everything is keyed on `runToken`, which changes on every
-  // new prompt, so a late reply from an abandoned run can never overwrite the
-  // results of the current one.
-  let runCtl = null, runJob = null, runToken = 0;
-
-  function beginRun() {
-    abortRun();                       // a new ask always replaces the old one
-    runCtl = new AbortController();
-    runJob = 'j' + Date.now() + Math.random().toString(36).slice(2, 8);
-    return ++runToken;
-  }
-  function abortRun() {
-    if (runCtl) { try { runCtl.abort(); } catch (_) {} }
-    if (runJob) {
-      // Fire-and-forget: if the job already finished the server no-ops, and a
-      // failed cancel must not surface as an error on top of the real result.
-      fetch('/api/cancel', { method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job: runJob }) }).catch(() => {});
-    }
-    runCtl = null; runJob = null;
-  }
-  function endRun() { runCtl = null; runJob = null; }
-  const isAbort = e => e && (e.name === 'AbortError' || /abort/i.test(e.message || ''));
-
-  $('#stopBtn').onclick = () => {
-    abortRun(); stopScroll(); setBusyUI(false);
-    aiNote('stopped.');
-    out.innerHTML = '';
-    out.append(el('div', 'note warn', 'Search stopped. Ask something else, or press ➜ to run it again.'));
-  };
-
-  async function streamSearch(query, onTick) {
-    const resp = await fetch('/api/stream', {
-      signal: runCtl ? runCtl.signal : undefined,
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, job: runJob,
-                             range: +$('#range').value || 3000000,
-                             seconds: budgetSeconds(),
-                             threads: +$('#threads').value || 16 }) });
-    if (!resp.ok) throw new Error((await resp.text()) || ('HTTP ' + resp.status));
-    const reader = resp.body.getReader(), dec = new TextDecoder();
-    let buf = '', result = null;
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
-        if (!line.trim()) continue;
-        let msg; try { msg = JSON.parse(line); } catch (_) { continue; }
-        if (msg.t !== undefined) onTick(msg.t, msg.n);
-        else if (msg.done) result = msg.done;
-        else if (msg.cancelled) return null;   // stopped on purpose, not a failure
-        else if (msg.error) throw new Error(msg.error);
-      }
-    }
-    if (!result) throw new Error('the search ended without a result');
-    return result;
-  }
-
-  // Minutes in the box -> seconds for the server. Capped at six hours, which is
-  // also the server's ceiling; 0 means "no clock, use the seed count".
-  const budgetSeconds = () =>
-    Math.max(0, Math.min(360, +$('#budgetMin').value || 0)) * 60;
-
-  async function runSearch(query, inheritedToken) {
-    if (!query || !(query.conditions || []).length) { fail('nothing to search — add a condition'); return; }
-    // A query may request a different MC version (e.g. something that only exists
-    // on an older release). Switch the version selector and reload its vocab
-    // before searching.
-    if (query.version && query.version !== $('#version').value) {
-      const opts = Array.from($('#version').options).map(o => o.value);
-      if (opts.includes(query.version)) {
-        $('#version').value = query.version;
-        toast(`switched to MC ${query.version} for this search`);
-        await loadVocab();
-      }
-    }
-    // reflect into the builder so result rows resolve their icons and the user
-    // can open settings and tweak.
-    loadQueryIntoBuilder(query);
-    // A budget from the natural-language layer drives the same controls the
-    // user would have set by hand, so what runs is visible rather than hidden.
-    if (query.budget) {
-      if (query.budget.minutes) $('#budgetMin').value = query.budget.minutes;
-      if (query.budget.seeds)   $('#range').value = query.budget.seeds;
-      delete query.budget;                  // not part of the engine's schema
-    }
-    $('#main').classList.add('searched');   // collapse the hero, ChatGPT-style
-    // A prompt hands down its own token (the Gemini call and the search are one
-    // run); a direct Search press starts a fresh one, which also stops anything
-    // still running.
-    const token = (inheritedToken !== undefined) ? inheritedToken : beginRun();
-    setBusyUI(true); startScroll(); out.innerHTML = '';
-    scanRange = Math.max(1, Math.min(500000000, +$('#range').value || 3000000));
-    try {
-      const d = await streamSearch(query, (s, n) => pushSeed(s, false, n));
-      if (token !== runToken) return;     // superseded by a newer ask
-      stopScroll();
-      if (!d) return;                     // stopped; the Stop handler owns the UI
-      (d.seeds || []).slice(0, 12).forEach(s => pushSeed(s.seed, true));
-      renderResults(d);
-    } catch (e) {
-      stopScroll();
-      if (!isAbort(e) && token === runToken) fail(e.message);
-    } finally {
-      if (token === runToken) { setBusyUI(false); endRun(); }
-    }
-  }
-
-  function renderResults(d) {
-      const f = d.funnel || {};
-      out.innerHTML = '';
-      out.append(...noteCards(d.notes));   // caveats first: they qualify what follows
-
-      out.append(statsCard('Result', [
-        ['seeds found', String(d.seeds.length), d.seeds.length ? 'good' : 'warn'],
-        ['scanned', (f.scanned ?? 0).toLocaleString()],
-        ['elapsed', (f.seconds ?? 0) + ' s'],
-        ['throughput', (f.mseeds_s ?? 0) + ' M/s'],
-      ]));
-      // "Best of N" has to name the N that was actually reached, not the one
-      // that was requested before the clock ran out.
-      if (f.timed_out)
-        out.append(el('div','note',
-          `Time budget reached — this is the best of the ${(f.scanned ?? 0).toLocaleString()} seeds actually scanned, not the full range. Give it longer for better results.`));
-
-      if (f.pass1_pct != null) {
-        const c = el('div','card');
-        c.append(el('h3', null, 'Funnel'));
-        const bar = el('div','funnel'), i = el('i');
-        i.style.width = Math.max(1.5, Math.min(100, f.pass1_pct)) + '%';
-        if (f.pass1_pct > 50) i.style.background = 'var(--gold)';
-        bar.append(i); c.append(bar);
-        c.append(el('div','funnel-l',
-          `pass 1 kept ${f.pass1_pct}% (${(f.pass1||0).toLocaleString()}) · pass 2 confirmed ${(f.pass2||0).toLocaleString()}`));
-        if (f.too_loose) c.append(el('div','note warn',
-          "Pass 1 isn't filtering — every seed paid full biome cost. Tighten a radius."));
-        out.append(c);
-      }
-
-      if (!d.seeds.length) {
-        out.append(el('div','note warn',
-          'No seeds in that range. Scan more seeds, loosen a radius, or run Estimate first.'));
-      } else {
-        const c = el('div','card');
-        c.append(el('h3', null, `Seeds — click a number to copy`));
-        c.append(exportBar(d.seeds));
-        // Result rows carry the condition id (e.g. "s5"); map it back to the
-        // structure name so the row shows the right icon, not a generic pin.
-        const condName = {};
-        conds.forEach(x => { if (x.kind === 'structure') condName[x.id] = x.name; });
-        d.seeds.forEach(s => {
-          const box = el('div','seed');
-          const n = el('div','n');
-          const num = el('span','num', s.seed);
-          num.title = 'copy';
-          num.onclick = () => { navigator.clipboard?.writeText(s.seed);
-            num.textContent = 'copied'; setTimeout(()=>num.textContent = s.seed, 800); };
-          const mapb = el('button','tiny','🗺 map');
-          mapb.onclick = () => mapView(s.seed);
-          const desc = el('button','tiny','describe');
-          desc.onclick = () => describe(s.seed);
-          n.append(num, mapb, desc);
-          // Ranked runs carry the score that put this seed on the board.
-          if (s.score !== undefined)
-            n.append(el('span','dim', `${s.metric} ${s.score.toLocaleString()}`));
-          box.append(n);
-          if (s.places.length || s.spawn || s.portal || s.loot || s.ore || s.slime || s.area || s.island || s.biome || s.cluster || s.height || s.overlap) {
-            const t = el('table');
-            // Every coordinate in a result opens the map there. Reading "x=1424
-            // z=736" and then panning to it by hand is the step that made
-            // results feel unverifiable.
-            const goCell = (x, z, structure) => {
-              const td = el('td');
-              const link = el('span', null, `x=${x}  z=${z}`);
-              link.style.cssText = 'cursor:pointer;text-decoration:underline dotted';
-              link.title = 'show this on the map';
-              const dim = structure ? (vocab.structures[structure] || 'overworld') : 'overworld';
-              link.onclick = () => mapView(s.seed, { cx: x, cz: z, dim, radius: 600 });
-              // Copying the coordinates is the thing you actually do with a
-              // result -- paste them into a /tp, or into another tool. The
-              // teleport form keeps the Y as ~ so it drops you on the surface.
-              const cp = el('button', 'tiny', '⧉');
-              cp.title = 'copy coordinates (shift-click for a /tp command)';
-              cp.style.marginLeft = '6px';
-              cp.onclick = (e) => {
-                const text = e.shiftKey ? `/tp @s ${x} ~ ${z}` : `${x} ${z}`;
-                navigator.clipboard?.writeText(text);
-                const was = cp.textContent;
-                cp.textContent = '✓'; setTimeout(() => cp.textContent = was, 800);
-              };
-              td.append(link, cp);
-              return td;
-            };
-            if (s.spawn) {
-              const tr = el('tr');
-              tr.append(idCell('spawn','','Spawn'),
-                        goCell(s.spawn.x, s.spawn.z),
-                        el('td','d',''));
-              t.append(tr);
-            }
-            if (s.portal) {
-              const tr = el('tr');
-              tr.append(idCell('eyes','','End Portal'),
-                        goCell(s.portal.x, s.portal.z),
-                        el('td','d', s.portal.eyes + '/12 eyes'));
-              t.append(tr);
-            }
-            (s.loot || []).forEach(l => {
-              const tr = el('tr');
-              tr.append(idCell('item', l.item, pretty(l.id)),
-                        goCell(l.x, l.z),
-                        el('td','d', `${l.count} ${pretty(l.item)}`));
-              t.append(tr);
-            });
-            (s.ore || []).forEach(o => {
-              const tr = el('tr');
-              let detail = `${o.count.toLocaleString()}${o.exposed ? ' exposed' : ''} within ${o.within}`;
-              if (o.vein !== undefined) detail += ` · biggest vein ${o.vein}`;
-              tr.append(idCell('item', o.material, pretty(o.material)),
-                        goCell(o.x, o.z),
-                        el('td','d', detail));
-              t.append(tr);
-            });
-            (s.overlap || []).forEach(o => {
-              const tr = el('tr');
-              tr.append(idCell('structure', o.structure, pretty(o.structure)),
-                        goCell(o.x, o.z, o.structure),
-                        el('td','d', o.gap !== undefined ? `${o.gap} blocks apart` : ''));
-              t.append(tr);
-              if (o.structure2 !== undefined) {
-                const tr2 = el('tr');
-                tr2.append(idCell('structure', o.structure2, pretty(o.structure2)),
-                           goCell(o.x2, o.z2, o.structure2),
-                           el('td','d', `overlaps ${o.area} blocks²`));
-                t.append(tr2);
-              }
-            });
-            (s.slime || []).forEach(o => {
-              const tr = el('tr');
-              tr.append(idCell('slime', '', 'Slime Chunks'),
-                        goCell(o.x, o.z),
-                        el('td','d', `${o.count.toLocaleString()} within ${o.within}`));
-              t.append(tr);
-            });
-            (s.area || []).forEach(o => {
-              const tr = el('tr');
-              tr.append(idCell('biome', o.biome, pretty(o.biome)),
-                        goCell(o.x, o.z),
-                        el('td','d', `${o.pct}% within ${o.within}`));
-              t.append(tr);
-            });
-            (s.island || []).forEach(o => {
-              const tr = el('tr');
-              const c = el('td','id'); c.append(el('span','ic','🏝️'), document.createTextNode('Island Spawn'));
-              tr.append(c, goCell(o.x, o.z),
-                        el('td','d', `${o.pct}% ocean within ${o.within}`));
-              t.append(tr);
-            });
-            (s.height || []).forEach(o => {
-              const tr = el('tr');
-              // Exact terrain is a measurement; the default is an estimate. Say
-              // which one produced the number.
-              const t2 = o.exact ? '' : '~', tag = o.exact ? ' (exact)' : ' (approx)';
-              const detail = o.relief !== undefined
-                ? `${t2}${o.relief} relief, ${t2}${o.peak} peak${tag}`
-                : `${t2}${o.peak} peak${tag}`;
-              tr.append(idCell('height', '', o.relief !== undefined ? 'Terrain Relief' : 'Terrain Height'),
-                        goCell(o.x, o.z),
-                        el('td','d', detail));
-              t.append(tr);
-            });
-            (s.biome || []).forEach(o => {
-              const tr = el('tr');
-              tr.append(idCell('biome', o.biome, pretty(o.biome)),
-                        goCell(o.x, o.z),
-                        el('td','d', `${o.dist} from ${o.ref}`));
-              t.append(tr);
-            });
-            (s.cluster || []).forEach(o => {
-              const tr = el('tr');
-              const detail = o.tight ? `${o.count} within ${o.spread} of each other`
-                                     : `${o.count} within ${o.within}`;
-              tr.append(idCell('structure', o.structure, `${o.count}× ${pretty(o.structure)}`),
-                        goCell(o.x, o.z, o.structure),
-                        el('td','d', detail));
-              t.append(tr);
-            });
-            s.places.forEach(p => {
-              const tr = el('tr');
-              tr.append(idCell('structure', condName[p.id] || p.id, pretty(condName[p.id] || p.id)),
-                        goCell(p.x, p.z, condName[p.id]),
-                        el('td','d', p.dist + ' from ' + (p.ref || 'origin')));
-              t.append(tr);
-            });
-            box.append(t);
-          }
-          c.append(box);
-        });
-        out.append(c);
-      }
-      out.append(planCard(d.plan), rawCard(d.raw));
-  }
-
-  $('#searchBtn').onclick = () => { if (!guard()) return; closeDrawer(); runSearch(buildQuery()); };
-
-  const MARKERS = [
-    ['mansion','#FF4646'], ['village','#FFD23C'], ['monument','#50BEFF'],
-    ['ancient city','#BE6EFF'], ['outpost','#FF8C28'], ['desert pyramid','#FAF0A0'],
-    ['jungle temple','#78DC78'], ['swamp hut','#966EC8'], ['igloo','#E6F5FF'],
-  ];
-
-  // Interactive pan/zoom biome map (Chunkbase-style). Drag pans (re-fetches a
-  // re-centred tile from map.exe), wheel zooms (changes radius), click reads
-  // out block coordinates. Structure markers are baked into the PNG by map.c.
-  // opts: {cx, cz, dim} -- opening a map ON a result is the whole point of
-  // having one, so every result row can call this with its own coordinates.
-  function mapView(seed, opts) {
-    const PX = 560;
-    const o = opts || {};
-    let cx = o.cx || 0, cz = o.cz || 0, radius = o.radius || 2000;
-    let dim = o.dim || 'overworld';
-    const v = $('#version').value;
-    out.innerHTML = ''; $('#main').classList.add('searched');
-    const card = el('div', 'card');
-    card.append(el('h3', null, '🗺 Map · world ' + seed));
-
-    const bar = el('div', 'mapctl');
-    const info = el('span');
-    info.style.cssText = 'font-family:var(--mono);font-size:11px;color:var(--ink-soft)';
-    const zout = el('button', 'tiny', '－'), zin = el('button', 'tiny', '＋'),
-          home = el('button', 'tiny', '⌂ spawn');
-    bar.append(zout, zin, home);
-    // Dimension switch. Nether coordinates are 1:8, so following a portal means
-    // dividing by 8 -- do that on the switch rather than dumping the player at
-    // a place eight times too far out.
-    const dimBtns = {};
-    [['overworld','🌳 over'], ['nether','🔥 nether'], ['end','🌌 end']].forEach(([d, lbl]) => {
-      const b = el('button', 'tiny', lbl);
-      b.onclick = () => {
-        if (dim === d) return;
-        const f = (dim === 'nether' ? 8 : 1) / (d === 'nether' ? 8 : 1);
-        cx = Math.round(cx * f); cz = Math.round(cz * f);
-        dim = d; syncDim(); load();
-      };
-      dimBtns[d] = b; bar.append(b);
-    });
-    function syncDim() {
-      Object.entries(dimBtns).forEach(([d, b]) =>
-        b.style.outline = (d === dim) ? '2px solid var(--grass)' : '');
-    }
-    syncDim();
-    bar.append(info); card.append(bar);
-
-    const vp = el('div');
-    vp.style.cssText = `position:relative;width:${PX}px;max-width:100%;aspect-ratio:1/1;`
-      + 'overflow:hidden;border:3px solid var(--slot-edge);cursor:grab;'
-      + 'image-rendering:pixelated;background:var(--slot);touch-action:none';
-    const img = el('img'); img.alt = 'Biome map';
-    img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;'
-      + 'user-select:none;-webkit-user-drag:none;pointer-events:none';
-    const read = el('div');
-    read.style.cssText = 'position:absolute;left:6px;bottom:6px;font-family:var(--mono);'
-      + 'font-size:11px;background:rgba(0,0,0,.6);color:#fff;padding:2px 6px;'
-      + 'pointer-events:none;display:none';
-    vp.append(img, read); card.append(vp);
-
-    const lg = el('div', 'legend');
-    (typeof MARKERS !== 'undefined' ? MARKERS : []).forEach(([nm, col]) => {
-      const sp = el('span'), sw = el('i'); sw.style.background = col;
-      sp.append(sw, document.createTextNode(pretty(nm))); lg.append(sp);
-    });
-    const sc = el('span'); sc.append(document.createTextNode('✛ spawn')); lg.append(sc);
-    card.append(lg);
-    card.append(el('div', 'hint', 'Drag to pan · scroll to zoom · click for coordinates.'));
-    const back = el('button', 'tiny', '← back to results');
-    back.onclick = () => $('#searchBtn').click();
-    card.append(back); out.append(card);
-
-    function load() {
-      img.src = `/api/map?seed=${encodeURIComponent(seed)}&v=${encodeURIComponent(v)}`
-        + (largeBiomes() ? '&large=1' : '')
-        + (dim !== 'overworld' ? `&dim=${dim}` : '')
-              + `&r=${radius}&px=${PX}&cx=${cx}&cz=${cz}`;
-      info.textContent = `${dim} · centre ${cx}, ${cz}  ·  ±${radius} blocks`;
-    }
-    zin.onclick  = () => { radius = Math.max(200, Math.round(radius / 2)); load(); };
-    zout.onclick = () => { radius = Math.min(20000, radius * 2); load(); };
-    home.onclick = () => { cx = 0; cz = 0; radius = 2000; dim = 'overworld'; syncDim(); load(); };
-
-    let drag = null, moved = false;
-    vp.onpointerdown = e => { drag = { x: e.clientX, y: e.clientY }; moved = false;
-      vp.setPointerCapture(e.pointerId); vp.style.cursor = 'grabbing'; };
-    vp.onpointermove = e => { if (!drag) return;
-      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
-      img.style.transform = `translate(${dx}px,${dy}px)`; };
-    vp.onpointerup = e => { if (!drag) return;
-      const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = null;
-      vp.style.cursor = 'grab'; img.style.transform = '';
-      if (moved) { const rw = vp.getBoundingClientRect().width || PX, span = 2 * radius;
-        cx -= Math.round(dx / rw * span); cz -= Math.round(dy / rw * span); load(); } };
-    vp.onwheel = e => { e.preventDefault();
-      radius = e.deltaY > 0 ? Math.min(20000, radius * 2) : Math.max(200, Math.round(radius / 2));
-      load(); };
-    vp.onclick = e => { if (moved) return;
-      const rect = vp.getBoundingClientRect();
-      const bx = Math.round(cx + ((e.clientX - rect.left) / rect.width - 0.5) * 2 * radius);
-      const bz = Math.round(cz + ((e.clientY - rect.top) / rect.height - 0.5) * 2 * radius);
-      read.style.display = 'block'; read.textContent = `x ${bx}, z ${bz}`; };
-    load();
-  }
-
-  async function describe(seed, radius) {
-    radius = radius || 2000;
-    busy('reading world ' + seed + '…');
-    try {
-      const d = await post('/api/describe',
-        { seed, version: $('#version').value, radius, large_biomes: largeBiomes() });
-      out.innerHTML = '';
-      const c = el('div','card');
-      c.append(el('h3', null, 'World ' + seed));
-
-      // zoom control -- re-renders map and structure list together
-      const ctl = el('div','mapctl');
-      ctl.append(el('label', null, 'radius'));
-      const zoom = el('select');
-      [500, 1000, 2000, 4000, 8000].forEach(r => {
-        const o = el('option', null, r.toLocaleString() + ' blocks'); o.value = r;
-        if (r === radius) o.selected = true; zoom.append(o);
-      });
-      zoom.onchange = e => describe(seed, +e.target.value);
-      ctl.append(zoom);
-      c.append(ctl);
-
-      const wrap = el('div','map');
-      const img = el('img');
-      img.alt = `Biome map of seed ${seed}, ${radius} blocks around spawn`;
-      img.src = `/api/map?seed=${encodeURIComponent(seed)}`
-        + (largeBiomes() ? '&large=1' : '')
-              + `&v=${encodeURIComponent($('#version').value)}&r=${radius}&px=560`;
-      img.onerror = () => { wrap.replaceChildren(
-        el('div','note warn','map render failed — the structure list below is still valid')); };
-      wrap.append(img);
-
-      const lg = el('div','legend');
-      MARKERS.forEach(([n, col]) => {
-        const sp = el('span'); const sw = el('i');
-        sw.style.background = col; sp.append(sw, document.createTextNode(pretty(n))); lg.append(sp);
-      });
-      const sp = el('span'); sp.append(document.createTextNode('✛ world spawn'));
-      lg.append(sp);
-      wrap.append(lg);
-      c.append(wrap);
-
-      const p = el('pre'); p.textContent = d.raw; c.append(p);
-      out.append(c);
-      const back = el('button','tiny','← back to search');
-      back.onclick = () => $('#searchBtn').click();
-      out.append(back);
-    } catch (e) { fail(e.message); }
-  }
-
-  // ---- AI prompt (Gemini) + settings drawer ------------------------------
-  const KEY_LS = 'sf-gemini-key';
-  const getKey = () => localStorage.getItem(KEY_LS) || '';
-  function refreshKeyState() {
-    $('#keyState').textContent = getKey() ? '✓ saved in this browser' : 'no key yet';
-  }
-  $('#keySave').onclick = () => {
-    const v = $('#geminiKey').value.trim();
-    if (!v) { toast('paste a key first'); return; }
-    localStorage.setItem(KEY_LS, v); $('#geminiKey').value = ''; refreshKeyState();
-    toast('Gemini key saved (this browser only)');
-  };
-  $('#keyClear').onclick = () => { localStorage.removeItem(KEY_LS); refreshKeyState(); toast('key cleared'); };
-  refreshKeyState();
-
-  function openDrawer() { $('#drawer').classList.remove('hidden'); $('#scrim').classList.remove('hidden'); }
-  function closeDrawer() { $('#drawer').classList.add('hidden'); $('#scrim').classList.add('hidden'); }
-  $('#gear').onclick = openDrawer;
-  $('#drawerClose').onclick = closeDrawer;
-  $('#scrim').onclick = () => { closeDrawer(); closeSidebar(); };
-
-  function aiNote(msg, isErr) {
-    const n = $('#aiNote'); n.textContent = msg || ''; n.classList.toggle('err', !!isErr);
-  }
-
-  // Inverse of buildQuery: turn a query object back into the builder's condition
-  // list, so an AI-generated search shows up (and can be tweaked) in settings.
-  function loadQueryIntoBuilder(query) {
-    conds = (query.conditions || []).map(c => {
-      if (c.eyes !== undefined) return { id: c.id, kind: 'eyes', eyes: c.eyes };
-      if (c.loot) return { id: c.id, kind: 'loot', struct: c.loot.structure,
-        item: c.loot.item, count: c.loot.count, within: c.within || 3000 };
-      if (c.ore) return { id: c.id, kind: 'ore', mat: c.ore, count: c.count || 1,
-        within: c.within || 64, of: c.of || 'origin' };
-      if (c.slime !== undefined) return { id: c.id, kind: 'slime', count: c.slime,
-        within: c.within || 128, of: c.of || 'origin' };
-      if (c.biome_area) return { id: c.id, kind: 'area', name: c.biome_area,
-        pct: c.pct || 50, within: c.within || 800, of: c.of || 'origin', precision: c.precision || 'fine' };
-      if (c.island) return { id: c.id, kind: 'island', pct: c.pct || 75,
-        within: c.within || 256, of: c.of || 'spawn' };
-      if (c.height !== undefined || c.relief !== undefined)
-        return { id: c.id, kind: 'height',
-          height: c.height != null ? c.height : -64, relief: c.relief || 0,
-          exact: !!c.exact,
-          within: c.within || 300, of: c.of || 'origin', precision: 'fine' };
-      if (c.structure) {
-        const o = { id: c.id, kind: 'structure', name: c.structure,
-          within: c.within || 400, of: c.of || 'origin', precision: 'fine' };
-        ['surface', 'giant', 'abandoned', 'basement', 'ship'].forEach(k => { if (c[k]) o[k] = true; });
-        if (c.count) o.count = c.count;
-        if (c.spread) o.spread = c.spread;
-        return o;
-      }
-      return { id: c.id, kind: 'biome', name: c.biome || 'plains',
-        within: c.within || 400, of: c.of || 'origin', precision: c.precision || 'fine' };
-    });
-    nextId = conds.length + 1;
-    render();
-  }
-
-  async function submitPrompt() {
-    const text = $('#nl').value.trim();
-    if (!text) return;
-    const key = getKey();
-    if (!key) {
-      aiNote('Add a free Gemini key to search by description — opening settings…', true);
-      openDrawer(); $('#geminiKey').focus(); return;
-    }
-    // Asking something new replaces what came before, the way a chat does:
-    // stop whatever is still running, empty the results, and clear the box so
-    // the next question starts from a blank prompt rather than the last one.
-    const token = beginRun();
-    addHistory(text);
-    $('#nl').value = ''; $('#nl').style.height = 'auto';
-    out.innerHTML = ''; stopScroll();
-    aiNote('thinking…'); setBusyUI(true);
-    try {
-      const d = await post('/api/gemini', { text, version: $('#version').value, key },
-                           runCtl && runCtl.signal);
-      if (token !== runToken) return;
-      aiNote(d.notes ? d.notes : '');
-      await runSearch(d.query, token);
-    } catch (e) {
-      if (token !== runToken) return;
-      setBusyUI(false); endRun();
-      if (!isAbort(e)) aiNote(e.message, true);
-    }
-  }
-  $('#promptForm').addEventListener('submit', e => { e.preventDefault(); submitPrompt(); });
-
-  // Enter submits, Shift+Enter makes a newline; textarea auto-grows.
-  const nlBox = $('#nl');
-  nlBox.addEventListener('input', () => {
-    nlBox.style.height = 'auto'; nlBox.style.height = Math.min(200, nlBox.scrollHeight) + 'px';
-  });
-  nlBox.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitPrompt(); }
-  });
-
-  // ---- village smith search (real worldgen, tier-2 backend) --------------
-  function prettyBuildings(s) {
-    return String(s).replace(/[{}]/g, '').split(', ').filter(Boolean).map(x => {
-      const [k, v] = x.split('=');
-      const name = k.replace(/^(taiga|plains|desert|savanna|snowy)_/, '').replace(/_house$/, '');
-      return pretty(name) + ' ×' + v;
-    }).join(', ');
-  }
-  $('#vsBtn').onclick = async () => {
-    const mn = Math.max(1, Math.min(12, +$('#vsMin').value || 5));
-    const seeds = Math.max(1, Math.min(3000, +$('#vsSeeds').value || 200));
-    const building = $('#vsBuilding').value;
-    const label = building === 'smith' ? 'smiths' : pretty(building) + 's';
-    busy(`running Minecraft's real world generator — scanning ${seeds.toLocaleString()} seeds for a village with ${mn}+ ${label}. This is slow.`);
-    try {
-      const d = await post('/api/villagesmiths', { min: mn, building, seeds, radius: 1200, workers: 4, limit: 20 });
-      out.innerHTML = '';
-      out.append(statsCard('Village building search · real MC 1.16.5 worldgen', [
-        ['seeds scanned', (d.summary?.seeds_scanned ?? seeds).toLocaleString()],
-        ['villages found', String(d.hits.length), d.hits.length ? 'good' : 'warn'],
-        [label, '≥ ' + mn],
-      ]));
-      if (!d.hits.length) {
-        out.append(el('div', 'note warn',
-          `No village with ${mn}+ ${label} in the first ${seeds.toLocaleString()} seeds — lower the threshold or scan more.`));
-      } else {
-        const c = el('div', 'card');
-        c.append(el('h3', null, 'Villages — click a seed to copy'));
-        d.hits.forEach(h => {
-          const box = el('div', 'seed');
-          const n = el('div', 'n');
-          const num = el('span', 'num', String(h.seed));
-          num.title = 'copy';
-          num.onclick = () => { navigator.clipboard?.writeText(String(h.seed));
-            num.textContent = 'copied'; setTimeout(() => num.textContent = h.seed, 800); };
-          n.append(num, el('span', 'dim', h.smiths + ' ' + label)); box.append(n);
-          const t = el('table');
-          const tr = el('tr');
-          tr.append(idCell('structure', 'village', 'Village'),
-                    el('td', null, `x=${h.x}  z=${h.z}`), el('td', 'd', pretty(h.biome)));
-          t.append(tr);
-          const tr2 = el('tr');
-          tr2.append(el('td', 'id', ''), el('td', null, prettyBuildings(h.buildings)), el('td', 'd', ''));
-          t.append(tr2);
-          box.append(t); c.append(box);
-        });
-        out.append(c);
-      }
-    } catch (e) { fail(e.message); }
-  };
-
-  // ---- start -------------------------------------------------------------
-  async function loadAssets() {
-    try {
-      const r = await fetch('/api/assets');
-      if (r.ok) assets = await r.json();
-      if (assets.backdrop) {
-        document.body.style.backgroundImage =
-          "linear-gradient(rgba(15,16,20,.82),rgba(15,16,20,.82)), url('/assets/backdrop.png')";
-        document.body.style.backgroundSize = '64px, 512px';
-      }
-      if (assets.logo) {
-        const src = '/assets/' + assets.logo;
-        // Big logo in the centre of the landing screen; fall back to the seed
-        // emoji if the image is missing or broken.
-        const hl = $('#heroLogo');
-        if (hl) {
-          const im = el('img'); im.src = src; im.alt = 'SeedGPT';
-          im.onerror = () => { hl.innerHTML = ''; hl.append(el('span', 'logo-emoji', '🌱')); };
-          hl.innerHTML = ''; hl.append(im);
-        }
-        // Small logo beside the sidebar brand.
-        const brand = $('.side-brand .logo');
-        if (brand) {
-          brand.textContent = '';
-          const im = el('img'); im.src = src; im.alt = '';
-          im.style.cssText = 'width:22px;height:22px;object-fit:contain;image-rendering:pixelated;display:block';
-          brand.append(im);
-        }
-      }
-    } catch (e) { /* graphics are optional — the built-in look stands alone */ }
-  }
-  // ---- query state: share links + saved searches -------------------------
-  function currentState() {
-    return { v: $('#version').value, r: +$('#range').value,
-             t: +$('#threads').value, c: conds,
-             // A shared leaderboard link must rebuild as a leaderboard, or the
-             // recipient silently gets a plain filter search instead.
-             b: budgetSeconds() / 60,
-             k: rank.on ? { of: rank.of, by: rank.by, top: rank.top } : null,
-             lb: largeBiomes() };
-  }
-  function applyState(s) {
-    if (!s || !Array.isArray(s.c)) return false;
-    if (s.v) $('#version').value = s.v;
-    if (s.r) $('#range').value = s.r;
-    if (s.t) $('#threads').value = s.t;
-    if (s.b !== undefined) $('#budgetMin').value = s.b;
-    $('#largeBiomes').checked = !!s.lb;
-    rank.on = !!s.k;
-    if (s.k) { rank.of = s.k.of || ''; rank.by = s.k.by || 'auto'; rank.top = s.k.top || 10; }
-    conds = s.c;
-    nextId = conds.reduce((m, c) =>
-      Math.max(m, parseInt(String(c.id).replace(/\D/g, '')) || 0), 0) + 1;
-    return true;
-  }
-  // The URL hash carries the whole builder state (base64url JSON), so a link
-  // rebuilds the query on any local instance -- the server is loopback-only, so
-  // "sharing" means sharing the query, not a hosted page.
-  function encodeState(s) {
-    return btoa(unescape(encodeURIComponent(JSON.stringify(s))))
-      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  }
-  function decodeState(str) {
-    try {
-      return JSON.parse(decodeURIComponent(escape(
-        atob(str.replace(/-/g, '+').replace(/_/g, '/')))));
-    } catch (e) { return null; }
-  }
-  function getSaved() { try { return JSON.parse(localStorage.getItem('sf-saved') || '[]'); } catch (e) { return []; } }
-  function setSaved(a) { localStorage.setItem('sf-saved', JSON.stringify(a)); renderSaved(); }
-  function renderSaved() {
-    const box = $('#savedList'); box.innerHTML = '';
-    const a = getSaved();
-    if (!a.length) { box.append(el('div', 'hint', 'No saved searches yet.')); return; }
-    a.forEach((it, i) => {
-      const row = el('div', 'saved');
-      const name = el('button', 'tiny', it.name);
-      name.title = 'load this search'; name.style.flex = '1';
-      name.onclick = () => { if (applyState(it.state)) { render(); toast('loaded “' + it.name + '”'); } };
-      const del = el('button', 'tiny x', '×'); del.title = 'delete';
-      del.onclick = () => { const b = getSaved(); b.splice(i, 1); setSaved(b); };
-      row.append(name, del); box.append(row);
-    });
-  }
-  $('#saveBtn').onclick = () => {
-    const name = $('#saveName').value.trim();
-    if (!name) { toast('name the search first'); return; }
-    const a = getSaved();
-    const at = a.findIndex(x => x.name === name);
-    const entry = { name, state: currentState() };
-    if (at >= 0) a[at] = entry; else a.push(entry);
-    setSaved(a); $('#saveName').value = '';
-    toast('saved “' + name + '”');
-  };
-  $('#saveName').addEventListener('keydown', e => { if (e.key === 'Enter') $('#saveBtn').click(); });
-
-  // ---- coordinate export -------------------------------------------------
-  function seedRows(seeds) {
-    const rows = [['seed', 'kind', 'id', 'x', 'z', 'detail']];
-    seeds.forEach(s => {
-      let any = false;
-      const push = (k, id, x, z, d) => { rows.push([s.seed, k, id, x, z, d]); any = true; };
-      if (s.spawn)  push('spawn', 'spawn', s.spawn.x, s.spawn.z, '');
-      if (s.portal) push('portal', 'end_portal', s.portal.x, s.portal.z, s.portal.eyes + '/12 eyes');
-      (s.loot  || []).forEach(l => push('loot', l.id, l.x, l.z, l.count + ' ' + l.item));
-      (s.ore   || []).forEach(o => push('ore', o.material, o.x, o.z,
-        o.count + (o.exposed ? ' exposed' : '') + ' within ' + o.within
-        + (o.vein !== undefined ? ', biggest vein ' + o.vein : '')));
-      (s.overlap|| []).forEach(o => {
-        push('overlap', o.structure, o.x, o.z, 'overlaps ' + (o.structure2 || '?'));
-        if (o.structure2) push('overlap', o.structure2, o.x2, o.z2,
-          o.gap + ' blocks away, ' + o.area + ' blocks² overlap');
-      });
-      (s.slime || []).forEach(o => push('slime', o.id, o.x, o.z, o.count + ' within ' + o.within));
-      (s.area  || []).forEach(o => push('biome_area', o.biome, o.x, o.z, o.pct + '% within ' + o.within));
-      (s.height|| []).forEach(o => push('height', 'terrain', o.x, o.z,
-        (o.exact ? '' : '~') + o.peak + ' peak' + (o.exact ? ' (exact)' : ' (approx)')));
-      (s.biome || []).forEach(o => push('biome', o.biome, o.x, o.z, o.dist + ' from ' + o.ref));
-      (s.cluster|| []).forEach(o => push('cluster', o.structure, o.x, o.z,
-        o.tight ? o.count + ' within ' + o.spread + ' of each other' : o.count + ' within ' + o.within));
-      (s.places|| []).forEach(p => push('structure', p.id, p.x, p.z, p.dist + ' from ' + (p.ref || 'origin')));
-      if (!any) rows.push([s.seed, 'seed', '', '', '', '']);
-    });
-    return rows;
-  }
-  const toCSV = rows => rows.map(r => r.map(v => {
-    const s = v == null ? '' : String(v);
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  }).join(',')).join('\n');
-  function download(name, text, type) {
-    const a = el('a'); a.href = URL.createObjectURL(new Blob([text], { type }));
-    a.download = name; document.body.append(a); a.click(); a.remove();
-    URL.revokeObjectURL(a.href);
-  }
-  function exportBar(seeds) {
-    const bar = el('div', 'exportbar');
-    bar.append(el('span', 'exl', 'export'));
-    const csv = el('button', 'tiny', '⬇ CSV');
-    csv.onclick = () => download('seeds.csv', toCSV(seedRows(seeds)), 'text/csv');
-    const json = el('button', 'tiny', '⬇ JSON');
-    json.onclick = () => download('seeds.json', JSON.stringify(seeds, null, 2), 'application/json');
-    const copy = el('button', 'tiny', 'copy CSV');
-    copy.onclick = async () => {
-      try { await navigator.clipboard.writeText(toCSV(seedRows(seeds)));
-        copy.textContent = 'copied'; setTimeout(() => copy.textContent = 'copy CSV', 900); } catch (e) {}
-    };
-    bar.append(csv, json, copy);
-    return bar;
-  }
-
-  // ---- start -------------------------------------------------------------
-  loadAssets();
-  renderSaved();
-  loadVocab().then(() => {
-    // A shared link (#q=...) rebuilds its query; otherwise start from a demo.
-    let restored = false;
-    const h = location.hash.match(/^#q=(.+)$/);
-    if (h) { const s = decodeState(h[1]); if (s && applyState(s)) restored = true; }
-    if (!restored) {
-      conds = [
-        { id:'mansion', kind:'structure', name:'mansion', within:300, of:'origin' },
-        { id:'village', kind:'structure', name:'village', within:400, of:'mansion' },
-      ];
-      nextId = 3;
-    }
-    render();
-  });
-})();
-</script>
+<script src="/ui/app.js"></script>
 </body>
 </html>

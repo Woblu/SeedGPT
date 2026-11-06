@@ -1,3 +1,4 @@
+#include "biomeat.h"
 // nearest -- the closest viable structure, or the closest point of a biome, to
 // a coordinate. The Java-side counterpart of Bedrock's `/locate`, so the two
 // engines can be asked the same question in the same units and diffed.
@@ -13,6 +14,7 @@
 #include "finders.h"
 #include "generator.h"
 #include "util.h"
+#include "seed.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,9 +36,10 @@ int main(int argc, char **argv)
             "usage: nearest <seed> <version> structure|biome <name> [x] [z] [radius] [large]\n");
         return 2;
     }
-    uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
+    uint64_t seed;
+    if (!parseWorldSeed(argv[1], &seed)) { fprintf(stderr, "no seed given\n"); return 2; }
     int mc = str2mc(argv[2]);
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     const char *kind = argv[3], *name = argv[4];
     int x = (argc > 5) ? atoi(argv[5]) : 0;
     int z = (argc > 6) ? atoi(argv[6]) : 0;
@@ -59,7 +62,7 @@ int main(int argc, char **argv)
             for (int dz = -r; dz <= r; dz += 16) {
                 if (r > 0 && abs(dx) != r && abs(dz) != r) continue;   // ring only
                 int px = x + dx, pz = z + dz;
-                if (getBiomeAt(&g, 0, (px>>4)*4 + 2, 319 >> 2, (pz>>4)*4 + 2) != id) continue;
+                if (chunkBiome(&g, px, pz) != id) continue;
                 int64_t d = (int64_t)dx*dx + (int64_t)dz*dz;
                 if (best < 0 || d < best) { best = d; bx = px; bz = pz; }
             }
@@ -110,7 +113,8 @@ int main(int argc, char **argv)
             continue;
         }
         if (best >= 0 && d >= best) continue;
-        if (!isViableStructurePos(stype, &g, p.x, p.z, 0)) continue;
+        // The finder's own gate: the nearest structure that really generates.
+        if (!structureGenerates(mc, large ? LARGE_BIOMES : 0, seed, &g, stype, p)) continue;
         best = d; bp = p;
     }
     if (listing) return 0;

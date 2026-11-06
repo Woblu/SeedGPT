@@ -94,3 +94,467 @@ different question from "the surface". Closing that means rewriting the density
 function, not patching a caller. Until then anything block-exact -- height and
 relief records, `cave_below`, cactus columns -- should be confirmed against this
 oracle before it is claimed, which is what confirm_cactus.py is for.
+
+## check_loot_seed.py — chest loot, chest by chest
+
+```sh
+python check_loot_seed.py <seed> 1.21.1 desert_pyramid <x> <z> [shipwreck <x> <z> ...]
+```
+
+A chest a structure places is empty until something opens it: it stores a
+`LootTable` and a `LootTableSeed`, and the items are rolled from those on first
+access. This boots one throwaway world, finds each chest `checkloot --chests`
+predicts, reads its table and seed, makes the server roll the loot without
+moving anything (copying slot 0 onto itself reads the slot, which unpacks the
+chest), and compares item totals and enchantments. Chests are matched by seed,
+so a seed at the wrong chest is reported as that rather than as a mismatch.
+
+Its first run (2026-10-21, seed -7311924356716553218, above 2^48) confirmed the
+64-bit loot seed fix and found four more problems: ocean shipwrecks rolled with
+the beached salt, early 1.21.x tables drawing enchantments from the 1.20 list,
+goat horns skipping their sound roll, and wrong chest positions for desert
+pyramids and outposts. After the fixes all 10 chests match on seed, position
+and items; `loot_server_1.21.1.txt` records them and `test.sh` holds the engine
+to it.
+
+## Two things cubiomes cannot answer, and now something can
+
+Both of these are the same shape: a question about the *finished world* rather
+than about a placement formula. cubiomes computes where things go; it does not
+build the blocks, so it cannot be asked what is actually there.
+
+### village_smiths.py — how many blacksmiths a village really has
+
+The 1.13 "blacksmith" split into three buildings in 1.14, each identified by the
+workstation its template places: `blast_furnace` (armorer), `smithing_table`
+(toolsmith), `grindstone` (weaponsmith). A 1.14+ village is assembled by the
+jigsaw generator at generation time, and no seed-finding library implements that
+assembler — FeatureUtils and mc_feature both ship it unfinished, and `tier2/`
+runs the real one only for 1.16.5 and was never wired to anything.
+
+So this does not reproduce the assembler. It counts the workstations in the
+finished world, which is both simpler and version-current: whatever the assembler
+decided, the blocks are there.
+
+```sh
+python village_smiths.py <seed> [radius] [--min N]
+python hunt_smiths.py --min 5 --seeds 200 --radius 1500
+```
+
+**Every count carries a positive control.** A village has exactly one bell, so a
+box reporting zero bells reports nothing at all rather than zero smiths — the
+same discipline as the bedrock control above, for the same reason. `bells > 1`
+means the box caught more than one village meeting point, so that line is a
+CLUSTER, not one village; it is printed rather than hidden, because "five smiths"
+means different things for the two.
+
+Counting is `/fill ... replace`, which is **destructive** — probing a
+village-sized volume one position at a time is hundreds of thousands of commands
+against a few dozen fills. Each seed therefore gets a fresh throwaway world and
+is counted exactly once.
+
+### treasure_probe.py — what is actually around a buried treasure
+
+```sh
+python treasure_probe.py <seed> [radius]
+python hunt_treasure.py --seeds 40 --radius 3000 --json out.jsonl
+```
+
+Identification is by **candidate list**: `/execute if block` can only ask "is it
+X?", and `/data get block` only speaks for block entities, so a neighbour
+matching nothing on the list is reported as *unidentified* — never as air, and
+never folded into "ordinary". That distinction is the point, since an unknown
+neighbour might be the interesting one.
+
+**What the data says.** Over 108 chests across 6 seeds (1.21.1):
+
+| | |
+|---|---|
+| chest Y | 32–79, concentrated in 48–63 |
+| neighbours | sand 1314, sandstone 706, water 241, gravel 208, stone 167, … |
+| unidentified | **0** — the candidate list covers everything actually present |
+| unusual | 2 chests with an ore touching them (copper, coal) |
+
+> **This said "cannot", and that was wrong.** The claim below generalised from
+> the y range of 108 chests to a statement about the rule, which the data never
+> supported. See *What can actually encase a treasure* further down: the scan
+> descends **through air and water**, so sediment over an open cave or ravine
+> drops the chest far below the seabed, and the pre-1.18 bedrock band is a random
+> mix of bedrock and stone — which lets a chest stop on the stone with bedrock
+> faces around it. Rare enough that 108 chests show none; not impossible.
+
+So on this evidence a buried treasure was not **observed** encased in bedrock: it
+generates at the ocean floor or beach surface, and bedrock is at y −64…−59,
+a hundred blocks below anything measured here. No spawner was adjacent to any chest
+either. The detector does fire when something unusual is there — the two ore
+cases prove it is not simply blind — so the negative is a measurement, not a
+silence. It is 108 chests, not a proof over all seeds; a wider hunt would
+strengthen or overturn it, and `--json` exists so one can accumulate.
+
+### What can actually encase a treasure
+
+Taken from the game's own rule, which `OutpostWorldgen.chestFloor()` extracts:
+
+```java
+floor = { SANDSTONE, STONE, ANDESITE, GRANITE, DIORITE }
+```
+
+Descend from the ocean floor until the block **below** is one of those five. The
+fill is the block at that spot — unless it is air or water, when the fill is the
+block below instead — and every air or water face gets it written in.
+
+Two consequences that the 108-chest sample never showed, both from the same
+clause: **the scan descends through air and water.**
+
+- **Depth is not bounded by the seabed.** Sediment lying over an open cave or
+  ravine does not stop the scan; it falls through the void and lands on the cave
+  floor, far below. That chest lands in air, so its fill is the floor block, and
+  every face around it gets written — genuinely encased in whatever the cave
+  floor is made of.
+- **Bedrock is reachable, in pre-1.18 worlds.** Bedrock is not in the floor set,
+  so the scan never *stops* on it — but it does not have to. The pre-1.18 bedrock
+  band is a random mix: y=0 solid, y=1–4 bedrock or stone per block. A chest can
+  stop at y≈2–5 where the block below happens to be stone, and its side faces,
+  already solid bedrock, are never overwritten. Both conditions must line up (an
+  open column most of the way down, and stone under the landing spot), which is
+  why it is vanishingly rare rather than impossible.
+
+**In 1.18+ this is blocked**, and not by rarity. The bedrock band moved to
+y −64…−59 and everything above it is **deepslate**, which is not in the floor
+set — so a scan that gets that deep finds nothing to stop on and the placement
+fails outright. Anything bedrock-encased is a pre-1.18 world.
+
+So the families are: the sediment it landed in (sand, gravel, dirt, clay); a
+floor block, when it landed in air or water; and **any solid block sitting
+directly on a floor block** — which is exactly why ore works, ore not being a
+stopping block and so being fallen through and landed on.
+
+`treasure_census.py` measures this at 0.09 s per chest instead of arguing from a
+hundred samples.
+
+#### What the census actually measures — and the two bugs that made it lie
+
+Scored over 8057 chests (270 seeds, radius 3000). The same run was made twice,
+either side of a fix to headless decoration, and the difference is the whole
+point:
+
+| | broken decorator | tags fixed | + order fixed |
+|---|---|---|---|
+| ore faces | **0** / 48342 | 111 / 48342 | **75** / 48342 |
+| ore-cased chests | **0** | 63 | **60** (0.74%) |
+| ore as the `fill` | 0 | 31 chests | **0 — impossible** |
+
+Final figures: `copper_ore` 39 faces, `coal_ore` 30, `iron_ore` 5, `lapis_ore` 1.
+
+The middle column is superseded and kept only to show the trap. It counted ore
+as the *fill* on 31 chests, which cannot happen: the chest is placed in
+`SURFACE_STRUCTURES`, before `UNDERGROUND_ORES`, so no ore exists yet when the
+landing block is read. Those were an artefact of scanning an already-decorated
+chunk. With the order corrected the FILL column contains **no ore at all**, in
+8057 chests — sand 6423, gravel 1427, dirt 205, and three one-offs.
+
+That sharpens the earlier claim rather than softening it. **A census that scores
+only `fill` finds exactly zero ore casings, always** — not "about half of them".
+Every ore casing that exists comes from standing terrain the piece never touched,
+or from decoration writing over the casing afterwards. Scoring the six final
+faces is not an improvement on fill-scoring; it is the only thing that works.
+
+Two separate defects stacked:
+
+1. **Only `fill` was scored.** Three blocks reach a face — the fill, the floor,
+   and, on any face that was already solid, the standing terrain the piece never
+   touches. **32 of the 63** ore-cased chests carry ore *only* on an untouched
+   face; their fill is plain sand or gravel. Fill-only scoring cannot see those.
+2. **Block tags were never bound** in the headless bootstrap, so every ore's
+   `TagMatchTest` returned false and decoration placed no ore at all. Face
+   scoring cannot see anything without a decorator. See `OreGen`'s header.
+3. **Decoration ran before placement**, inverting the game's own order, so any
+   chest whose floor had been replaced by an ore blob fell through it and landed
+   too low. Fixing (2) is what made this visible: with no ore placed, the
+   decorated chunk equals the plain one and the order cannot matter.
+
+One loose end: the FLOOR column shows a single `granite` in 8057 chests, and
+granite is a decoration blob that should not exist at placement time. 1 in 8057
+is not noise worth ignoring — it is either a real terrain case or a leak in the
+chunk reuse, and it has not been chased.
+
+Either fix alone would have found about half of this. Every empty ore result
+predating both is UNKNOWN, not evidence.
+
+**The stronger result is one nobody was hunting.** The floor block — the one the
+descent stops on — came back as all five permitted blocks with **zero violations
+in 8057 chests**:
+
+```
+sandstone 6271   stone 1423   diorite 133   granite 117   andesite 113
+```
+
+The broken run saw sandstone, stone and a single granite, which read as weak
+confirmation of a five-block rule. It could not have seen otherwise: andesite,
+granite and diorite are decoration blobs and decoration was placing none of
+them. The rule is now confirmed across every member instead of two of five.
+
+It also kills a hunt worth hours: since the scan only *stops* where the block
+below is one of those five, the floor can never be ore. Scoring it is a
+guaranteed zero, provable from the bytecode without running anything.
+
+#### How far the headless path can be trusted
+
+Measured by `tier2-outpost/verify_oregen.py` against a real server, 33 chests of
+seed 20094, after both the tag fix and the generation-order fix:
+
+| | before the seed fix | after |
+|---|---|---|
+| `chestY` | 33/33 (100%) | 33/33 (**100%**) |
+| individual faces | 185/198 (93%) | 196/198 (**99%**) |
+| **all six faces of a chest** | 26/33 (79%) | 32/33 (**97%**) |
+
+**Root cause found: the BiomeManager was built with the raw seed.**
+`WorldGenRegion`'s constructor builds its own as
+`new BiomeManager(this, BiomeManager.obfuscateSeed(seed))`, and that seed drives
+the per-block fuzzy offset in `getBiome(BlockPos)`. Surface rules consult
+`getBiome`, so a raw seed resolves some individual blocks to a different biome
+and lays down different sediment -- which is exactly the sand/gravel/dirt/
+sandstone pattern the disagreements showed. Fixed in `genFullChunk` and both of
+`OreGen`'s biome managers.
+
+The last row is the number a hunt depends on, and it is why this path
+**shortlists rather than decides**. Every lead still goes to the server.
+
+Older figures quoted around this project -- "chestY 96%, fill 78%" -- are not
+comparable and should not be cited. They compared one `fill` block against the
+*modal* server face, and they were measured against the decorator that placed no
+ore.
+
+Two things worth knowing about the 13 remaining face disagreements: they are the
+**same chests and faces** before and after the ordering fix, so they are a
+separate defect; and **none of them involves an ore block**. They are all
+sediment confusions -- dirt/sand, gravel/stone, sand/gravel, sandstone/stone --
+and they cluster 2-3 faces to a chest, which is the signature of the *fill*
+block differing rather than of individual faces going wrong.
+
+**The single-chunk hypothesis is REFUTED.** `OreGen oreserver hood` backs the
+proxy with a real 3x3 of generated chunks, routes every read and write to the
+owning chunk, and decorates all nine (neighbours first, centre last). Run over
+the seven disagreeing chests it produces output **byte-identical** to the
+single-chunk path. Cross-border decoration is not the cause, and the standing
+explanation in this file was wrong.
+
+That is worth knowing on its own: the documented "only the chunk itself is
+decorated" caveat turns out not to matter for a chest at chunk-local (9,9). The
+geometry argument in `OreGen`'s header -- 8 blocks of margin against a blob
+reach of about 4 -- holds up empirically.
+
+**LOCALISED: it is terrain, not casing.** Comparing OreGen's `raw` faces (the
+terrain before the piece writes anything) against the server, for all seven
+disagreeing chests:
+
+| chest | server | headless `raw` |
+|---|---|---|
+| (-1991,-87) | stone | gravel |
+| (-1159,-279) | sand | dirt |
+| (-935,-727) | stone | sandstone |
+| (-391,937) | gravel | sand |
+| (-343,2857) | sand / sandstone | dirt / stone |
+| (2009,-759) | sand | dirt |
+| (2601,-71) | dirt | sand |
+
+**Every disagreement sits on a face that was already SOLID**, so the piece never
+wrote it -- and not one is on a fill-written face. The casing logic is not
+implicated. These are differences in generated terrain, and specifically in the
+sediment layer and its boundary with stone: dirt/sand, gravel/stone, sand/gravel,
+sandstone/stone. That is `genFullChunk`'s surface step, which means it affects
+**everything** built on tier-2 rather than only casings.
+
+Three hypotheses tested and dead: cross-border decoration (3x3 run is
+byte-identical), carvers (carving moves nothing for ordinary chests), and nearby
+structures (only 1 of 7 disagreeing chests has an ocean ruin or shipwreck within
+32 blocks, against 0 of 45 agreeing; medians 167 vs 153).
+
+**Old note kept for the record: carvers.** `OutpostWorldgen.genFullChunk` runs
+`createBiomes` + `fillFromNoise` + `buildSurface` and *never* `applyCarvers`,
+but a real server chunk is carved between SURFACE and FEATURES. Untested,
+because 1.21.1's `applyCarvers` requires a `WorldGenRegion` -- a concrete class,
+so the dynamic-proxy trick that made decoration reachable does not work on it.
+(1.16.5's signature takes only a `BiomeManager`, which is why the ravine dump in
+`tier2` was possible at all. The API got harder to reach headlessly, not
+easier.)
+
+**Iron stays genuinely scarce** — 6 faces in 8057 chests. That one is not a bug.
+Treasure lands at y 40–70 and 1.18+ iron peaks at y 16, so the depth argument in
+`hunt_iron_casing.py` was right all along. The empty iron hunts had two causes
+stacked on one real constraint, and only two of the three were defects.
+
+### treasure_casing.py — the chest writes its own walls
+
+The probe above answers "what is next to the chest", which turned out to be the
+wrong question. Buried treasure does not simply sit in terrain: it takes the
+block at its landing spot and writes that block into whichever of its six **face**
+neighbours were air or water. The chest arrives already walled in.
+
+```sh
+python treasure_casing.py <seed> [radius]
+```
+
+The test that separates "encased by the structure" from "happens to be next to
+some": the overwrite hits the six faces and not the twenty diagonals, so faces
+should be markedly more uniform. Over 16 chests they are — **75% against 59%** —
+and individual chests show the rule outright:
+
+```
+chest (1737,44,153)
+    faces  [andesite, andesite, andesite, andesite, gravel, gravel]
+```
+
+Four faces written with the block it landed on; two left as gravel because those
+were already solid, so there was nothing to overwrite. **4/6 is a complete
+casing, not a partial one**, which is why a hunt must not score it as half a
+result. Judging by the fraction of *originally air-or-water* faces that came out
+ore would be truer still, but that state is gone by the time anything can look.
+
+### hunt_treasure_ore.py — can the casing be ore?
+
+```sh
+python hunt_treasure_ore.py --target iron_ore --min 2 --seeds 120 --radius 6000
+python hunt_treasure_ore.py --target any --min 1 ...     # rank by total ore faces
+```
+
+Scores the six faces, not all 26 neighbours — the diagonals are terrain the
+structure never touched, and counting them buries the signal. Screening is one
+pass against the 20 ores plus the 16 blocks a casing is actually made of; a face
+matching none of those falls through to the full 85-block list rather than being
+recorded as unknown, since an unidentified face is exactly the one that might
+matter. That is 186 commands per chest against 630, and roughly 4× the chests
+per hour.
+
+**What the casing can be.** Over 87 chests: sand 64, gravel 13, sandstone 6,
+stone 2, andesite 1, diorite 1. Two groups, and the split is the generation rule
+showing through — the sediment the chest sat *in*, and the rock it sat *on*. The
+scan descends from the ocean floor until the block *beneath* is stone-like, so
+ore, not being a stopping block, is fallen *through* and landed *on*. The
+reachable configuration is therefore narrow but real: an ore blob whose top block
+sits directly under the beach sediment, with stone below it.
+
+**Deepslate iron ore cannot case a buried treasure.** Deepslate replaces stone
+only below y≈8, and every chest measured sits at y 32–79 — the scan stops at the
+first stone-like block under the ocean floor and never reaches deepslate depth.
+Plain `iron_ore` is the reachable target; the deepslate variants are on the
+candidate list because leaving them off would have mislabelled a find, not
+because a treasure can reach them.
+
+### hunt_iron_casing.py — spend the server only where it can pay
+
+Measured, rather than assumed (`bench_probe.py`): the server costs ~6.5 s per
+chest and **commands are free** — the probe is 0.07 s of that, so earlier work
+shrinking command counts was worth almost nothing. It is chunk generation, plus
+boot. `spawn-chunk-radius=0` and `save-off` cut boot from 100 s to 44 s; forcing
+a single chunk did *not* help, because the server generates the neighbourhood
+anyway to finish a chunk (the 5.3 s stayed put and reappeared in the column scan).
+
+The real lever is the tier-2 headless path, which replicates
+`BuriedTreasurePiece`'s placement scan in-process:
+
+| | server | headless |
+|---|---|---|
+| per chest | ~6.5 s | **0.092 s** (~70×) |
+| boot | 44 s *per seed* | 4.5 s **once** |
+| agreement | — | 18/19 on seed 4 |
+
+It cannot answer the question directly: it runs terrain and surface rules but not
+`applyBiomeDecoration`, and ore is placed in decoration. But it says how *deep* a
+chest lands, and depth is the whole game for iron — the middle band spans
+y −24…56 peaking at 16, so above y 56 only the small uniform band contributes.
+The measured chests sit at y 32–79 concentrated in **48–63**, i.e. almost all of
+them land where iron is scarcest. That is why 1300 chests produced coal (which
+peaks near y 96) and never iron.
+
+```sh
+python hunt_iron_casing.py --max-y 46 --seeds 200 --radius 4000
+```
+
+Scan cheap, probe deep. Measured over 20 seeds: 603 treasures scanned in 0.9 min,
+5.5% deep enough to probe, **6.7 min against 65 min** for probing all of them —
+about 10× end to end. The deep chests also case differently: gravel 25, sand 5,
+stone 2, granite 1, against sand-dominated at ordinary depths.
+
+### OreGen — decoration without a server
+
+The gap above was that the headless path stopped before `applyBiomeDecoration`,
+which is where ore is placed. `tier2-outpost/OreGen.java` closes it. Decoration
+needs a `WorldGenLevel`, and vanilla only ever builds one on a `ServerLevel`;
+since it is an interface, OreGen supplies one by **dynamic proxy** — the handful
+of methods a feature really calls are implemented against a single `ProtoChunk`,
+and every default method is delegated back to the interface via `invokeDefault`,
+which keeps the class to what matters rather than the ~80 methods the type has.
+
+Three things that had to be right, each found by it being wrong first:
+
+- `shouldGenerateStructures()` **must** be true. `applyBiomeDecoration` advances
+  one shared counter across a step — first over every structure *registered* for
+  it, then over its features — calling `setFeatureSeed(seed, k, step)` each time.
+  Returning false skips the structure loop and shifts every ore's seed, placing
+  ore where the game never would, silently.
+- Neighbour chunks return an **empty** chunk, never this one. `ProtoChunk` masks
+  x/z by 15, so handing back our own chunk answers with a block wrapped round
+  from inside it — wrong, and quiet about it.
+- `isStateAtPosition` decides *where* a feature may place. Left to the default
+  `false` it would not crash; it would stop ore being placed at all, and the path
+  would look fast and sane while reporting no ore anywhere.
+
+Unsupplied methods are **recorded**, not defaulted silently (`UNIMPLEMENTED`),
+which is what found `getLevelData`, `getFluidTicks`, `isStateAtPosition` and
+`nextSubTickCount` in one run each.
+
+**Verified against the server on 49 chests** (`verify_oregen.py`):
+
+| | agreement |
+|---|---|
+| `chestY` | **47/49 (96%)** |
+| `fill` (the casing block) | **42/48 (88%)** |
+| speed | 0.125 s vs 6.5 s — **52×** |
+
+Fill first measured 78%, and two of those misses were mine rather than OreGen's.
+The yardstick counted the DOWN face, which is the floor that stopped the descent
+— solid by definition, never overwritten, so not evidence of the fill at all;
+excluding it took 78% to 88%. Separately the readout reported the raw landing
+block, skipping vanilla's "unless it is air or water, take the block below", and
+emitted `fill=air`, which no chest can be walled in. That one cost no accuracy
+but made the world look wrong when the readout was.
+
+The remaining 12% all have one shape — `dirt` vs `sand`, `sand` vs `sandstone`,
+`gravel` vs `andesite`: sediment where the server has the rock beneath it. That
+is the single-chunk decoration. Sand and gravel *disks* span chunk borders, and
+writes landing outside the chunk are dropped, so the sediment column differs by
+about a block. It is also why `chestY` holds at 96% while `fill` does not: the
+landing scan only asks "is the block below me rock?", which stays true either
+way, while the *identity* of the block it stops on shifts. None of the
+disagreements involved ore, but with almost no ore in 49 chests that is not
+evidence either way.
+
+**So OreGen shortlists; the server decides.** A chest whose fill it calls ore is
+sent to the server for confirmation. Depth is kept as a second route onto the
+shortlist precisely because fill is only 78% — trusting it alone would drop real
+candidates it misread as sand. Measured end to end: 399 treasures scanned in
+0.8 min, 5 worth probing, **2.0 min against 43 min**.
+
+Light is faked (full sky, no block light). Ore does not consult it, so ore
+answers are unaffected — but light-gated vegetation may place differently here,
+which matters for anything reading the surface.
+
+**Neither cut is a sieve.** The fast path disagreed on 1 of 19
+chests because decoration can add surface blocks that move the landing spot, so a
+chest whose true depth is below the cut but whose predicted depth is above it is
+dropped and never probed. Fine for a hunt, which wants one good find; *not* fine
+for a completeness claim. The counts printed are of chests probed, never of
+chests that exist.
+
+### Cost, honestly
+
+~14 s to boot a world, ~8 s per village, ~2 s per treasure shell. The radius is
+the only lever that amortises the boot. Each world is ~60 MB and is deleted as
+soon as it has been read — fifty seeds was 2.9 GB before that was added.
+
+Servers get their own port per instance. The default 25565 lingers in TIME_WAIT
+between back-to-back worlds, which failed 31 seeds out of 40 in one run while
+still printing a tidy "0 found" — so the hunts now report failed seeds loudly
+and separately from negative results.

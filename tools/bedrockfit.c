@@ -28,7 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
-#include <windows.h>
+#include "platform.h"
 
 #define MAXOBS 4096
 

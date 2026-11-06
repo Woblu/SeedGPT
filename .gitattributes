@@ -1,0 +1,26 @@
+# Everything text is stored AND checked out with LF.
+#
+# The shell scripts are the reason. This repo is developed on Windows, where
+# core.autocrlf=true is the default, and without a rule here a fresh clone gets
+# build.sh/setup.sh/test.sh with CRLF -- and bash then fails on the first line
+# with "$'\r': command not found". The index was already all LF; this only makes
+# checkouts agree with it, and stops the "LF will be replaced by CRLF" warning on
+# every commit.
+* text=auto eol=lf
+
+# The cubiomes patches are applied by setup.sh with `git apply` against a freshly
+# checked-out upstream tree, which has LF endings. If git handed one back with
+# CRLF the patch would not apply, setup.sh would abort, and the fixes it carries
+# (the fortress piece bound, the terrain region stride) would silently be gone.
+patches/*.patch text eol=lf
+
+# cmd.exe can misread a batch file with LF line endings.
+*.bat text eol=crlf
+
+# Binary formats: never touch their bytes.
+*.png  binary
+*.webp binary
+*.jpg  binary
+*.zip  binary
+*.jar  binary
+*.exe  binary

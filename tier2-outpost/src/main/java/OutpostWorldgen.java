@@ -59,7 +59,26 @@ public class OutpostWorldgen {
         public int getMinBuildHeight() { return -64; }
     };
 
+    // Extracted from main so a second entry point (OreGen) can bootstrap the
+    // same registries without duplicating the datapack load, which is the bulk
+    // of the 4.5s startup and is easy to get subtly wrong twice.
+    static boolean booted = false;
+
+    static void bootstrapRegistries() throws Exception {
+        if (booted) return;
+        booted = true;
+        bootstrapBody();
+    }
+
+    /** The registries this backend was bootstrapped with. */
+    static RegistryAccess.Frozen registries() { return worldgen; }
+
     public static void main(String[] args) throws Exception {
+        bootstrapRegistries();
+        mainBody(args);
+    }
+
+    static void bootstrapBody() throws Exception {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
 
@@ -76,6 +95,25 @@ public class OutpostWorldgen {
         // Composite so block/item (STATIC layer) AND biomes/structures (WORLDGEN) resolve.
         worldgen = layered.replaceFrom(RegistryLayer.WORLDGEN, wg).compositeAccess();
 
+        // Bind TAGS. RegistryDataLoader loads registry CONTENTS; it does not
+        // load tags, and nothing else here did either, so every tag was unbound
+        // -- BuiltInRegistries.BLOCK.getTag(STONE_ORE_REPLACEABLES) was absent
+        // entirely and state.is(anyTag) was false for every block in the world.
+        //
+        // That is not a cosmetic gap. Every ore's RuleTest is a TagMatchTest, so
+        // an unbound tag makes each one reject stone it is standing in, and the
+        // feature writes nothing and returns false. Decoration then produces
+        // only the features whose configs use inline block lists rather than
+        // tags -- springs and glow lichen -- which is exactly the ten-blocks-a-
+        // chunk signature measured before this call existed. A whole subsystem
+        // read as "this world has no ore".
+        //
+        // Bound for EVERY registry rather than just BLOCK on purpose: picking
+        // the registry whose tags we happen to know about is how this failed in
+        // the first place, and a feature consulting some other registry's tags
+        // would fail the same silent way.
+        bindAllTags(rm, worldgen);
+
         java.nio.file.Path tmp = java.nio.file.Files.createTempDirectory("owg");
         net.minecraft.world.level.storage.LevelStorageSource lss =
             net.minecraft.world.level.storage.LevelStorageSource.createDefault(tmp);
@@ -89,7 +127,35 @@ public class OutpostWorldgen {
         outpost = worldgen.lookupOrThrow(Registries.STRUCTURE)
                           .getOrThrow(ResourceKey.create(Registries.STRUCTURE,
                               ResourceLocation.withDefaultNamespace("pillager_outpost")));
+    }
 
+    /** Load and bind datapack tags for every registry in `ra`. */
+    static void bindAllTags(net.minecraft.server.packs.resources.ResourceManager rm,
+                            RegistryAccess.Frozen ra) {
+        ra.registries().forEach(entry -> bindTagsFor(rm, entry));
+    }
+
+    private static <T> void bindTagsFor(net.minecraft.server.packs.resources.ResourceManager rm,
+                                        RegistryAccess.RegistryEntry<T> entry) {
+        ResourceKey<? extends net.minecraft.core.Registry<T>> key = entry.key();
+        net.minecraft.core.Registry<T> reg = entry.value();
+        if (!(reg instanceof net.minecraft.core.MappedRegistry)) return;
+        net.minecraft.tags.TagLoader<net.minecraft.core.Holder<T>> loader =
+            new net.minecraft.tags.TagLoader<>(
+                id -> reg.getHolder(ResourceKey.create(
+                          (ResourceKey<net.minecraft.core.Registry<T>>) key, id))
+                         .map(h -> (net.minecraft.core.Holder<T>) h),
+                Registries.tagsDirPath(key));
+        java.util.Map<ResourceLocation, java.util.Collection<net.minecraft.core.Holder<T>>> built =
+            loader.loadAndBuild(rm);
+        java.util.Map<net.minecraft.tags.TagKey<T>,
+                      List<net.minecraft.core.Holder<T>>> bound = new java.util.HashMap<>();
+        built.forEach((id, members) -> bound.put(
+            net.minecraft.tags.TagKey.create(key, id), List.copyOf(members)));
+        ((net.minecraft.core.MappedRegistry<T>) reg).bindTags(bound);
+    }
+
+    static void mainBody(String[] args) throws Exception {
         if (args.length > 0 && args[0].equals("treasurefull")) {
             // Debug: FULL chunk gen (terrain + surface sand/gravel + water), then
             // dump the real block column around the chest so we can see the cover.
@@ -126,6 +192,43 @@ public class OutpostWorldgen {
                 Bootstrap.STDOUT.println("T\t" + s + "\t" + x + "\t" + z
                     + "\tchestY=" + chestY + "\tabove=" + cls);
                 Bootstrap.STDOUT.flush();
+            }
+            return;
+        }
+        if (args.length > 0 && args[0].equals("pieces")) {
+            // "pieces <seed> <structure> <x> <z> [liquid]" -- one shot.
+            // Prefer `pieceserver` for anything that asks more than once:
+            // this pays a whole JVM boot per call.
+            emitPieces(Long.parseLong(args[1]), args[2],
+                       Integer.parseInt(args[3]), Integer.parseInt(args[4]),
+                       args.length > 5 && args[5].equals("liquid"));
+            return;
+        }
+        if (args.length > 0 && args[0].equals("pieceserver")) {
+            // Persistent worker: "seed structure x z [liquid]" per line,
+            // terminated by END. The first spider-village hunt spent all
+            // its time in JVM bootstrap -- a boot per village per mineshaft
+            // variant -- and was abandoned. Same shape as oreserver,
+            // floatserver and carveserver.
+            Bootstrap.STDOUT.println("READY");
+            Bootstrap.STDOUT.flush();
+            java.io.BufferedReader in = new java.io.BufferedReader(
+                new java.io.InputStreamReader(System.in));
+            String line;
+            while ((line = in.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                if (line.equals("quit")) break;
+                String[] t = line.split("\\s+");
+                try {
+                    emitPieces(Long.parseLong(t[0]), t[1],
+                               Integer.parseInt(t[2]), Integer.parseInt(t[3]),
+                               t.length > 4 && t[4].equals("liquid"));
+                } catch (Throwable ex) {
+                    System.out.println("ERROR\t" + ex);
+                }
+                System.out.println("END");
+                System.out.flush();
             }
             return;
         }
@@ -245,14 +348,211 @@ public class OutpostWorldgen {
         chunkGen.fillFromNoise(Blender.empty(), rs, sm, chunk).join();
         WorldGenerationContext wgc = new WorldGenerationContext(chunkGen, OVERWORLD_HEIGHT);
         BiomeManager bm = new BiomeManager(
-            (x, y, z) -> biomeSource.getNoiseBiome(x, y, z, rs.sampler()), seed);
+            (x, y, z) -> biomeSource.getNoiseBiome(x, y, z, rs.sampler()),
+            net.minecraft.world.level.biome.BiomeManager.obfuscateSeed(seed));
         chunkGen.buildSurface(chunk, wgc, rs, sm, bm, biomeReg, Blender.empty());
         return chunk;
     }
 
     // The jigsaw template name of a piece, e.g. "pillager_outpost/watchtower".
+    /** Emit every piece of `id` near (tx,tz) as one "P" line each.
+     *
+     *  Shared by the one-shot `pieces` mode and the persistent
+     *  `pieceserver`, so the two cannot drift into reporting different
+     *  things -- the usual fate of a fast path bolted beside a slow one.
+     */
+    static void emitPieces(long seed, String id, int tx, int tz,
+                           boolean wantLiquid) throws Exception {
+        Holder<Structure> st;
+        try {
+            st = worldgen.lookupOrThrow(Registries.STRUCTURE).getOrThrow(
+                ResourceKey.create(Registries.STRUCTURE,
+                    ResourceLocation.parse(id.contains(":") ? id
+                                           : "minecraft:" + id)));
+        } catch (Throwable ex) {
+            System.out.println("ERROR\tno such structure " + id);
+            return;
+        }
+        MultiNoiseBiomeSource bsrc = MultiNoiseBiomeSource.createFromPreset(owParams);
+        NoiseBasedChunkGenerator cg = new NoiseBasedChunkGenerator(bsrc, noiseSettings);
+        RandomState rs = RandomState.create(noiseSettings.value(),
+            worldgen.lookupOrThrow(Registries.NOISE), seed);
+        int tcx = tx >> 4, tcz = tz >> 4;
+        StructureStart found = null;
+        // Searched outward rather than at the exact chunk: the caller passes
+        // a block position from the finder, and a structure's start chunk is
+        // not always the chunk that position lands in.
+        for (int r = 0; r <= 3 && found == null; r++)
+        for (int dcx = -r; dcx <= r && found == null; dcx++)
+        for (int dcz = -r; dcz <= r && found == null; dcz++) {
+            if (r > 0 && Math.abs(dcx) != r && Math.abs(dcz) != r) continue;
+            try {
+                StructureStart start = st.value().generate(worldgen, cg, bsrc, rs,
+                    templates, seed, new ChunkPos(tcx + dcx, tcz + dcz), 0,
+                    // The structure's OWN biome set, not "any biome". With
+                    // b -> true, mineshaft and mineshaft_mesa BOTH generate at
+                    // every location -- same x/z, same layout, different y --
+                    // since nothing rejects the variant whose biome is wrong. A
+                    // spider-corridor hunt then counted every corridor twice and
+                    // matched 26 of 27 villages, which reads as a fine hit rate
+                    // and is a double count. A structure that cannot spawn here
+                    // yields NOHIT now, which is what the game would do.
+                    OVERWORLD_HEIGHT, b -> st.value().biomes().contains(b));
+                if (start != null && start.isValid()) found = start;
+            } catch (Throwable t) { /* not here; keep looking */ }
+        }
+        if (found == null) {
+            // NOT "no pieces". The caller must be able to tell "this engine
+            // found nothing here" from "this structure has no extent", or it
+            // will report a non-overlap it never actually checked.
+            System.out.println("NOHIT\t" + seed + "\t" + id + "\t" + tx + "\t" + tz);
+            return;
+        }
+        System.out.println("START\t" + seed + "\t" + id
+            + "\t" + found.getChunkPos().x + "\t" + found.getChunkPos().z
+            + "\tpieces=" + found.getPieces().size());
+        for (net.minecraft.world.level.levelgen.structure.StructurePiece piece
+                 : found.getPieces()) {
+            BoundingBox b = piece.getBoundingBox();
+            System.out.println("P\t" + b.minX() + "\t" + b.minY() + "\t" + b.minZ()
+                + "\t" + b.maxX() + "\t" + b.maxY() + "\t" + b.maxZ()
+                + "\t" + pieceName(piece) + pieceFlags(piece)
+                + (wantLiquid ? ("\tliquid=" + touchesLiquid(seed, b)) : ""));
+        }
+    }
+
+    /** Does this piece's box touch liquid -- i.e. would the game SKIP it?
+     *
+     *  Replicates MineShaftPiece.isInInvalidLocation: sweep the bounding box
+     *  shrunk by one on each side, and report invalid if any block there is a
+     *  liquid. Terrain comes from genFullChunk, so this is the real generated
+     *  world rather than a heightmap guess.
+     *
+     *  Returns "?" rather than a verdict when a chunk cannot be generated. A
+     *  piece we could not check is UNKNOWN, and calling it valid would put a
+     *  corridor in a hunt that the game never builds.
+     */
+    // Chunks generated while checking one structure's pieces. A mineshaft is ~94
+    // pieces over a few dozen chunks, and every piece was regenerating the
+    // chunks it overlaps from scratch -- the same chunk dozens of times, at
+    // ~0.1s each. That, not the JVM boot, is what made the spider-village hunt
+    // unusable even after it got a persistent worker.
+    //
+    // Keyed by chunk AND seed: keying on coordinates alone is how a previous
+    // cache in this project handed one seed's chunk to another.
+    static final java.util.Map<Long, ChunkAccess> LIQ_CACHE = new java.util.HashMap<>();
+    static long LIQ_SEED = Long.MIN_VALUE;
+
+    static ChunkAccess liqChunk(long seed, int cx, int cz) {
+        if (seed != LIQ_SEED) { LIQ_CACHE.clear(); LIQ_SEED = seed; }
+        // A structure spans tens of chunks, not thousands. If this ever grows
+        // past a sane bound something is wrong with the key, and an unbounded
+        // chunk cache is what ran an earlier census out of heap.
+        if (LIQ_CACHE.size() > 4096) LIQ_CACHE.clear();
+        long k = ((long) cx << 32) ^ (cz & 0xffffffffL);
+        ChunkAccess c = LIQ_CACHE.get(k);
+        if (c == null) { c = genFullChunk(seed, cx, cz); LIQ_CACHE.put(k, c); }
+        return c;
+    }
+
+    static String touchesLiquid(long seed, BoundingBox b) {
+        int x0 = b.minX() + 1, x1 = b.maxX() - 1;
+        int y0 = b.minY() + 1, y1 = b.maxY() - 1;
+        int z0 = b.minZ() + 1, z1 = b.maxZ() - 1;
+        if (x1 < x0 || y1 < y0 || z1 < z0) return "0";   // nothing to sweep
+        try {
+            for (int cx = x0 >> 4; cx <= (x1 >> 4); cx++)
+            for (int cz = z0 >> 4; cz <= (z1 >> 4); cz++) {
+                ChunkAccess ch = liqChunk(seed, cx, cz);
+                int bx0 = Math.max(x0, cx * 16), bx1 = Math.min(x1, cx * 16 + 15);
+                int bz0 = Math.max(z0, cz * 16), bz1 = Math.min(z1, cz * 16 + 15);
+                for (int x = bx0; x <= bx1; x++)
+                for (int z = bz0; z <= bz1; z++)
+                for (int y = y0; y <= y1; y++)
+                    // state.liquid(), not getFluidState(). "liquid" is a
+                    // static property of the BLOCK -- water and lava declare it
+                    // -- whereas a fluid state is ALSO non-empty for every
+                    // waterlogged block, which the game's test does not count.
+                    // Both gave the same count on the seed measured, so
+                    // nothing there was waterlogged; this is the game's test
+                    // rather than one that happens to agree.
+                    //
+                    // Do NOT quote a skip RATE from this. The 55-of-94 figure
+                    // this comment used to carry was measured on a
+                    // mineshaft_mesa that the game does not place at that
+                    // location -- generate() was being passed b -> true, so both
+                    // mineshaft variants materialised everywhere. The real
+                    // mineshaft there skips 0 of 94: it sits at y -29, nowhere
+                    // near water, while the phantom sat at y 64. How much the
+                    // liquid rule actually costs is unmeasured.
+                    if (ch.getBlockState(new BlockPos(x, y, z)).liquid())
+                        return "1";
+            }
+        } catch (Throwable ex) {
+            return "?";
+        }
+        return "0";
+    }
+
+    // WHETHER A MINESHAFT PIECE GENERATES AT ALL, read from the bytecode rather
+    // than inferred. MineShaftCorridor.postProcess opens with:
+    //
+    //     if (isInInvalidLocation(level, box)) return;
+    //
+    // and MineShaftPiece.isInInvalidLocation sweeps the bounding box shrunk by
+    // one on each side and returns INVALID if any block there is .liquid().
+    // Every branch in it tests liquid. There is NO air test and no terrain-height
+    // test.
+    //
+    // This matters because the obvious guess is wrong. A seed-finding course
+    // filters corridors by "terrain height == centre Y or centre Y + 1", on the
+    // stated grounds that corridors in the air do not generate. They do -- mesa
+    // mineshafts hang in open air all the time, which is exactly why that course
+    // wants badlands. What its height test actually selects is corridors at the
+    // SURFACE, i.e. exposed and reachable, which is a fine thing to want and a
+    // different thing from the generation rule.
+    //
+    // So a filter for "spider corridor that really exists" tests LIQUID, and a
+    // filter for "spider corridor you can walk into" tests height. Conflating
+    // them drops real corridors and keeps unreachable ones.
+
+    /** Extra per-piece facts a bounding box cannot carry.
+     *
+     *  So far: whether a mineshaft corridor is a SPIDER corridor. That flag is
+     *  what decides whether the piece gets cobwebs and a cave spider spawner,
+     *  and it is the whole point of enumerating mineshaft pieces -- a corridor
+     *  box on its own says nothing about whether there is a spawner in it.
+     *  MineShaftCorridor.spiderCorridor is private final, so it is read the same
+     *  way this file already reads SinglePoolElement.template.
+     */
+    static String pieceFlags(net.minecraft.world.level.levelgen.structure.StructurePiece piece) {
+        String cls = piece.getClass().getName();
+        if (!cls.contains("MineShaftCorridor")) return "";
+        try {
+            java.lang.reflect.Field f = piece.getClass().getDeclaredField("spiderCorridor");
+            f.setAccessible(true);
+            return f.getBoolean(piece) ? "\tspider=1" : "\tspider=0";
+        } catch (Throwable ex) {
+            // Never guess. A corridor whose flag cannot be read is UNKNOWN, and
+            // reporting it as "not a spider corridor" would quietly drop exactly
+            // the pieces being searched for.
+            return "\tspider=?";
+        }
+    }
+
     static String pieceName(net.minecraft.world.level.levelgen.structure.StructurePiece piece) {
-        if (!(piece instanceof net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece)) return piece.getType().toString();
+        // Non-jigsaw pieces (mansion, monument, stronghold...) have no template
+        // name. getType().toString() on those is a lambda's identity hash --
+        // "StructurePieceType$$Lambda/0x...@131b016c" -- which is not a name, it
+        // is noise that changes every run. The registry key is the real one.
+        if (!(piece instanceof net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece)) {
+            try {
+                ResourceLocation k = net.minecraft.core.registries.BuiltInRegistries
+                    .STRUCTURE_PIECE.getKey(piece.getType());
+                if (k != null) return k.getPath();
+            } catch (Throwable ignored) { }
+            return piece.getClass().getSimpleName();
+        }
         try {
             Object el = ((net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece) piece).getElement();
             if (el instanceof net.minecraft.world.level.levelgen.structure.pools.SinglePoolElement) {

@@ -2,47 +2,109 @@
 # Regression suite. Encodes every check that has been run by hand so far, so a
 # refactor that breaks correctness fails here instead of silently shipping.
 #
-#   ./test.sh          run everything
+#   ./test.sh          run everything (~8 min on 16 threads)
 #   ./test.sh -v       show each command
+#   ./test.sh --quick  skip the slowest sections (the MITM solver, ~5 min)
+#   ./test.sh --kill   stop running find/locate/... binaries that hold build/
+#                      open (otherwise the suite refuses and lists them)
 #
-# Exit 0 = all green. Any failure is fatal and printed with context.
+# Exit 0 = all green. Any failure is fatal and printed with context. Skipped
+# checks are counted as skipped -- never as passed.
 set -u
 cd "$(dirname "$0")"
 
-VERBOSE=0
-[ "${1:-}" = "-v" ] && VERBOSE=1
+VERBOSE=0; QUICK=0; KILL=0
+for a in "$@"; do
+  case "$a" in
+    -v)      VERBOSE=1 ;;
+    --quick) QUICK=1 ;;
+    --kill)  KILL=1 ;;
+    *) echo "usage: ./test.sh [-v] [--quick] [--kill]" >&2; exit 2 ;;
+  esac
+done
 
-pass=0; fail=0
+pass=0; fail=0; nskip=0
 JC=/tmp/sc_test/classes
 mkdir -p /tmp/sc_test
 
+# Background helpers (the web server, the parallel MITM runs) must not outlive
+# the suite: an interrupted run used to leave serve.py on its port and mitm.exe
+# grinding through 2^48 on someone's machine.
+trap 'kill $(jobs -p) 2>/dev/null' EXIT
+
 ok()   { pass=$((pass+1)); printf '  \033[32mok\033[0m   %s\n' "$1"; }
 bad()  { fail=$((fail+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
+skip() { nskip=$((nskip+1)); printf '  \033[33mskip\033[0m %s\n' "$1"; }
 run()  { [ "$VERBOSE" = 1 ] && printf '     $ %s\n' "$*"; "$@"; }
 
-section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+# Sections report their own wall time. Without it "the suite is slow" cannot be
+# turned into "which part", and the build section hid a four-minute serial
+# compile for a long time on exactly those grounds.
+_sec_t0=$(date +%s)
+_suite_t0=$_sec_t0
+_sec_name=""
+section() {
+  if [ -n "$_sec_name" ]; then
+    printf '  \033[2m(%s took %ss)\033[0m\n' "$_sec_name" "$(( $(date +%s) - _sec_t0 ))"
+  fi
+  _sec_name="$1"; _sec_t0=$(date +%s)
+  printf '\n\033[1m%s\033[0m\n' "$1"
+}
 
 # ---------------------------------------------------------------- build
 section "build"
-if ./build.sh tools/find.c   >/tmp/sc_test/b1 2>&1 \
-&& ./build.sh tools/vocab.c  >/tmp/sc_test/b2 2>&1 \
-&& ./build.sh tools/xval.c   >/tmp/sc_test/b3 2>&1 \
-&& ./build.sh tools/describe.c >/tmp/sc_test/b4 2>&1 && ./build.sh tools/map.c    >/tmp/sc_test/b5 2>&1 \n&& ./build.sh tools/confidence.c >/tmp/sc_test/b6 2>&1 \n&& ./build.sh tools/checkeyes.c >/tmp/sc_test/b7 2>&1 \n&& ./build.sh tools/checkloot.c >/tmp/sc_test/b8 2>&1 && ./build.sh tools/lootitems.c >/tmp/sc_test/b9 2>&1 \
-&& ./build.sh tools/checkportal.c >/tmp/sc_test/b10 2>&1 \
-&& ./build.sh tools/checkore.c >/tmp/sc_test/b11 2>&1 \
-&& ./build.sh tools/checkvariant.c >/tmp/sc_test/b12 2>&1 \
-&& ./build.sh tools/checkrpchest.c >/tmp/sc_test/b13 2>&1 \
-&& ./build.sh tools/checkslime.c >/tmp/sc_test/b14 2>&1 \
-&& ./build.sh tools/checkbiomearea.c >/tmp/sc_test/b15 2>&1 \
-&& ./build.sh tools/checkbiome.c >/tmp/sc_test/b16 2>&1 \
-&& ./build.sh tools/checkcluster.c >/tmp/sc_test/b17 2>&1 \
-&& ./build.sh tools/checkheight.c >/tmp/sc_test/b18 2>&1 \n&& ./build.sh tools/checkplacement.c >/tmp/sc_test/b19 2>&1 \
-&& ./build.sh tools/climatecheck.c >/tmp/sc_test/b20 2>&1 \n&& ./build.sh tools/cactus.c >/tmp/sc_test/b21 2>&1 \n&& ./build.sh tools/invert.c >/tmp/sc_test/b22 2>&1 \n&& ./build.sh tools/findat.c >/tmp/sc_test/b23 2>&1; then
-  ok "all tools compile"
-else
-  bad "build failed" "$(cat /tmp/sc_test/b1 /tmp/sc_test/b2 /tmp/sc_test/b3 /tmp/sc_test/b4 /tmp/sc_test/b5 2>/dev/null | grep -i error | head -3)"
+# A find.exe left over from an earlier run -- or from a hunt that was stopped --
+# keeps an open handle on build/find.exe, and the link then fails with
+# "permission denied". That is a stale process reported as a broken build, which
+# sent two investigations at the compiler. Clear it before building.
+# Both binaries a hunt spawns, not just the finder: the per-seed expansion runs
+# locate.exe, and an orphan of EITHER blocks the link. Narrowing this to find.exe
+# only moved the same failure one build down the chain.
+#
+# These used to be killed by NAME, every time -- which also killed a hunt the
+# user had running from the web UI, without a word. Now the suite lists what is
+# holding the binaries and stops; --kill opts in to ending them.
+if command -v tasklist >/dev/null 2>&1; then
+  held=""
+  for exe in find.exe locate.exe fortoverlap.exe describe.exe mitm.exe; do
+    tasklist //FI "IMAGENAME eq $exe" 2>/dev/null | grep -q "$exe" && held="$held $exe"
+  done
+  if [ -n "$held" ]; then
+    if [ "$KILL" = 1 ]; then
+      for exe in $held; do taskkill //F //IM "$exe" >/dev/null 2>&1 || true; done
+      printf '  \033[33mnote\033[0m stopped running:%s\n' "$held"
+      sleep 1
+    else
+      printf '  \033[31mrunning:\033[0m%s -- a search or hunt (maybe from the web UI) holds\n' "$held"
+      printf '  build/ open and the build would fail. Stop it, or rerun with --kill.\n'
+      exit 1
+    fi
+  fi
+fi
+# The 27 tools used to be one long && chain, built one at a time. Two costs sat
+# in that: each link recompiled all of src/*.c from source (ten files, 27 times
+# = 270 redundant compiles), and nothing used more than one of the sixteen cores.
+#
+# build.sh caches src/ as objects now, which took a single link from 7.4s to
+# 0.73s, and `build.sh all` links in parallel. Measured on this machine the
+# section went from roughly 200s to about 8s.
+#
+# EVERY tool is built, not a list: seven tools the list left out (including
+# biomerecall, which the README tells people to run) could rot unnoticed.
+if ! ./build.sh all >/tmp/sc_test/blib 2>&1; then
+  bad "build failed: $(grep -E '^FAILED' /tmp/sc_test/blib)" \
+      "$(grep -E 'error' /tmp/sc_test/blib | head -3)"
   echo "aborting: nothing to test"; exit 1
 fi
+ok "all tools compile ($(ls tools/*.c | wc -l) binaries)"
+if grep -q 'warning:' /tmp/sc_test/blib; then
+  bad "our code compiles with warnings" "$(grep 'warning:' /tmp/sc_test/blib | head -3)"
+else
+  ok "our code compiles without warnings under -Wall"
+fi
+[ "$(./build/find.exe --version)" = "seedsmith $(tr -d '[:space:]' < VERSION) (engine: cubiomes, up to MC 26.2)" ] \
+  && ok "find --version reports this release" \
+  || bad "find --version" "$(./build/find.exe --version 2>&1)"
 
 javac -d "$JC" tools/XVal.java tools/Verify.java 2>/tmp/sc_test/jc \
   && ok "java reference compiles" \
@@ -135,7 +197,8 @@ cat > /tmp/sc_test/prec.json <<'EOF'
 {"version":"1.21","conditions":[{"id":"j","biome":"jungle","within":400,"of":"origin"}]}
 EOF
 cfine=$(./build/find.exe /tmp/sc_test/prec.json 1 1 2>&1 | sed -n 's/.*jungle.*\[fine\] *~\([0-9]*\) ns.*/\1/p' | head -1)
-sed -i 's/"of":"origin"}/"of":"origin","precision":"fast"}/' /tmp/sc_test/prec.json
+sed 's/"of":"origin"}/"of":"origin","precision":"fast"}/' /tmp/sc_test/prec.json > /tmp/sc_test/prec2.json
+mv /tmp/sc_test/prec2.json /tmp/sc_test/prec.json
 cfast=$(./build/find.exe /tmp/sc_test/prec.json 1 1 2>&1 | sed -n 's/.*jungle.*\[fast\] *~\([0-9]*\) ns.*/\1/p' | head -1)
 if [ -n "$cfine" ] && [ -n "$cfast" ] && [ "$cfine" -gt "$cfast" ]; then
   ok "biome precision affects cost model (fine ${cfine}ns > fast ${cfast}ns)"
@@ -482,7 +545,7 @@ echo "$endout" | grep -q '^SEED' \
   && ok "end query (end_city) returns seeds" \
   || bad "end query found nothing"
 # End cities never generate within 1008 blocks of the origin.
-mind=$(echo "$endout" | sed -n 's/.*city *x= *\(-\?[0-9]*\) z= *\(-\?[0-9]*\).*/\1 \2/p' \
+mind=$(echo "$endout" | sed -nE 's/.*city *x= *(-?[0-9]*) z= *(-?[0-9]*).*/\1 \2/p' \
        | awk '{d=sqrt($1*$1+$2*$2); if(m==""||d<m) m=d} END{printf "%d", m}')
 [ -n "$mind" ] && [ "$mind" -ge 1008 ] \
   && ok "end cities respect the 1008-block origin exclusion (nearest $mind)" \
@@ -589,6 +652,56 @@ while IFS=$'	' read -r s a x z; do
 done < /tmp/sc_test/loot.tsv
 [ "$badloot" -eq 0 ]   && ok "all reported loot reproduces independently"   || bad "loot counts do not reproduce" "$badloot seeds disagreed"
 
+# Nether chest loot. Fortresses were unsupported because getFortressPieces takes
+# a buffer bound and never enforced it -- and 84% of fortresses exceed 64 pieces,
+# so the old array was overrun by most of them, not a rare one. With the bound
+# honoured (patches/fortress-piece-bound.patch) the whole corridor graph is
+# simulated, so fortress counts are exact. Bastion counts only the chests that
+# always generate, so they are a floor -- which still has to reproduce exactly.
+section "nether chest loot"
+cat > /tmp/sc_test/nether.json <<'EOF'
+{"version":"1.21","conditions":[
+ {"id":"f","loot":{"structure":"fortress","item":"gold_ingot","count":8},"within":1200},
+ {"id":"b","loot":{"structure":"bastion","item":"gold_ingot","count":6},"within":1200}]}
+EOF
+FIND_TSV=/tmp/sc_test/nether.tsv ./build/find.exe /tmp/sc_test/nether.json 2000000 16 \
+  > /tmp/sc_test/nether.log 2>&1
+nn=$(grep -c '^SEED' /tmp/sc_test/nether.log)
+[ "$nn" -gt 0 ] && ok "nether loot query returns seeds ($nn)" \
+                || bad "nether loot query found nothing" "$(tail -3 /tmp/sc_test/nether.log)"
+
+# Every reported instance re-derived from scratch, single-threaded. The search
+# runs 16 threads over shared loot contexts, so this is also the regression test
+# for the singleton race that made bastion counts irreproducible before.
+# One TSV row per SEED, with every condition's id/x/z appended -- so both the
+# fortress and the bastion are on the same line. Reading only the first triple
+# would silently check half of what the query asked for.
+nbad=0; nchk=0
+while IFS=$'\t' read -r s a1 x1 z1 a2 x2 z2; do
+  for t in "$a1 $x1 $z1" "$a2 $x2 $z2"; do
+    set -- $t
+    case "$1" in f) st=fortress; want=8;; b) st=bastion; want=6;; *) continue;; esac
+    got=$(./build/checkloot.exe "$s" "$st" "$2" "$3" 1.21 gold_ingot 2>/dev/null | sed 's/.*gold_ingot=//')
+    nchk=$((nchk+1))
+    if [ -z "$got" ] || [ "$got" -lt "$want" ]; then
+      nbad=$((nbad+1))
+      echo "     $s $st ($2,$3): find said >=$want, checkloot said ${got:-none}" >&2
+    fi
+  done
+done < /tmp/sc_test/nether.tsv
+[ "$nchk" -gt 0 ] && [ "$nbad" -eq 0 ] \
+  && ok "fortress and bastion loot reproduce independently ($nchk instances)" \
+  || bad "nether loot does not reproduce" "checked=$nchk bad=$nbad"
+
+# The overflow itself: a fortress with hundreds of pieces must roll without
+# corrupting anything. checkloot sizes for it and refuses if the bound is hit.
+./build/checkloot.exe 17733 fortress 320 -208 1.21 > /tmp/sc_test/bigfort.out 2>&1
+if [ $? -eq 0 ] && grep -q "fortress" /tmp/sc_test/bigfort.out; then
+  ok "a 236-piece fortress rolls its chests without overrunning the buffer"
+else
+  bad "large fortress failed" "$(cat /tmp/sc_test/bigfort.out)"
+fi
+
 check_err "unsupported loot structure rejected"   '{"version":"1.21","conditions":[{"id":"c","loot":{"structure":"mansion","item":"diamond"}}]}'   "not supported"
 check_err "loot missing item rejected"   '{"version":"1.21","conditions":[{"id":"c","loot":{"structure":"igloo"}}]}'   "needs"
 
@@ -620,13 +733,15 @@ section "web ui"
 # this suite (it needs playwright); this catches the cheap breakages -- a
 # syntax error in serve.py, a renamed tool, a broken parser.
 UIPORT=8791
-SEED_UI_PORT=$UIPORT python serve.py >/tmp/sc_test/ui.log 2>&1 &
+SEED_UI_PORT=$UIPORT SEED_UI_NO_BROWSER=1 python serve.py >/tmp/sc_test/ui.log 2>&1 &
 uipid=$!
-for _ in $(seq 1 30); do
-  curl -s -m 1 "http://127.0.0.1:$UIPORT/api/vocab?v=1.21" >/dev/null 2>&1 && break
-  sleep 0.3
+# A slow first start is normal on a machine that has to scan new binaries, so
+# wait for a real answer rather than a fixed time.
+for _ in $(seq 1 120); do
+  curl -s -m 5 "http://127.0.0.1:$UIPORT/api/vocab?v=1.21" 2>/dev/null | grep -q fortress && break
+  sleep 0.25
 done
-if curl -s -m 3 "http://127.0.0.1:$UIPORT/api/vocab?v=1.21" | grep -q '"fortress": "nether"'; then
+if curl -s -m 10 "http://127.0.0.1:$UIPORT/api/vocab?v=1.21" | grep -q '"fortress": "nether"'; then
   ok "server serves version-aware vocabulary"
 else
   bad "ui vocab endpoint failed" "$(tail -3 /tmp/sc_test/ui.log)"
@@ -940,8 +1055,9 @@ while read -r cseed cx cz ch; do
   done
   [ "$best" != "$ch" ] && cv_bad=$((cv_bad+1))
 done < <(awk '/^SEED/{s=$2}
-              match($0, /([0-9]+)-block cave below/, m) {
-                  gsub(/x=|z=|,/,""); print s, $2, $3, m[1] }'          /tmp/sc_test/cave.out | head -5)
+              match($0, /[0-9]+-block cave below/) {
+                  n = substr($0, RSTART, RLENGTH) + 0
+                  gsub(/x=|z=|,/,""); print s, $2, $3, n }'          /tmp/sc_test/cave.out | head -5)
 [ "$cv_n" -ge 3 ] && [ "$cv_bad" -eq 0 ]   && ok "every reported cave under a structure re-measures identically ($cv_n checked)"   || bad "a reported cave did not reproduce" "checked=$cv_n bad=$cv_bad"
 
 # ---------------------------------------------------------------- climate gate
@@ -998,8 +1114,9 @@ while read -r cseed cx cz ch; do
         | awk -v x="$cx" -v z="$cz" '$1=="CACTUS" && $2==x && $3==z {print $5}')
   [ "$got" != "$ch" ] && cbad=$((cbad+1))
 done < <(awk '/^SEED/{s=$2}
-              match($0, /([0-9]+)-block cactus/, m) {
-                  gsub(/x=|z=/,""); print s, $2, $3, m[1] }' /tmp/sc_test/cactus.out | head -6)
+              match($0, /[0-9]+-block cactus/) {
+                  n = substr($0, RSTART, RLENGTH) + 0
+                  gsub(/x=|z=/,""); print s, $2, $3, n }' /tmp/sc_test/cactus.out | head -6)
 [ "$cn" -ge 3 ] && [ "$cbad" -eq 0 ] \
   && ok "every reported cactus re-simulates to the same height ($cn checked)" \
   || bad "a reported cactus did not reproduce" "checked=$cn bad=$cbad"
@@ -1007,7 +1124,7 @@ done < <(awk '/^SEED/{s=$2}
 # A single patch places 1-3 blocks and can stack to about 6; a plain (unranked)
 # search asking for more should therefore find nothing quickly rather than
 # report something impossible.
-tallcnt=$(awk 'match($0, /([0-9]+)-block cactus/, m) && m[1] > 12' /tmp/sc_test/cactus.out | wc -l)
+tallcnt=$(awk 'match($0, /[0-9]+-block cactus/) && substr($0, RSTART, RLENGTH) + 0 > 12' /tmp/sc_test/cactus.out | wc -l)
 [ "$tallcnt" -eq 0 ] \
   && ok "no absurd heights reported (nothing over 12 blocks in 1500 seeds)" \
   || bad "implausible cactus height reported" "$tallcnt over 12 blocks"
@@ -1027,6 +1144,129 @@ for s in swamp_hut village desert_pyramid shipwreck; do
     bad "inverter unsound or incomplete for $s" "$out"
   fi
 done
+# ------------------------------------------------------- meet in the middle
+# The MITM sieves the low 24 bits of the seed against every constraint at once,
+# so a low half no high half can rescue is discarded untouched. That is only
+# safe if a discarded low half really has no solutions; a sieve that drops seeds
+# reports "no quad huts" for configurations that exist and looks fine doing it.
+# --verify is two-sided (acceptance vs cubiomes both ways, exhaustive window set
+# equality, rejected low halves swept against all 2^24 high halves, and the
+# nested sweep vs the hash join over the whole 2^48 space).
+# These cover every distinct code path in the solver. gcd(128, range) decides
+# which half of the algorithm does the work -- swamp huts (gcd 8) lean on the
+# sieve, ruined portals (gcd 1) get nothing from it and lean entirely on the
+# join, villages (gcd 2) sit between. Ancient cities take the power-of-two
+# placement (a prefix of the high half, not a residue), outposts add a rejection
+# roll, monuments average two draws per axis, end cities add the 1008-block
+# origin gap, and mansions are the extreme range where NEITHER half filters --
+# which is where the join's "decide before you compute" bug hid, so it is worth
+# the two minutes it costs to keep watching it.
+section "meet-in-the-middle solver"
+if [ "$QUICK" = 1 ]; then
+  skip "meet-in-the-middle solver (--quick)"
+else
+# The eight verifies are independent runs over disjoint structures, and this
+# section was 635s of an 811s suite -- 78% of the whole thing -- purely because
+# they went one after another. `--verify` is single-threaded (testPredicate and
+# testWindow are plain for loops), so seven cores sat idle throughout.
+#
+# Spawned together they take 303s, against 620s run one at a time. That is 2x,
+# NOT the 4x the slowest-structure time of 154s would suggest: these are
+# memory-bound over millions of cubiomes biome lookups, so eight at once contend
+# for bandwidth rather than scaling with core count. Measured, not assumed --
+# the first estimate here said 154s and was wrong by a factor of two.
+#
+# The RESULTS are still judged in this shell, one at a time. ok/bad increment
+# `pass` and `fail`, which are plain shell variables: score them inside an xargs
+# child and the counts vanish with the subshell, and the suite reports fewer
+# tests than it ran while still exiting 0.
+MITM_STRUCTS="swamp_hut village ruined_portal ancient_city pillager_outpost monument mansion end_city"
+printf '%s\n' $MITM_STRUCTS | xargs -P "$(nproc 2>/dev/null || echo 4)" -I{} \
+  sh -c './build/mitm.exe 1.21 {} --verify > /tmp/sc_test/mitm_{}.out 2>&1'
+for s in $MITM_STRUCTS; do
+  if grep -q "^OK" "/tmp/sc_test/mitm_$s.out"; then
+    np=$(grep -oE '^[0-9]+ passed' "/tmp/sc_test/mitm_$s.out" | grep -oE '^[0-9]+')
+    ok "$s: sound and complete ($np checks, nested set == join set)"
+  else
+    bad "MITM unsound or incomplete for $s" "$(grep -E 'FAIL' "/tmp/sc_test/mitm_$s.out" | head -3)"
+  fi
+done
+
+# Cross-check against the tool it replaces. quad.c solves one structure and
+# tests the other three; whatever it finds, the MITM must be able to reach.
+# Three independent streams, started together. quad.exe feeds --accepts so those
+# two stay in order inside one subshell; the spread-13 and --covers runs share
+# nothing with them or with each other.
+#
+# Worth ~14s: 25s serially (7 + 7 + 11), 11s together. Small. It is kept because
+# it is free and correct, not because it mattered -- an earlier version of this
+# comment claimed ~150s, which was inferred by subtracting the verify batch from
+# the section total instead of timing the three streams. They were never 150s.
+#
+# Producers only. Every judgement still happens below, in THIS shell, for the
+# same reason as the verify loop: ok/bad increment plain shell variables and
+# would be lost with a subshell, leaving a green run that counted fewer tests
+# than it performed.
+( ./build/quad.exe 1.21 swamp_hut 16 6 2>/dev/null | grep QUADBASE | awk '{print $2}' \
+    > /tmp/sc_test/quadbases.txt
+  ./build/mitm.exe 1.21 swamp_hut --accepts 16 < /tmp/sc_test/quadbases.txt \
+    > /tmp/sc_test/accepts.out 2>&1 ) &
+./build/mitm.exe 1.21 swamp_hut quad 13 > /tmp/sc_test/mitm13.out 2>&1 &
+./build/mitm.exe 1.21 swamp_hut --covers 240 2000000 > /tmp/sc_test/covers.out 2>&1 &
+wait
+
+qn=$(wc -l < /tmp/sc_test/quadbases.txt)
+qrej=$(grep -oE '[0-9]+ the MITM would never reach' /tmp/sc_test/accepts.out \
+       | grep -oE '^[0-9]+')
+if [ "$qn" -gt 0 ] && [ "${qrej:-1}" -eq 0 ]; then
+  ok "every quad.c base at spread 16 is reachable ($qn bases, 0 rejected)"
+else
+  bad "MITM rejects seeds quad.c found" "bases=$qn rejected=${qrej:-?}"
+fi
+
+# An empty answer is the dangerous one, so it is checked by a route that never
+# consults the sieve about the fourth structure. Swamp huts genuinely have no
+# four-within-13-chunks cluster in the whole 2^48 space.
+if grep -q "independent agreement" /tmp/sc_test/mitm13.out; then
+  ok "empty result at spread 13 corroborated without the sieve"
+else
+  bad "spread-13 emptiness not corroborated" "$(tail -4 /tmp/sc_test/mitm13.out)"
+fi
+
+# The wired search (src/solve.c) replaces the scan with the solver's candidate
+# list, so what matters is not that its candidates are good -- pass 1 judges
+# those -- but that the list MISSES nothing. Brute-force real clusters and demand
+# the solver would have proposed every one. This is the check that licenses
+# swapping the seed source at all.
+cov_n=$(sed -n 's/^\([0-9]*\) clusters found.*/\1/p' /tmp/sc_test/covers.out)
+cov_m=$(sed -n 's/.*; \([0-9]*\) the solver would never propose/\1/p' /tmp/sc_test/covers.out)
+if [ "${cov_n:-0}" -gt 0 ] && [ "${cov_m:-1}" -eq 0 ]; then
+  ok "every brute-forced cluster is one the wired solver proposes ($cov_n checked)"
+else
+  bad "the wired solver would miss clusters the scan finds" "$(cat /tmp/sc_test/covers.out)"
+fi
+
+# And end to end: the wired search must return real hits, each re-checkable by
+# the independent cluster counter.
+cat > /tmp/sc_test/solvequad.json <<'EOF'
+{"version":"1.21","conditions":[
+ {"id":"quad","structure":"swamp_hut","count":4,"spread":240,"within":5000,"of":"origin"}]}
+EOF
+FIND_TSV=/tmp/sc_test/solvequad.tsv ./build/find.exe /tmp/sc_test/solvequad.json 200000 \
+  > /tmp/sc_test/solvequad.out 2>&1
+sq_n=$(grep -c '^SEED' /tmp/sc_test/solvequad.out)
+grep -q "candidates in" /tmp/sc_test/solvequad.out \
+  && ok "the planner solves the cluster instead of scanning for it" \
+  || bad "solver not engaged for a tight cluster" "$(grep solver /tmp/sc_test/solvequad.out)"
+sq_bad=0
+while IFS=$'\t' read -r s a x z; do
+  got=$(./build/checkcluster.exe "$s" swamp_hut 1.21 "$x" "$z" 240 2>/dev/null | sed 's/.*count=//')
+  if [ -z "$got" ] || [ "$got" -lt 4 ]; then sq_bad=$((sq_bad+1)); fi
+done < /tmp/sc_test/solvequad.tsv
+[ "$sq_n" -gt 0 ] && [ "$sq_bad" -eq 0 ] \
+  && ok "every solved quad reproduces under the independent cluster count ($sq_n seeds)" \
+  || bad "a solved quad did not reproduce" "hits=$sq_n bad=$sq_bad"
+
 # Refusing the cases it cannot do is part of being correct: a power-of-two range
 # scales instead of taking a remainder, so the residue-class trick does not hold.
 ./build/invert.exe 1.21 ancient_city --verify >/dev/null 2>&1
@@ -1052,6 +1292,521 @@ done < <(awk '/^SEED/{print $2}' /tmp/sc_test/findat.out)
   && ok "an unreachable chunk is called impossible, not searched for" \
   || bad "did not recognise an unreachable chunk offset" ""
 
+
+fi   # --quick
+# ------------------------------------------- regressions from the casing work
+# Each of these is a bug that actually shipped and was found by hand. A suite
+# that only covers what was designed correctly does not stop the same class
+# recurring, and every one of these was invisible until something downstream
+# looked wrong.
+section "regressions (casing / routing / resume)"
+
+# FIND_OFFSET: without it every run walked indices 0..range and rescanned the
+# SAME seeds, so "search longer" bought nothing. Two offsets must not overlap.
+cat > /tmp/sc_test/off.json <<'JSON'
+{"version":"1.21","conditions":[{"id":"b","biome":"jungle","within":250,"of":"origin"}]}
+JSON
+a=$(FIND_SECONDS=6 ./build/find.exe /tmp/sc_test/off.json 3000000 8 2>/dev/null     | grep "^SEED " | awk '{print $2}' | sort -u)
+b=$(FIND_OFFSET=50000000 FIND_SECONDS=6 ./build/find.exe /tmp/sc_test/off.json 3000000 8 2>/dev/null     | grep "^SEED " | awk '{print $2}' | sort -u)
+nov=$(comm -12 <(printf '%s
+' "$a") <(printf '%s
+' "$b") | grep -c . || true)
+if [ -n "$a" ] && [ -n "$b" ] && [ "$nov" -eq 0 ]; then
+  ok "FIND_OFFSET reaches seeds a run from 0 never sees (no overlap)"
+else
+  bad "FIND_OFFSET did not produce disjoint seeds" "overlap=$nov"
+fi
+
+# The natural-language layer rebuilds the query from a whitelist. "tool" was not
+# on it, so a routed request came back as a plain search WITH a note claiming it
+# had been routed -- prose surviving while the thing that routes was discarded.
+python - <<'PY' > /tmp/sc_test/tool.txt 2>&1
+import json, sys, urllib.request
+sys.path.insert(0, '.')
+import serve
+def canned(payload):
+    class R:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def read(self):
+            return json.dumps({"candidates":[{"content":{"parts":[
+                {"text": json.dumps(payload)}]}}]}).encode()
+    return lambda req, timeout=None: R()
+base = [{"id":"t","structure":"buried_treasure","within":1500,"of":"origin"}]
+# Routing a request is one question and whether this install has the tool is
+# another, so the whitelist is checked as if the tool were here.
+serve.capabilities = lambda: {"tools": {"casing": True}}
+urllib.request.urlopen = canned({"conditions":base,"notes":"x",
+    "tool":{"name":"casing","casing":"coal_ore","radius":20000}})
+t = serve.api_gemini({"text":"x","key":"k","version":"1.21"})["query"].get("tool")
+print("ROUTED", t == {"name":"casing","casing":"coal_ore","radius":20000})
+urllib.request.urlopen = canned({"conditions":base,"notes":"x",
+    "tool":{"name":"not_a_real_tool"}})
+print("REJECTED", serve.api_gemini({"text":"x","key":"k","version":"1.21"})["query"].get("tool") is None)
+urllib.request.urlopen = canned({"conditions":base,"notes":"x",
+    "tool":{"name":"casing","casing":"magma_block","radius":999999999}})
+print("CLAMPED", serve.api_gemini({"text":"x","key":"k","version":"1.21"})["query"]["tool"]["radius"] == 60000)
+serve.capabilities = lambda: {"tools": {}}
+try:
+    serve.api_gemini({"text":"x","key":"k","version":"1.21"})
+    print("ABSENT False")
+except serve.Failure as e:
+    print("ABSENT", "advanced-tools" in str(e))
+PY
+grep -q "ROUTED True" /tmp/sc_test/tool.txt   && ok "a routed prompt survives the query whitelist instead of being discarded"   || bad "tool routing dropped by api_gemini" "$(head -3 /tmp/sc_test/tool.txt)"
+grep -q "REJECTED True" /tmp/sc_test/tool.txt   && ok "an invented tool name is rejected, not sent to a panel that does not exist"   || bad "invalid tool name accepted" ""
+grep -q "CLAMPED True" /tmp/sc_test/tool.txt   && ok "tool parameters are clamped to a sane range"   || bad "tool radius not clamped" ""
+grep -q "ABSENT True" /tmp/sc_test/tool.txt   && ok "a request for a tool this install lacks is refused, not searched another way"   || bad "missing tool not refused" "$(tail -3 /tmp/sc_test/tool.txt)"
+
+# The casing readout reported the raw landing block, skipping vanilla's "unless
+# it is air or water, the fill is the block BELOW". It emitted fill=air, which no
+# chest can be walled in.
+#
+# The first version of this check used `java` from PATH -- JDK 17 here, while
+# OreGen is built with 21 -- so it never ran, and then reported the empty output
+# as "OreGen said air". That merged COULD NOT RUN with RAN AND WAS WRONG, which
+# is the precise bug this suite exists to catch, written into the test for it.
+# The three outcomes are now kept apart.
+JAVA21=""
+for cand in "${JAVA21_HOME:-}" "${JAVA_HOME:-}" "/c/Program Files/Java/jdk-21"; do
+  [ -n "$cand" ] && [ -x "$cand/bin/java.exe" ] && JAVA21="$cand/bin/java.exe" && break
+done
+if [ ! -f tier2-outpost/out/OreGen.class ] || [ ! -f tier2-outpost/cp.txt ]; then
+  skip "OreGen not built -- casing fill rule NOT CHECKED"
+elif [ -z "$JAVA21" ]; then
+  skip "no JDK 21 found -- casing fill rule NOT CHECKED"
+else
+  ocp="out;$(tr -d '\r' < tier2-outpost/cp.txt | paste -sd';' -)"
+  fills=$(printf '4 425 1977\n4 1737 153\n4 521 -1799\n4 1065 905\nquit\n' \
+    | (cd tier2-outpost && timeout 300 "$JAVA21" -cp "$ocp" OreGen oreserver 2>/dev/null) \
+    | grep -o "fill=[a-z:_]*" || true)
+  if [ -z "$fills" ]; then
+    bad "OreGen produced no fill at all -- the worker did not run" \
+        "UNKNOWN, which is not a passing or a failing casing"
+  elif printf '%s' "$fills" | grep -q "fill=minecraft:air"; then
+    bad "OreGen reported fill=air, which no chest can be encased in" "$fills"
+  else
+    ok "a casing is never reported as air (the air/water -> block-below rule)"
+  fi
+fi
+
+# ------------------------------------------- query semantics (metric/family/uppers)
+section "query semantics: distance metric, biome families, sister seeds"
+
+# These three all fail SILENTLY when broken -- they return fewer seeds, never an
+# error -- so each test pins the DIFFERENCE the feature makes rather than just
+# that a query runs. A revert to the old behaviour has to fail here.
+
+# Chebyshev vs Euclidean. Structure seed 0 puts a village at (240,32): chebyshev
+# distance 240, euclidean 242. within=241 therefore straddles them exactly, and
+# is the smallest fixture that can tell the two metrics apart at all.
+mk_metric() { printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":241,"of":"origin","metric":"%s"}]}\n' "$1"; }
+mk_metric euclidean  > /tmp/sc_test/met_e.json
+mk_metric chebyshev  > /tmp/sc_test/met_c.json
+me=$(FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/met_e.json 1 1 2>/dev/null | grep -c '^SEED')
+mc_=$(FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/met_c.json 1 1 2>/dev/null | grep -c '^SEED')
+if [ "$me" -eq 0 ] && [ "$mc_" -ge 1 ]; then
+  ok "chebyshev is a square, euclidean a disc (village at 240,32: within=241 -> $me vs $mc_)"
+else
+  bad "the distance metric is not being applied" \
+      "euclidean=$me (want 0) chebyshev=$mc_ (want >=1) -- a silent revert to euclidean looks exactly like this"
+fi
+
+# An unrecognised metric must be an ERROR. Falling back to the default would
+# search a disc when a square was asked for, and look like a rare seed.
+printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":300,"metric":"chebychev"}]}\n' > /tmp/sc_test/met_bad.json
+if ./build/find.exe /tmp/sc_test/met_bad.json 1 1 2>&1 | grep -q "is not one of"; then
+  ok "a misspelled metric is rejected, not silently defaulted"
+else
+  bad "a misspelled metric was accepted" "it would silently search the wrong shape"
+fi
+
+# Biome families. "badlands" is ALSO a single biome name, so the family must be
+# opt-in -- and the test has to show the family matching MORE, or an
+# implementation that ignores the flag would pass.
+mk_fam() { printf '{"version":"1.21","conditions":[{"id":"b","biome":"badlands"%s,"within":200,"of":"origin"}]}\n' "$1"; }
+mk_fam ''               > /tmp/sc_test/fam_one.json
+mk_fam ',"family":true' > /tmp/sc_test/fam_all.json
+f1=$(FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/fam_one.json 60 4 2>/dev/null | grep -c '^SEED')
+fa=$(FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/fam_all.json 60 4 2>/dev/null | grep -c '^SEED')
+if [ "$fa" -gt "$f1" ]; then
+  ok "biome family widens the match (badlands alone $f1, family $fa)"
+else
+  bad "\"family\":true did not widen the match" \
+      "single=$f1 family=$fa -- the flag is being ignored, which looks like implemented"
+fi
+printf '{"version":"1.21","conditions":[{"id":"b","biome":"tundra","family":true,"within":200}]}\n' > /tmp/sc_test/fam_bad.json
+if ./build/find.exe /tmp/sc_test/fam_bad.json 1 1 2>&1 | grep -q "is not a biome family"; then
+  ok "an unknown family is rejected rather than falling back to one biome"
+else
+  bad "an unknown family was accepted" "it would silently search a single biome"
+fi
+
+# FIND_UPPERS. Needs a LOOSE structure condition (so pass 1 keeps nearly
+# everything) plus a RARE biome one (so the answer hides in a sister seed).
+# A pure-biome query walks world seeds directly and never uses sisters at all --
+# measuring this with one showed "no effect" and wasted an hour.
+printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":800,"of":"origin"},{"id":"m","biome":"mushroom_fields","within":400,"of":"origin"}]}\n' > /tmp/sc_test/up.json
+u64=$(FIND_UPPERS=64   FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/up.json 60 8 2>/dev/null | grep -c '^SEED')
+u1k=$(FIND_UPPERS=1024 FIND_OFFSET=0 ./build/find.exe /tmp/sc_test/up.json 60 8 2>/dev/null | grep -c '^SEED')
+if [ "$u1k" -gt "$u64" ]; then
+  ok "FIND_UPPERS reaches seeds the default misses ($u64 at 64, $u1k at 1024)"
+else
+  bad "FIND_UPPERS changed nothing" \
+      "64->$u64 1024->$u1k; seeds the default cannot reach are reported as absent"
+fi
+
+# The spawn caveat. cubiomes documents getSpawn as inaccurate; a spawn-relative
+# answer must carry that, and a non-spawn one must not be cluttered with it.
+printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":300,"of":"spawn"}]}\n' > /tmp/sc_test/sp_yes.json
+printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":300,"of":"origin"}]}\n' > /tmp/sc_test/sp_no.json
+sy=$(./build/find.exe /tmp/sc_test/sp_yes.json 4 1 2>/dev/null | grep -c 'WORLD SPAWN are approximate')
+sn=$(./build/find.exe /tmp/sc_test/sp_no.json  4 1 2>/dev/null | grep -c 'WORLD SPAWN are approximate')
+if [ "$sy" -ge 1 ] && [ "$sn" -eq 0 ]; then
+  ok "spawn-relative queries carry the approximation caveat, others do not"
+else
+  bad "the spawn caveat is wrong" "spawn query=$sy (want >=1) origin query=$sn (want 0)"
+fi
+
+# ------------------------------------------- regressions from the 2026-10 review
+# Each of these was a wrong answer the review found by reading the code. They
+# are cheap (seconds), and each one fails if its fix is reverted.
+section "review fixes (loot seed, old biomes, parents, absence, seeds)"
+
+# 1.18+ chest loot depends on all 64 bits; the finder used to roll it from the
+# 48-bit structure seed, i.e. for a different world. Same pyramid, full seed vs
+# its structure seed: different chests on 1.21, identical on 1.16.
+LS=-4172144997902289642; LM=158581879764246
+l21a=$(./build/checkloot.exe $LS desert_pyramid 2384 -1168 1.21 2>/dev/null | head -1 | cut -d: -f2-)
+l21b=$(./build/checkloot.exe $LM desert_pyramid 2384 -1168 1.21 2>/dev/null | head -1 | cut -d: -f2-)
+l16a=$(./build/checkloot.exe $LS desert_pyramid 2384 -1168 1.16 2>/dev/null | grep -v getMin | head -1 | cut -d: -f2-)
+l16b=$(./build/checkloot.exe $LM desert_pyramid 2384 -1168 1.16 2>/dev/null | grep -v getMin | head -1 | cut -d: -f2-)
+if [ -n "$l21a" ] && [ "$l21a" != "$l21b" ] && [ -n "$l16a" ] && [ "$l16a" = "$l16b" ]; then
+  ok "1.18+ loot is rolled from the full 64-bit seed (1.16 still 48-bit)"
+else
+  bad "loot seed: the full and 48-bit seeds should differ on 1.21 and agree on 1.16" \
+      "1.21 same=$([ "$l21a" = "$l21b" ] && echo yes || echo no) 1.16 same=$([ "$l16a" = "$l16b" ] && echo yes || echo no)"
+fi
+
+# Biome conditions on 1.17 and earlier matched NOTHING: every lookup went
+# through a NULL layer entry. Plains near origin is in most seeds.
+for v in 1.12 1.16 1.17; do
+  printf '{"version":"%s","conditions":[{"id":"p","biome":"plains","within":600}]}\n' "$v" > /tmp/sc_test/old_$v.json
+  nhit=$(./build/find.exe /tmp/sc_test/old_$v.json 60 4 2>/dev/null | grep -c '^SEED')
+  [ "$nhit" -ge 5 ] && ok "biome conditions match on $v ($nhit seeds)" \
+                    || bad "biome conditions match nothing on $v" "hits=$nhit"
+done
+
+# A biome measured from a SPAWN-RELATIVE village must be measured from the
+# village that is reported (found around the true spawn in pass 2), not the
+# pass-1 one near origin.
+printf '{"version":"1.21","conditions":[{"id":"v","structure":"village","within":300,"of":"spawn"},{"id":"b","biome":"plains","within":100,"of":"v"}]}\n' > /tmp/sc_test/par.json
+pbad=$(FIND_SECONDS=20 ./build/find.exe /tmp/sc_test/par.json 400000 8 2>/dev/null | awk '
+  $1=="b" {n++; if ($(NF-2)+0 > 100 || $NF != "v") bad++}
+  END {print (n+0) " " (bad+0)}')
+pn=${pbad% *}; pb=${pbad#* }
+[ "$pn" -ge 3 ] && [ "$pb" -eq 0 ] \
+  && ok "a child is measured from its parent's FINAL position ($pn hits)" \
+  || bad "child measured from a stale parent position" "hits=$pn wrong=$pb"
+
+# Absence. Every reported mansion must have no village within 600 that the
+# game generates -- re-checked with nearest, which locates by its own path.
+printf '{"version":"1.21","conditions":[{"id":"m","structure":"mansion","within":800},{"id":"nv","structure":"village","within":600,"of":"m","not":true}]}\n' > /tmp/sc_test/neg.json
+nn=0; nb=0
+while read -r sd mx mz; do
+  nn=$((nn+1))
+  d=$(./build/nearest.exe "$sd" 1.21 structure village "$mx" "$mz" 2>/dev/null | grep -oE 'dist=[0-9]+' | cut -d= -f2)
+  [ -n "$d" ] && [ "$d" -le 600 ] && nb=$((nb+1))
+done < <(FIND_SECONDS=15 ./build/find.exe /tmp/sc_test/neg.json 200000 8 2>/dev/null | python -c "
+import sys, re
+s = None
+for l in sys.stdin:
+    m = re.match(r'^SEED (-?\d+)', l)
+    if m: s = m.group(1); continue
+    m = re.match(r'^\s+m\s+x=\s*(-?\d+) z=\s*(-?\d+)', l)
+    if m and s: print(s, m.group(1), m.group(2)); s = None
+" | head -6)
+[ "$nn" -ge 3 ] && [ "$nb" -eq 0 ] \
+  && ok "\"not\": no generated village within 600 of any reported mansion ($nn checked)" \
+  || bad "\"not\" let a village through" "checked=$nn violated=$nb"
+printf '{"version":"1.21","conditions":[{"id":"nv","structure":"village","within":300,"not":true},{"id":"p","biome":"plains","within":100,"of":"nv"}]}\n' > /tmp/sc_test/negp.json
+./build/find.exe /tmp/sc_test/negp.json 1 1 2>&1 | grep -q "nothing can be measured from it" \
+  && ok "nothing can be measured from a \"not\" condition" \
+  || bad "a \"not\" condition was accepted as a parent" ""
+
+# Seeds are read the way Minecraft reads them: a long if it is one, else
+# String.hashCode -- so an out-of-range number is HASHED, not clamped.
+printf '{"version":"1.21","conditions":[{"id":"p","biome":"plains","within":600}]}\n' > /tmp/sc_test/sd.json
+s1=$(./build/find.exe /tmp/sc_test/sd.json --seed glacier 2>/dev/null | grep -oE '^--- seed -?[0-9]+' | grep -oE -- '-?[0-9]+$')
+s2=$(./build/find.exe /tmp/sc_test/sd.json --seed 18446744073709551615 2>/dev/null | grep -oE '^--- seed -?[0-9]+' | grep -oE -- '-?[0-9]+$')
+[ "$s1" = "108181935" ] && [ "$s2" = "1823116549" ] \
+  && ok "--seed follows Minecraft: text and out-of-range numbers hash (String.hashCode)" \
+  || bad "--seed parsing differs from Minecraft" "glacier=$s1 (want 108181935) overflow=$s2 (want 1823116549)"
+
+# A misspelt key used to be skipped silently, searching the default instead.
+printf '{"version":"1.21","conditions":[{"id":"p","biome":"plains","radius":100}]}\n' > /tmp/sc_test/uk.json
+./build/find.exe /tmp/sc_test/uk.json 1 1 2>/dev/null | grep -q 'unknown key "radius"' \
+  && ok "unknown condition keys are reported" || bad "unknown key ignored silently" ""
+
+# 1.18+ strongholds cannot be shallow under DRY land (roof <= 52, land >= 62);
+# the old refusal message even recommended "shallow". On the sea floor they can.
+printf '{"version":"1.21","conditions":[{"id":"s","stronghold":"shallow","within":3000}]}\n' > /tmp/sc_test/shs.json
+printf '{"version":"1.21","conditions":[{"id":"s","stronghold":"exposed","land":false,"within":3000}]}\n' > /tmp/sc_test/she.json
+./build/find.exe /tmp/sc_test/shs.json 1 1 2>&1 | grep -q 'least ground over one is 10' \
+  && ./build/find.exe /tmp/sc_test/she.json 1 1 2>&1 | grep -q '^plan' \
+  && ok "1.18+ stronghold bounds: shallow-on-land refused with the real limit, sea floor allowed" \
+  || bad "stronghold 1.18 bounds wrong" ""
+
+# Non-square terrain regions (the cubiomes stride patch).
+./build/checkregion.exe >/tmp/sc_test/region.txt 2>&1 \
+  && ok "generateRegion agrees with 1x1 generation on rectangular regions" \
+  || bad "generateRegion disagrees on a rectangular region (stride patch missing?)" "$(head -3 /tmp/sc_test/region.txt)"
+
+# find interleaves its threads, so a stopped run has one clean resume point. The
+# query must outlast the budget: a common one hits its 12 results in milliseconds,
+# and a thread that never got to start then rightly reports an offset of 0, which
+# failed this check on slow machines.
+printf '{"version":"1.21","conditions":[{"id":"m","biome":"mushroom_fields","within":64},{"id":"i","biome":"ice_spikes","within":64}]}\n' > /tmp/sc_test/cov.json
+FIND_SECONDS=2 ./build/find.exe /tmp/sc_test/cov.json 500000000 8 2>/tmp/sc_test/cov.err > /tmp/sc_test/cov.out
+grep -q 'time budget expired' /tmp/sc_test/cov.out \
+  && grep -qE '^covered *: indices 0\.\.[0-9]+ -- resume with FIND_OFFSET=[1-9]' /tmp/sc_test/cov.out \
+  && ok "a time-budgeted run reports a gap-free resume offset" \
+  || bad "no resume offset after a budgeted run" "$(tail -2 /tmp/sc_test/cov.out) $(tail -2 /tmp/sc_test/cov.err)"
+
+# FIND_JSON: every hit is also one @JSON line, built from the engine's result
+# structs. Several kinds interleaved in one query, and a leaderboard, must all
+# come out as valid JSON with string seeds -- the server reads these, not the
+# prose, so a broken line is a lost result.
+printf '{"version":"1.21","conditions":[{"id":"m","structure":"mansion","within":800},{"id":"c","loot":{"structure":"desert_pyramid","item":"gold_ingot","count":1},"within":2500},{"id":"v","structure":"village","within":700,"of":"m"},{"id":"s","slime":2,"within":96}]}\n' > /tmp/sc_test/js1.json
+printf '{"version":"1.21","conditions":[{"id":"g","structure":"geode","within":200}],"rank":{"of":"g","by":"size","top":3}}\n' > /tmp/sc_test/js2.json
+jres=$( { FIND_JSON=1 FIND_SECONDS=8 ./build/find.exe /tmp/sc_test/js1.json 200000 8 2>/dev/null; \
+          FIND_JSON=1 FIND_SECONDS=4 ./build/find.exe /tmp/sc_test/js2.json 400000000 8 2>/dev/null; } | python -c "
+import sys, json
+n = bad = 0
+for l in sys.stdin:
+    if not l.startswith('@JSON '): continue
+    n += 1
+    try:
+        o = json.loads(l[6:])
+        assert isinstance(o['seed'], str) and 'places' in o
+    except Exception:
+        bad += 1
+print(n, bad)")
+jn=${jres% *}; jb=${jres#* }
+[ "$jn" -ge 4 ] && [ "$jb" -eq 0 ] \
+  && ok "FIND_JSON hits are valid JSON with string seeds ($jn lines, mixed kinds + leaderboard)" \
+  || bad "FIND_JSON output invalid" "lines=$jn invalid=$jb"
+
+# The map marks only structures that really generate. It used to mark by
+# biome viability alone and drew the pyramids, jungle temples and mansions the
+# 1.18 terrain floor rules out -- 101 of 259 over 20 seeds. Every one it marks
+# now must pass checkplacement's independent corner-height verdict.
+mk_n=0; mk_bad=0
+for ms in 1000003 2000006 3000009 4000012 5000015; do
+  while read -r t x z; do
+    mk_n=$((mk_n+1))
+    ./build/checkplacement.exe "$ms" "$t" 1.21 "$x" "$z" 2>/dev/null | grep -q ' generates$' || mk_bad=$((mk_bad+1))
+  done < <(./build/map.exe "$ms" 1.21 4000 64 markers 0 0 - 2>/dev/null | python -c "
+import sys, json
+for m in json.load(sys.stdin)['markers']:
+    if m['type'] in ('desert_pyramid', 'jungle_temple', 'mansion'):
+        print(m['type'], m['x'], m['z'])")
+done
+[ "$mk_n" -ge 5 ] && [ "$mk_bad" -eq 0 ] \
+  && ok "the map marks only pyramids/temples/mansions that generate ($mk_n checked)" \
+  || bad "the map marks a structure the terrain rule forbids" "checked=$mk_n phantom=$mk_bad"
+
+# Chest loot pinned to a real 1.21.1 server (tier3-java/loot_server_1.21.1.txt,
+# recorded with tier3-java/check_loot_seed.py): each chest's position, loot
+# seed and items through checkloot -- covering the 64-bit seed, the ocean
+# shipwreck salt, the 1.21 enchant list, the goat horn draw and the chest
+# positions -- and the engine's own count for the ocean wreck, which the
+# beached salt used to get wrong (6 carrots, not 8).
+ls_exp=$(grep '^chest' tier3-java/loot_server_1.21.1.txt)
+ls_got=$(for t in "desert_pyramid 1184 144" "outpost 320 256" "shipwreck -1008 880" "shipwreck -608 880"; do
+  read -r lst lx lz <<< "$t"
+  ./build/checkloot.exe -7311924356716553218 "$lst" "$lx" "$lz" 1.21.1 --chests | grep '^chest' | tr -d '\r'
+done)
+[ -n "$ls_exp" ] && [ "$ls_exp" = "$ls_got" ] \
+  && ok "loot matches a real 1.21.1 server chest by chest ($(echo "$ls_exp" | wc -l) chests: seed, position, items)" \
+  || bad "loot differs from the real 1.21.1 server" "$(diff <(echo "$ls_exp") <(echo "$ls_got") | head -4)"
+sw_v=""
+for n in 8 9; do
+  printf '{"version":"1.21.1","conditions":[{"id":"w","loot":{"structure":"shipwreck","item":"carrot","count":%d},"within":60,"of":"-608,880"}]}\n' "$n" > /tmp/sc_test/sw.json
+  sw_v="$sw_v $(./build/find.exe /tmp/sc_test/sw.json --seed -7311924356716553218 2>/dev/null | tr -d '\r' | grep -oE '^(YES|NO)' | head -1)"
+done
+[ "$sw_v" = " YES NO" ] && ok "engine loot: the ocean shipwreck the server checked holds exactly 8 carrots" \
+  || bad "engine loot count for the ocean shipwreck" "carrot>=8, >=9 gave:$sw_v (want YES NO)"
+
+# map.c renders on several threads and, from 1.19.3, skips the biome search for
+# strongholds that cannot be in view. Neither may change a pixel or a marker:
+# the threaded picture must equal the single-threaded one (1.18+ noise and a
+# layered version), and a view far from the origin must hold exactly the
+# strongholds locate finds walking every one in full -- around a NEGATIVE
+# centre, which locate used to read as a flag and replace with 0.
+mt_bad=""
+for mv in "1.21 700 -300" "1.16 -900 400"; do
+  read -r mver mcx mcz <<< "$mv"
+  ./build/map.exe 12345 "$mver" 3000 400 /tmp/sc_test/map_n.png "$mcx" "$mcz" - >/dev/null 2>&1
+  MAP_THREADS=1 ./build/map.exe 12345 "$mver" 3000 400 /tmp/sc_test/map_1.png "$mcx" "$mcz" - >/dev/null 2>&1
+  [ -s /tmp/sc_test/map_n.png ] && cmp -s /tmp/sc_test/map_n.png /tmp/sc_test/map_1.png || mt_bad="$mt_bad $mver"
+done
+[ -z "$mt_bad" ] && ok "map: threaded render is byte-identical to one thread (1.21, 1.16)" \
+  || bad "map: threaded render differs from one thread" "versions:$mt_bad"
+sh_map=$(./build/map.exe 12345 1.21 3000 64 markers 9000 -7000 - 2>/dev/null | python -c "
+import json, sys
+d = json.load(sys.stdin)
+print('\n'.join(f\"{m['x']},{m['z']}\" for m in d['markers'] if m['type'] == 'stronghold'))" | tr -d '\r' | sort | tr '\n' ' ')
+sh_loc=$(./build/locate.exe 12345 1.21 stronghold 4300 9000 -7000 2>/dev/null | tr -d '\r' \
+  | awk '$1 >= 6000 && $1 <= 12000 && $2 >= -10000 && $2 <= -4000 {print $1","$2}' | sort | tr '\n' ' ')
+[ -n "$sh_map" ] && [ "$sh_map" = "$sh_loc" ] \
+  && ok "map strongholds far from the origin match a full locate walk ($(echo $sh_map | wc -w) at 9000,-7000)" \
+  || bad "map strongholds differ from locate" "map=[$sh_map] locate=[$sh_loc]"
+
+# Reversal primitives (src/lcg.h, docs/reversal-roadmap.md milestone 1):
+# forwards and backwards steps, O(log n) skips, nextLong reversal -- checked
+# against the REAL java.util.Random, not against themselves.
+./build/lcgcheck.exe self >/tmp/sc_test/lcg_self.txt 2>&1 \
+  && ok "LCG primitives: step/back/skip/nextLong-reversal round trips ($(grep -oE '[0-9]+ failures' /tmp/sc_test/lcg_self.txt))" \
+  || bad "LCG self-check failed" "$(cat /tmp/sc_test/lcg_self.txt)"
+if javac -d "$JC" tools/LcgCheck.java 2>/tmp/sc_test/lcg_jc.txt; then
+  java --add-opens java.base/java.util=ALL-UNNAMED -cp "$JC" LcgCheck > /tmp/sc_test/lcg_java.txt 2>/dev/null
+  ./build/lcgcheck.exe table > /tmp/sc_test/lcg_c.txt
+  if [ -s /tmp/sc_test/lcg_java.txt ] && diff --strip-trailing-cr -q /tmp/sc_test/lcg_java.txt /tmp/sc_test/lcg_c.txt >/dev/null; then
+    ok "src/lcg.h matches java.util.Random ($(wc -l < /tmp/sc_test/lcg_c.txt) seeds, bounded nextInt incl. rejection, nextLong, state)"
+  else
+    bad "src/lcg.h disagrees with java.util.Random" "$(diff --strip-trailing-cr /tmp/sc_test/lcg_java.txt /tmp/sc_test/lcg_c.txt | head -3)"
+  fi
+else
+  bad "LcgCheck.java does not compile" "$(head -3 /tmp/sc_test/lcg_jc.txt)"
+fi
+
+# Population-seed inversion (milestone 2): planted seeds come back, every answer
+# gives the target through cubiomes' forward function, and the cases small
+# enough to brute-force list exactly the seeds brute force finds. Then one
+# round trip through the command line, a text seed on 1.12 included.
+./build/popinvert.exe self >/tmp/sc_test/pop_self.txt 2>&1 \
+  && ok "population seed inversion: $(grep -oE '^[0-9]+ inversions' /tmp/sc_test/pop_self.txt) planted and found; $(tail -1 /tmp/sc_test/pop_self.txt | sed 's/ (.*//')" \
+  || bad "population seed inversion self-check" "$(head -5 /tmp/sc_test/pop_self.txt)"
+pi_ok=1
+for pi_case in "1.16 37 -12 -4172144997902289642" "1.12 -5 9 glacier" "1.8 1000 -1000 12345"; do
+  read -r pv pcx pcz pseed <<< "$pi_case"
+  pi_pop=$(./build/popinvert.exe forward "$pv" "$pcx" "$pcz" "$pseed" | tr -d '\r')
+  pi_want=$(python -c "
+import sys
+s = sys.argv[1]
+try: v = int(s)
+except ValueError:
+    h = 0
+    for ch in s: h = (31 * h + ord(ch)) & 0xffffffff
+    v = h - (1 << 32) if h >= 1 << 31 else h
+print(v & ((1 << 48) - 1))" "$pseed")
+  ./build/popinvert.exe "$pv" "$pcx" "$pcz" "$pi_pop" 2>/dev/null | tr -d '\r' | grep -qx "$pi_want" || pi_ok=0
+done
+[ "$pi_ok" -eq 1 ] && ok "popinvert round trip: forward then back lists the world's structure seed (1.16, 1.12 text seed, 1.8)" \
+  || bad "popinvert round trip lost the seed"
+./build/popinvert.exe 1.18 0 0 1 >/dev/null 2>&1 && bad "popinvert accepted 1.18" || ok "popinvert refuses 1.18+ (Xoroshiro population seeds)"
+
+# find --seeds: a list checked in one process. A seed the search just found
+# must come back "yes", a text seed must be hashed the Minecraft way, and
+# comments/blank lines must be skipped.
+printf '{"version":"1.21","conditions":[{"id":"m","structure":"mansion","within":800},{"id":"v","structure":"village","within":600,"of":"m"}]}\n' > /tmp/sc_test/sl.json
+sl_seed=$(./build/find.exe /tmp/sc_test/sl.json 200000 8 2>/dev/null | awk '/^SEED/{print $2; exit}')
+printf '# a comment\n%s\n\nglacier\n12345\n' "$sl_seed" > /tmp/sc_test/sl.txt
+sl_out=$(FIND_JSON=1 ./build/find.exe /tmp/sc_test/sl.json --seeds /tmp/sc_test/sl.txt 4 2>/dev/null)
+sl_n=$(echo "$sl_out" | grep -c '^@CHECK')
+sl_yes=$(echo "$sl_out" | grep '^@CHECK' | grep -c "\"seed\":\"$sl_seed\",\"verdict\":\"yes\"")
+sl_hash=$(echo "$sl_out" | grep -c '"input":"glacier","seed":"108181935"')
+[ -n "$sl_seed" ] && [ "$sl_n" -eq 3 ] && [ "$sl_yes" -eq 1 ] && [ "$sl_hash" -eq 1 ] \
+  && ok "find --seeds checks a list (found seed: yes; text seed hashed; comment skipped)" \
+  || bad "find --seeds" "seed=$sl_seed checks=$sl_n yes=$sl_yes hashed=$sl_hash"
+
+# The web server must refuse other origins and non-JSON posts (CSRF / DNS
+# rebinding), and still accept the UI's own requests.
+RUIPORT=8792
+SEED_UI_PORT=$RUIPORT SEED_UI_NO_BROWSER=1 python serve.py >/tmp/sc_test/ui2.log 2>&1 &
+ruipid=$!
+for _ in $(seq 1 40); do
+  curl -s -m 1 "http://127.0.0.1:$RUIPORT/api/vocab?v=1.21" >/dev/null 2>&1 && break; sleep 0.25
+done
+QJ='{"query":{"version":"1.21","conditions":[{"id":"v","structure":"village","within":400}]}}'
+c_ok=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$QJ" "http://127.0.0.1:$RUIPORT/api/plan")
+c_txt=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: text/plain' -d "$QJ" "http://127.0.0.1:$RUIPORT/api/plan")
+c_org=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'Origin: https://example.com' -d "$QJ" "http://127.0.0.1:$RUIPORT/api/plan")
+c_hst=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: attacker.example:$RUIPORT" "http://127.0.0.1:$RUIPORT/api/vocab?v=1.21")
+kill "$ruipid" 2>/dev/null; wait "$ruipid" 2>/dev/null
+[ "$c_ok" = 200 ] && [ "$c_txt" = 403 ] && [ "$c_org" = 403 ] && [ "$c_hst" = 403 ] \
+  && ok "server refuses cross-origin, non-JSON and foreign-Host requests" \
+  || bad "server request gate" "json=$c_ok text=$c_txt origin=$c_org host=$c_hst (want 200/403/403/403)"
+
+# ---------------------------------------------------------------- any groups
+section "any groups (OR)"
+# The whole claim in one check: over the same range, an "any" search finds
+# exactly the union of its alternatives run alone. Compared on the lower 48 bits,
+# because which sister world is reported first depends on what is being tested.
+ANY_A='{"id":"a","structure":"mansion","within":700}'
+ANY_B='{"id":"b","structure":"monument","within":256}'
+ANY_V='{"id":"v","structure":"village","within":2500}'
+any_hits() {
+  printf '%s' "$1" > /tmp/sc_test/any.json
+  FIND_HITSTREAM=1 ./build/find.exe /tmp/sc_test/any.json 15000 4 2>/dev/null \
+    | python -c "
+import re, sys
+print('\n'.join(sorted({str(int(m.group(1)) & ((1 << 48) - 1)) for m in re.finditer(r'^HIT (-?\d+)', sys.stdin.read(), re.M)})))"
+}
+any_hits "{\"version\":\"1.21\",\"conditions\":[$ANY_V,$ANY_A]}" > /tmp/sc_test/any_a.txt
+any_hits "{\"version\":\"1.21\",\"conditions\":[$ANY_V,$ANY_B]}" > /tmp/sc_test/any_b.txt
+any_hits "{\"version\":\"1.21\",\"conditions\":[$ANY_V,{\"id\":\"g\",\"any\":[$ANY_A,$ANY_B]}]}" > /tmp/sc_test/any_u.txt
+cat /tmp/sc_test/any_a.txt /tmp/sc_test/any_b.txt | sort -u > /tmp/sc_test/any_want.txt
+sort -u /tmp/sc_test/any_u.txt > /tmp/sc_test/any_got.txt
+any_n=$(wc -l < /tmp/sc_test/any_got.txt | tr -d ' ')
+[ -s /tmp/sc_test/any_a.txt ] && [ -s /tmp/sc_test/any_b.txt ] && diff -q /tmp/sc_test/any_want.txt /tmp/sc_test/any_got.txt >/dev/null \
+  && ok "an any search finds exactly the union of its alternatives ($any_n seeds)" \
+  || bad "any is not the union" "$(diff /tmp/sc_test/any_want.txt /tmp/sc_test/any_got.txt | head -4)"
+
+# A hit reports the alternative that held, with nothing from the one that did not.
+printf '%s' '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"a","structure":"mansion","within":700},{"id":"b","structure":"monument","within":256}]}]}' > /tmp/sc_test/any.json
+any_cols=$(FIND_TSV=/tmp/sc_test/any.tsv ./build/find.exe /tmp/sc_test/any.json 3000 4 >/dev/null 2>&1; cut -f2 /tmp/sc_test/any.tsv | sort -u | tr '\n' ' ')
+[ -s /tmp/sc_test/any.tsv ] && [ "$(awk -F'\t' '{print NF}' /tmp/sc_test/any.tsv | sort -u)" = 4 ] \
+  && ok "each hit reports only the alternative that held ($any_cols)" \
+  || bad "any hit output" "$(head -2 /tmp/sc_test/any.tsv)"
+
+# Asking about one seed takes the same route as searching.
+any_seed=$(cut -f1 /tmp/sc_test/any.tsv | head -1)
+./build/find.exe /tmp/sc_test/any.json --seed "$any_seed" 2>&1 | grep -q '^YES' \
+  && ok "find --seed honours any groups" || bad "find --seed with any" "seed=$any_seed"
+
+any_refuse() {
+  printf '%s' "$2" > /tmp/sc_test/any.json
+  ./build/find.exe /tmp/sc_test/any.json 10 1 2>&1 | grep -q "$3" \
+    && ok "refused: $1" || bad "not refused: $1" "$(./build/find.exe /tmp/sc_test/any.json 10 1 2>&1 | tail -2)"
+}
+any_refuse "measuring from a group member" \
+  '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"a","structure":"village","within":500}]},{"id":"x","biome":"forest","of":"a","within":100}]}' \
+  'inside an "any" group'
+any_refuse "a leaderboard over a group" \
+  '{"version":"1.21","rank":{"of":"a"},"conditions":[{"id":"g","any":[{"id":"a","structure":"village","within":500},{"id":"b","structure":"igloo","within":500}]}]}' \
+  'cannot use'
+any_refuse "nested groups" \
+  '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"h","any":[{"id":"a","structure":"village","within":500}]}]}]}' \
+  'cannot be nested'
+any_refuse "a key on the group itself" \
+  '{"version":"1.21","conditions":[{"id":"g","within":100,"any":[{"id":"a","structure":"village","within":500}]}]}' \
+  'put "within" on'
+any_refuse "more combinations than one search takes" \
+  '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"a","structure":"village"},{"id":"b","structure":"igloo"},{"id":"c","structure":"mansion"},{"id":"d","structure":"monument"},{"id":"e","structure":"shipwreck"}]},{"id":"h","any":[{"id":"f","biome":"forest"},{"id":"i","biome":"plains"},{"id":"j","biome":"desert"},{"id":"k","biome":"jungle"}]}]}' \
+  'too many alternatives'
+
+any_refuse "a mistake inside one alternative, which must not just drop it" \
+  '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"a","structure":"village","within":500,"of":"nowhere"},{"id":"b","structure":"igloo","within":500}]}]}' \
+  'nowhere'
+printf '%s' '{"version":"1.21","conditions":[{"id":"g","any":[{"id":"a","stronghold":"exposed"},{"id":"b","structure":"igloo","within":800}]}]}' > /tmp/sc_test/any.json
+./build/find.exe /tmp/sc_test/any.json 20000 4 2>&1 | grep -q 'can never match' \
+  && ok "an impossible alternative is dropped, and says so" \
+  || bad "impossible alternative" "$(./build/find.exe /tmp/sc_test/any.json 10 1 2>&1 | tail -2)"
+
 # ---------------------------------------------------------------- summary
-printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"
+section "summary"
+printf '\n\033[1m%d passed, %d skipped, %d failed\033[0m (%ss total)\n' \
+  "$pass" "$nskip" "$fail" "$(( $(date +%s) - _suite_t0 ))"
 [ "$fail" -eq 0 ]

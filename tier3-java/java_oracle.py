@@ -25,6 +25,7 @@ import atexit
 import os
 import queue
 import re
+import socket
 import shutil
 import subprocess
 import sys
@@ -32,8 +33,17 @@ import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-JAR = os.path.join(HERE, "server.jar")
-JAVA = os.environ.get("JAVA_HOME", r"C:\Program Files\Java\jdk-21") + r"\bin\java.exe"
+
+# Both overridable, because the oracle is no longer only ever 1.21.1. Older
+# versions need both a different jar AND an older JDK -- 1.16.5 predates Java 17
+# and will not boot on 21 -- so pinning either one here would quietly make every
+# pre-1.18 question unanswerable.
+JAR = os.environ.get("MC_SERVER_JAR") or os.path.join(HERE, "server.jar")
+# Joined portably: appending "\bin\java.exe" to JAVA_HOME produced a path that
+# does not exist anywhere but Windows, even with JAVA_HOME set correctly.
+JAVA = os.environ.get("MC_JAVA") or os.path.join(
+    os.environ.get("JAVA_HOME", r"C:\Program Files\Java\jdk-21"),
+    "bin", "java.exe" if os.name == "nt" else "java")
 
 _LIVE = []
 
@@ -49,6 +59,12 @@ def _kill_all():
 atexit.register(_kill_all)
 
 LINE = re.compile(r"^\[[\d:]+\] \[(?P<who>[^\]]+)\]: (?P<msg>.*)$")
+
+# Server responses that echo the failing command back at you. Anything matching
+# these is a parse failure, never a result -- see run().
+_CMD_ERROR = re.compile(
+    r"<--\[HERE\]|Unknown block type|Unknown item|Incorrect argument|"
+    r"Unknown or incomplete command|Expected whitespace")
 
 
 class JavaServer:
@@ -69,6 +85,14 @@ class JavaServer:
         self.q = queue.Queue()
         self._n = 0
         self._forced = set()
+        # Command-parse failures, kept rather than discarded: a probe finding
+        # nothing because its block ids are wrong for this version must be
+        # distinguishable from one finding nothing because nothing is there.
+        self.errors = []
+        # Which y holds the bedrock floor, learned on first use: -64 from 1.18,
+        # 0 before it. None until something asks.
+        self._floor = None
+        self.port = self._free_port()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -78,6 +102,14 @@ class JavaServer:
 
     def __exit__(self, *exc):
         self.stop()
+
+    @staticmethod
+    def _free_port():
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
 
     def _prepare(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -101,16 +133,41 @@ class JavaServer:
             "spawn-animals": "false",
             "spawn-monsters": "false",
             "sync-chunk-writes": "false",
+            # Boot was measured at 100s against 5.5s to generate a treasure's
+            # chunks, and nearly all of it is the server pre-generating a spawn
+            # area no probe ever looks at. Nothing here reads spawn.
+            "spawn-chunk-radius": "0",
+            "max-players": "1",
+            "network-compression-threshold": "-1",
             "enable-jmx-monitoring": "false",
             "allow-nether": "false",
+            # Its own port per instance. The default 25565 lingers in TIME_WAIT
+            # after a stop, so back-to-back worlds -- exactly what a hunt does --
+            # hit "FAILED TO BIND TO PORT" and the run quietly checks a fraction
+            # of what it was asked to. That failed 31 seeds out of 40 once, and
+            # still printed a tidy "0 found".
+            "server-port": str(self.port),
         }
         with open(os.path.join(self.dir, "server.properties"), "w") as f:
             for k, v in props.items():
                 f.write(f"{k}={v}\n")
 
-    def start(self, timeout=300):
+    def start(self, timeout=300, tries=3):
         if not os.path.exists(JAR):
             raise RuntimeError(f"missing {JAR} -- see tier3-java/README.md")
+        # A port can still be taken between choosing it and binding it, so a
+        # bind failure retries on a new one rather than killing the whole run.
+        for attempt in range(tries):
+            try:
+                return self._start_once(timeout)
+            except RuntimeError as e:
+                if "FAILED TO BIND" not in str(e) or attempt == tries - 1:
+                    raise
+                self.stop()
+                self.port = self._free_port()
+        raise RuntimeError("unreachable")
+
+    def _start_once(self, timeout):
         self._prepare()
         self.proc = subprocess.Popen(
             [JAVA, f"-Xmx{self.ram}", "-jar", JAR, "nogui"],
@@ -126,6 +183,11 @@ class JavaServer:
             if line is None:
                 break
             if "Done (" in line:
+                # Every world here is a throwaway read once and deleted, so
+                # writing chunks to disk buys nothing and costs I/O on the hot
+                # path. This also stops a killed run leaving 60 MB per seed
+                # behind -- an earlier one accumulated 2.8 GB that way.
+                self.run("save-off")
                 return self
             if "FAILED TO BIND" in line or "Failed to start" in line:
                 raise RuntimeError(f"server failed to start: {line}")
@@ -191,7 +253,28 @@ class JavaServer:
             if tag in line:
                 return out
             m = LINE.match(line)
-            out.append(m.group("msg") if m else line)
+            msg = m.group("msg") if m else line
+            # A command the server cannot parse is echoed back IN FULL in the
+            # error, marker and all:
+            #
+            #   Unknown block type 'minecraft:rooted_dirt'
+            #   ...execute if block 41 4 73 minecraft:rooted_dirt run say F0_7<--[HERE]
+            #
+            # Every probe here works by grepping the output for its own marker,
+            # so an unparseable command REPORTS ITSELF AS A MATCH. One block in
+            # the candidate list that does not exist in the server's version
+            # therefore matches every position probed -- silently, confidently
+            # and wrongly. Measured against 1.16.5: all six faces of a chest came
+            # back `rooted_dirt`, a block added in 1.17, because it was the first
+            # too-new candidate in an otherwise 1.21-era list.
+            #
+            # These lines carry no results, only the command that failed, so
+            # dropping them here fixes every caller at once rather than asking
+            # each marker regex to defend itself.
+            if _CMD_ERROR.search(msg):
+                self.errors.append(msg)
+                continue
+            out.append(msg)
 
     # -- probing -----------------------------------------------------------
 
@@ -206,9 +289,24 @@ class JavaServer:
         self._forced.add(key)
 
     def loaded(self, x, z):
-        """Is this column actually generated? y=-64 is bedrock in every one."""
-        out = self.run(f"execute if block {x} -64 {z} minecraft:bedrock run say LOADED")
-        return any("LOADED" in l for l in out)
+        """Is this column actually generated? Bedrock sits on the world floor.
+
+        The floor is NOT always y=-64. That is 1.18+; before it the world bottom
+        is y=0. Probing only -64 made every pre-1.18 chunk report "not loaded",
+        so a 1.16 server answered UNKNOWN to every question -- which reads as a
+        broken world rather than as a wrong constant, and is exactly the
+        version-assumption trap this project keeps hitting.
+
+        Both are probed, and the one that answers is remembered.
+        """
+        floors = [self._floor] if self._floor is not None else [-64, 0]
+        for fy in floors:
+            out = self.run(
+                f"execute if block {x} {fy} {z} minecraft:bedrock run say LOADED")
+            if any("LOADED" in l for l in out):
+                self._floor = fy
+                return True
+        return False
 
     def blocks(self, x, z, y0, y1, block):
         """Which y in [y0, y1] hold `block`? None if the chunk is not loaded.
@@ -250,6 +348,62 @@ class JavaServer:
             if run > best:
                 best, best_base = run, y
         return (best, best_base)
+
+    # -- identifying and counting -----------------------------------------
+
+    def identify(self, x, y, z, candidates):
+        """Which of `candidates` is at this position? A list, normally 0 or 1.
+
+        `/execute if block` can only ASK about a block, never name one, and
+        `/data get block` only speaks for block entities. So identification here
+        means testing a list -- which makes "not on the list" a real answer,
+        distinct from "nothing there". Callers get the empty list for that and
+        must not read it as air.
+
+        None if the chunk is not loaded, which is not the same as no match.
+        """
+        self.forceload(x, z)
+        if not self.loaded(x, z):
+            return None
+        cmds = [f"execute if block {x} {y} {z} {b} run say HIT{i}"
+                for i, b in enumerate(candidates)]
+        out = self.run(cmds)
+        found = []
+        for line in out:
+            m = re.search(r"\bHIT(\d+)\b", line)
+            if m:
+                found.append(candidates[int(m.group(1))])
+        return found
+
+    def count_block(self, x0, y0, z0, x1, y1, z1, block, _limit=32):
+        """How many `block` are in this box? DESTRUCTIVE -- they become air.
+
+        `/fill ... replace` is the only cheap way to count: probing a village-
+        sized volume one position at a time is hundreds of thousands of
+        commands, while this is a few dozen. The price is that the blocks are
+        gone afterwards, so a run's world is spent once it has been counted --
+        which is fine for a throwaway `run-<seed>/`, and ruinous if a later
+        probe reuses it. Count last, or pass fresh=True.
+
+        Fill is capped at 32768 blocks per command, so the box is tiled.
+        """
+        self.forceload((x0 + x1) // 2, (z0 + z1) // 2,
+                       radius_chunks=max(2, (max(x1 - x0, z1 - z0) // 16) + 2))
+        cmds = []
+        for bx in range(x0, x1 + 1, _limit):
+            for by in range(y0, y1 + 1, _limit):
+                for bz in range(z0, z1 + 1, _limit):
+                    cmds.append(
+                        f"fill {bx} {by} {bz} "
+                        f"{min(bx+_limit-1, x1)} {min(by+_limit-1, y1)} {min(bz+_limit-1, z1)} "
+                        f"minecraft:air replace {block}")
+        total = 0
+        for i in range(0, len(cmds), 200):          # keep batches readable
+            for line in self.run(cmds[i:i+200]):
+                m = re.search(r"Successfully filled (\d+) block", line)
+                if m:
+                    total += int(m.group(1))
+        return total
 
 
 if __name__ == "__main__":

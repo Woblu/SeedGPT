@@ -20,6 +20,12 @@ static const char *tablesFor(int type, const char **out)
     case Outpost:        out[0]="pillager_outpost"; return NULL;
     case Shipwreck:      out[0]="shipwreck_treasure"; out[1]="shipwreck_supply"; out[2]="shipwreck_map"; return NULL;
     case Ruined_Portal:  out[0]="ruined_portal"; return NULL;
+    // Fortress corridor-turn chests all draw from one table. Bastions draw from
+    // two: the guaranteed starting-piece chests are "bastion_other" for three of
+    // the four types and "bastion_bridge" for the bridge type, so the offered
+    // items are the union -- what any bastion could yield from a modelled chest.
+    case Fortress:       out[0]="nether_bridge"; return NULL;
+    case Bastion:        out[0]="bastion_other"; out[1]="bastion_bridge"; return NULL;
     }
     return NULL;
 }
@@ -27,7 +33,7 @@ static const char *tablesFor(int type, const char **out)
 int main(int argc, char **argv)
 {
     int mc = (argc > 1) ? str2mc(argv[1]) : MC_1_21;
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
 
     printf("{\n  \"version\": \"%s\",\n  \"structures\": {", mc2str(mc));
     int firstS = 1;

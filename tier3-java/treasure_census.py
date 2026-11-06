@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""What CAN a buried treasure land on, and how deep can it get?
+
+An earlier note here said a buried treasure "cannot" be encased in bedrock. That
+was measured from the y range of 108 chests, not from the placement rule, and it
+was stated far too strongly. The rule allows something those 108 never showed:
+
+    the scan descends from the ocean floor until the block BELOW is one of
+    sandstone/stone/andesite/granite/diorite -- and it descends THROUGH air and
+    water
+
+So sediment lying over an open cave or ravine does not stop it. It falls through
+the void and lands on the cave floor, which can be far below the seabed. And a
+chest landing where the block at its own position is air takes the block below as
+its fill, then writes that into every air face around it -- a chest genuinely
+encased in whatever the cave floor is made of.
+
+At 0.09s per chest headless against 6.5s on the server, the honest way to answer
+"what is possible" is to look at tens of thousands of chests rather than argue
+from a hundred.
+
+    python treasure_census.py [--seeds N] [--start S] [--radius R] [--deep 30]
+
+Reports the depth distribution and what the chest lands on, and lists the deepest
+finds so they can be confirmed on the server. Fill agrees with the server 88% of
+the time, so anything surprising here is a LEAD, not a result.
+
+WHAT THE EARLIER 6646-CHEST RUN ACTUALLY MEASURED, and why it could not have
+found an ore casing except by luck: it scored `fill`, one block. Three different
+blocks reach a face, and the piece's own bytecode says which:
+
+    face already SOLID          -> left alone, keeps the standing terrain
+    face air/water, unsupported -> the FLOOR block (below the chest)
+    face air/water, supported   -> the FILL
+
+The floor is a dead end and provably so: the placement scan only stops where the
+block below is sandstone/stone/andesite/granite/diorite, so the floor is always
+one of those five and can never be ore. Chasing it would have cost hours to find
+a guaranteed zero.
+
+The untouched-solid face is the one that was never scored at all. A chest whose
+neighbour is iron ore keeps that iron ore -- the piece does not overwrite it --
+and every run so far logged that chest by its sand fill.
+
+And there is a FOURTH source, which is not a face rule at all: decoration runs
+AFTER the structure. Buried treasure is placed in SURFACE_STRUCTURES and ore in
+UNDERGROUND_ORES, so an ore blob can land on a finished chest and overwrite the
+casing the piece just wrote. Confirmed on a server at seed 20094 (-1783,50,41),
+where the block under the chest is coal_ore -- which the placement rule forbids
+as a floor, because it was stone when the chest was placed and became ore later.
+
+This census scores `final`: all six faces after decoration, which is what a
+player actually digs up.
+"""
+import os
+import sys
+import time
+from collections import Counter
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from treasure_probe import locate                      # noqa: E402
+from hunt_iron_casing import OrePath                   # noqa: E402
+
+
+# Measured over 6646 chests: sand 5204, gravel 1186, dirt 179, stone 59,
+# sandstone 13. Everything else was a one-off -- mud, grass_block, copper_ore,
+# magma_block -- and the one-offs are the whole point of running this.
+COMMON_FILL = {
+    "minecraft:sand", "minecraft:gravel", "minecraft:dirt", "minecraft:stone",
+    "minecraft:sandstone", "minecraft:andesite", "minecraft:granite",
+    "minecraft:diorite", "minecraft:clay", "minecraft:coarse_dirt",
+    "minecraft:red_sand", "minecraft:deepslate", "minecraft:tuff",
+}
+
+
+def main():
+    nseeds, start, radius, deep_at = 150, 20000, 4000, 30
+    for i, a in enumerate(sys.argv):
+        if a == "--seeds" and i + 1 < len(sys.argv):  nseeds = int(sys.argv[i + 1])
+        if a == "--start" and i + 1 < len(sys.argv):  start = int(sys.argv[i + 1])
+        if a == "--radius" and i + 1 < len(sys.argv): radius = int(sys.argv[i + 1])
+        if a == "--deep" and i + 1 < len(sys.argv):   deep_at = int(sys.argv[i + 1])
+
+    print(f"census: seeds {start}..{start+nseeds-1}, radius {radius}", flush=True)
+    t0 = time.time()
+    w = OrePath()
+    fills, floors, faces, depths = Counter(), Counter(), Counter(), Counter()
+    n, deepest, odd = 0, [], []
+    try:
+        for seed in range(start, start + nseeds):
+            for (x, z) in locate(seed, "1.21", radius):
+                y, d = w.full(seed, x, z)
+                if y is None or y <= -64:
+                    fills["<no placement>"] += 1
+                    continue
+                n += 1
+                fill = d["fill"]
+                fills[fill] += 1
+                floors[d["floor"]] += 1
+                for b in d["final"]:
+                    faces[b] += 1
+                depths[y // 10 * 10] += 1
+                if y <= deep_at:
+                    deepest.append((y, seed, x, z, fill))
+                # Scored over the six FINAL faces, not the fill. A chest sitting
+                # against ore keeps that ore as its wall, and reading only the
+                # fill called every one of those sand.
+                #
+                # The first run tallied one copper_ore casing in 6646 chests and
+                # then could not say WHERE, having kept only counts. A rate of
+                # 0.015% means each hit is the entire result of hours of
+                # scanning; losing its coordinates wastes the whole run.
+                unusual = sorted({b for b in d["final"] if b not in COMMON_FILL})
+                if unusual:
+                    odd.append((y, seed, x, z, ",".join(unusual), d))
+                    counts = Counter(d["final"])
+                    shown = " ".join(f"{b.split(':')[-1]}x{counts[b]}"
+                                     for b in unusual)
+                    print(f"  ODD  y={y} seed {seed} ({x},{z})  {shown}"
+                          f"   [fill {fill.split(':')[-1]}]", flush=True)
+            if (seed - start + 1) % 25 == 0:
+                el = time.time() - t0
+                print(f"  {n} chests, {el/60:.1f} min, {len(deepest)} below y{deep_at}",
+                      flush=True)
+    finally:
+        w.close()
+
+    el = time.time() - t0
+    print(f"\n{n} chests in {el/60:.1f} min ({el/max(n,1):.3f}s each)\n")
+    print("depth (10-block bands):")
+    for band in sorted(depths):
+        print(f"  y {band:4d}..{band+9:<4d}  {depths[band]:6d}  "
+              f"{'#' * min(60, depths[band] * 60 // max(depths.values()))}")
+    print("\nwhat the chest lands on -- FILL (headless, 88% agreement with server):")
+    for b, c in fills.most_common(25):
+        print(f"  {c:6d}  {b}")
+    # Printed to be checked, not to be read past. The placement rule permits
+    # exactly five blocks here; anything else in this list means the scan or the
+    # decoded rule is wrong, and that matters more than the census.
+    print("\nFLOOR (must be only sandstone/stone/andesite/granite/diorite):")
+    for b, c in floors.most_common(25):
+        flag = "" if b.split(":")[-1] in (
+            "sandstone", "stone", "andesite", "granite", "diorite") else "   <-- RULE VIOLATED"
+        print(f"  {c:6d}  {b}{flag}")
+    print(f"\nWHAT IS ACTUALLY THERE -- six faces of {n} chests "
+          f"({6*n} faces), AFTER decoration has run over the casing:")
+    for b, c in faces.most_common(25):
+        print(f"  {c:6d}  {b}")
+
+    if odd:
+        print(f"\nUNUSUAL CASINGS ({len(odd)} in {n} chests = "
+              f"{100*len(odd)/max(n,1):.3f}%) -- confirm on the server:")
+        for (y, seed, x, z, unusual, d) in sorted(odd):
+            print(f"  y={y:4d}  seed {seed:>9}  ({x},{z})  {unusual}")
+            print(f"        final {d['final']}")
+            print(f"        cased {d['cased']}")
+            print(f"        fill {d['fill']}  floor {d['floor']}")
+            print(f"        python treasure_casing.py {seed}   # then /tp {x} {y} {z}")
+    else:
+        print(f"\nno unusual casing in {n} chests. At the measured ~0.015% "
+              f"that is unremarkable below ~7000 chests, and is NOT evidence "
+              f"that none exists.")
+
+    deepest.sort()
+    if deepest:
+        print(f"\ndeepest {min(len(deepest), 20)} (CONFIRM THESE ON THE SERVER "
+              f"-- headless fill is 88%, not gospel):")
+        for (y, seed, x, z, fill) in deepest[:20]:
+            print(f"  y={y:4d}  seed {seed:>8}  ({x},{z})  on {fill}")
+    else:
+        print(f"\nnothing below y{deep_at} in this sample")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

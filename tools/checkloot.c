@@ -1,11 +1,17 @@
 // checkloot -- recompute the loot at a structure for one seed, independently of
 // the search path. Given seed + structure type + block coords, it re-locates
 // the piece, re-rolls every chest, and prints the item totals.
+//
+// --chests also prints one line per chest -- `chest X Z TABLE SEED: items` --
+// with the loot-table seed as the signed long a real world stores in the
+// chest's LootTableSeed tag, so a server can confirm it chest by chest
+// (tier3-java/check_loot_seed.py does).
 #include "finders.h"
 #include "generator.h"
 #include "util.h"
 #include "loot/loot_tables.h"
 #include "loot/loot_table_context.h"
+#include "biomeat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,7 +19,8 @@
 int main(int argc, char **argv)
 {
     if (argc < 5) {
-        fprintf(stderr, "usage: checkloot <seed> <structure> <blockX> <blockZ> [version] [item]\n");
+        fprintf(stderr, "usage: checkloot <seed> <structure> <blockX> <blockZ> [version] [item]\n"
+                        "       checkloot <seed> <structure> <x> <z> <version> --ench <name> [minLevel]\n");
         return 2;
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
@@ -21,12 +28,21 @@ int main(int argc, char **argv)
     int bx = atoi(argv[3]), bz = atoi(argv[4]);
     int mc = (argc > 5) ? str2mc(argv[5]) : MC_1_21;
     const char *want = (argc > 6) ? argv[6] : NULL;
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (want && !strncmp(want, "--", 2)) want = NULL;     // a flag, not an item
+    const char *wantEnch = NULL; int wantEnchLvl = 1, perChest = 0;
+    for (int a = 1; a < argc; a++) {
+        if (!strcmp(argv[a], "--chests")) perChest = 1;
+        if (strcmp(argv[a], "--ench") || a + 1 >= argc) continue;
+        wantEnch = argv[a + 1];
+        if (a + 2 < argc) { int v = atoi(argv[a + 2]); if (v > 0) wantEnchLvl = v; }
+    }
 
     int type = -1;
     struct { const char *n; int t; } tbl[] = {
         {"desert_pyramid",Desert_Pyramid},{"jungle_temple",Jungle_Pyramid},
-        {"igloo",Igloo},{"outpost",Outpost},{"shipwreck",Shipwreck}};
+        {"igloo",Igloo},{"outpost",Outpost},{"shipwreck",Shipwreck},
+        {"fortress",Fortress},{"bastion",Bastion}};
     for (int i = 0; i < (int)(sizeof(tbl)/sizeof(tbl[0])); i++)
         if (!strcmp(tbl[i].n, sname)) type = tbl[i].t;
     if (type < 0) { fprintf(stderr, "unsupported structure %s\n", sname); return 2; }
@@ -40,16 +56,32 @@ int main(int argc, char **argv)
     applySeed(&g, dim, seed);
 
     StructureVariant sv;
-    int biome = getBiomeAt(&g, 0, (bx>>4)*4+2, 319>>2, (bz>>4)*4+2);
-    getVariant(&sv, type, mc, seed & ((1ULL<<48)-1), bx, bz, biome);
+    int biome = chunkBiome(&g, bx, bz);
+    getVariant(&sv, type, mc, seed, bx, bz, biome);
     StructureSaltConfig ss;
-    if (!getStructureSaltConfig(type, mc, -1, &ss)) { fprintf(stderr, "no salt\n"); return 1; }
+    // sv.biome, not -1: from 1.18 the ocean and beached shipwrecks have their
+    // own decoration salts, and -1 reads as beached (see src/loot.c).
+    if (!getStructureSaltConfig(type, mc, sv.biome, &ss)) { fprintf(stderr, "no salt\n"); return 1; }
 
-    Piece pieces[64];
-    int n = getStructurePieces(pieces, 64, type, ss, &sv, mc, seed & ((1ULL<<48)-1), bx, bz);
+    // Fortresses run to a few hundred pieces (largest seen: 257 over a 3.6M
+    // sample), so this buffer is sized for them, not for the handful the small
+    // structures need. The engine refuses to exceed it rather than overrunning.
+    enum { PIECE_CAP = 1024 };
+    Piece *pieces = malloc((size_t)PIECE_CAP * sizeof(Piece));
+    if (!pieces) { fprintf(stderr, "out of memory\n"); return 3; }
+    // The FULL seed: on 1.18+ chest loot seeds depend on all 64 bits (loot.h).
+    int n = getStructurePieces(pieces, PIECE_CAP, type, ss, &sv, mc, seed, bx, bz);
+    if (n < 0) { fprintf(stderr, "engine declined to build pieces\n"); return 1; }
+    if (n >= PIECE_CAP) { fprintf(stderr, "piece buffer full -- count would be short\n"); return 1; }
 
     // Aggregate every item across all chests.
     struct { char name[64]; int count; } agg[128]; int na = 0;
+    // And every ENCHANTMENT, as (item, enchantment, level) triples. cubiomes has
+    // carried these on ItemStack all along -- enchantment_count and
+    // enchantments[] -- and nothing here ever read them, so this engine could
+    // say "a golden sword" but never "a Looting III golden sword". That gap is
+    // why two of CoolStuffFinder's four targets were out of reach.
+    struct { char item[64]; char ench[48]; int level; int count; } ea[256]; int ne = 0;
     for (int i = 0; i < n; i++)
     for (int c = 0; c < pieces[i].chestCount; c++) {
         LootTableContext *ctx = NULL;
@@ -57,12 +89,73 @@ int main(int argc, char **argv)
         if (!t || !init_loot_table_name(&ctx, t, mc) || !ctx) continue;
         set_loot_seed(ctx, pieces[i].lootSeeds[c]);
         generate_loot(ctx);
+        if (perChest) {
+            // Named as the game names the result: enchant_randomly turns a
+            // book into an enchanted_book, and the enchantments ride along as
+            // {name:level,...} so a server can be compared item for item.
+            printf("chest %d %d %s %lld:", pieces[i].chestPoses[c].x, pieces[i].chestPoses[c].z,
+                   t, (long long)pieces[i].lootSeeds[c]);
+            for (int k = 0; k < ctx->generated_item_count; k++) {
+                const ItemStack *is = &ctx->generated_items[k];
+                const char *nm = get_item_name(ctx, is->item);
+                if (is->enchantment_count > 0 && !strcmp(nm, "minecraft:book"))
+                    nm = "minecraft:enchanted_book";
+                printf(" %dx%s", is->count, nm);
+                for (int e = 0; e < is->enchantment_count && e < 16; e++) {
+                    const char *en = get_enchantment_name(is->enchantments[e].enchantment);
+                    printf("%s%s:%d", e ? "," : "{", en ? en : "unknown", is->enchantments[e].level);
+                }
+                if (is->enchantment_count > 0) printf("}");
+            }
+            printf("\n");
+        }
         for (int k = 0; k < ctx->generated_item_count; k++) {
             const char *nm = get_item_name(ctx, ctx->generated_items[k].item);
             int j; for (j = 0; j < na; j++) if (!strcmp(agg[j].name, nm)) break;
             if (j == na && na < 128) { snprintf(agg[na].name, 64, "%s", nm); agg[na].count = 0; na++; }
             if (j < 128) agg[j].count += ctx->generated_items[k].count;
+
+            const ItemStack *is = &ctx->generated_items[k];
+            for (int e = 0; e < is->enchantment_count && e < 16; e++) {
+                int rawid = is->enchantments[e].enchantment;
+                const char *en = get_enchantment_name(rawid);
+                int lv = is->enchantments[e].level;
+                char unk[32];
+                if (!en) {
+                    // NOT skipped. An unnamed enchantment is an UNKNOWN, and
+                    // dropping it reads as "not enchanted" -- which is how the
+                    // enchant_randomly path looked completely dead for 52
+                    // golden items before anyone printed the id.
+                    snprintf(unk, sizeof unk, "enchant#%d", rawid);
+                    en = unk;
+                }
+                int q;
+                for (q = 0; q < ne; q++)
+                    if (!strcmp(ea[q].item, nm) && !strcmp(ea[q].ench, en)
+                        && ea[q].level == lv) break;
+                if (q == ne && ne < 256) {
+                    snprintf(ea[ne].item, 64, "%s", nm);
+                    snprintf(ea[ne].ench, 48, "%s", en);
+                    ea[ne].level = lv; ea[ne].count = 0; ne++;
+                }
+                if (q < 256) ea[q].count += is->count;
+            }
         }
+    }
+
+    // --ench <name> [minLevel] -> how many items carry it at that level or above.
+    // A separate mode rather than a filter on the item line, because "how many
+    // Looting III swords" and "how many swords" are different questions and
+    // answering the second while being asked the first is the whole problem.
+    if (wantEnch) {
+        int total = 0;
+        for (int q = 0; q < ne; q++)
+            if (!strcmp(ea[q].ench, wantEnch) && ea[q].level >= wantEnchLvl)
+                total += ea[q].count;
+        printf("%lld %s (%d,%d): %s>=%d=%d\n", (long long)seed, sname, bx, bz,
+               wantEnch, wantEnchLvl, total);
+        free(pieces);
+        return total > 0 ? 0 : 1;
     }
 
     printf("%lld %s (%d,%d):", (long long)seed, sname, bx, bz);
@@ -76,6 +169,12 @@ int main(int argc, char **argv)
     } else {
         for (int j = 0; j < na; j++) printf(" %dx%s", agg[j].count, agg[j].name);
         printf("\n");
+        if (ne) {
+            printf("  enchanted:");
+            for (int q = 0; q < ne; q++)
+                printf(" %dx%s{%s %d}", ea[q].count, ea[q].item, ea[q].ench, ea[q].level);
+            printf("\n");
+        }
     }
     return 0;
 }

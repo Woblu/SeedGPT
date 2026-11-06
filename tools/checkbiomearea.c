@@ -8,6 +8,7 @@
 // defaults to fine, the finder's default.
 #include "generator.h"
 #include "util.h"
+#include "biomeat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,7 +24,7 @@ int main(int argc, char **argv)
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     const char *biome = argv[2];
     int mc = (argc > 3) ? str2mc(argv[3]) : MC_1_21;
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
     int x = (argc > 4) ? atoi(argv[4]) : 0;
     int z = (argc > 5) ? atoi(argv[5]) : 0;
     int radius = (argc > 6) ? atoi(argv[6]) : 800;
@@ -53,7 +54,7 @@ int main(int argc, char **argv)
         if ((long long)dx*dx + (long long)dz*dz > lim) continue;
         int bx = x + dx, bz = z + dz;
         total++;
-        int id = getBiomeAt(&g, 0, (bx>>4)*4 + 2, 319 >> 2, (bz>>4)*4 + 2);
+        int id = chunkBiome(&g, bx, bz);
         if (id == biomeId) match++;
     }
     int pct = total > 0 ? (int)((long long)match * 100 / total) : 0;

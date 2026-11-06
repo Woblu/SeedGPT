@@ -1,0 +1,12 @@
+diff --git a/features/stronghold.c b/features/stronghold.c
+--- a/features/stronghold.c
++++ b/features/stronghold.c
+@@ -113,7 +113,7 @@
+         if (p->bb0.y != b0.y) {
+             return 0;
+         }
+-        int minI = env->mc < MC_1_17 ? 0 : 1;
++        int minI = env->mc < MC_1_18 ? 0 : 1;
+         for (int i = 2; i >= minI; --i) {
+             size.z = i;
+             orientBox(pos, offset, size, facing, &b0, &b1);

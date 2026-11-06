@@ -1,0 +1,55 @@
+# Build and test on GitHub's machines instead of the developer's.
+#
+# The test suite takes every core for minutes, and the PC this project is
+# written on is also someone's daily machine. Three operating systems and two
+# CPU families, because a wrong seed does not crash: tests/golden.py compares
+# what each of them generates against the same recorded answers.
+name: build and test
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main, release-prep]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows x86-64, os: windows-latest }
+          - { name: Linux x86-64, os: ubuntu-latest }
+          - { name: Linux ARM64, os: ubuntu-24.04-arm }
+          - { name: macOS ARM64, os: macos-latest }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: engine (pinned cubiomes + patches)
+        run: ./setup.sh
+      - name: build every tool
+        run: ./build.sh all
+      - name: same worlds as every other platform
+        run: python tests/golden.py
+      - name: the offline prompt
+        run: python tests/test_nlparse.py
+      - name: test suite
+        run: ./test.sh

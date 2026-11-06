@@ -1,0 +1,188 @@
+diff --git a/loot/loot_functions.c b/loot/loot_functions.c
+index be331d1..642faa3 100644
+--- a/loot/loot_functions.c
++++ b/loot/loot_functions.c
+@@ -300,6 +300,23 @@ static void init_function(LootFunction* lf)
+     lf->varparams_int_arr_size = 0;
+ }
+ 
++// A function whose only effect is the random draw: set_instrument picks a
++// goat horn's sound with one nextInt over its tag, and leaving that draw out
++// shifts every roll after it.
++static void skip_next_int_function(uint64_t* rand, ItemStack* is, const void* params)
++{
++    (void)is;
++    nextInt(rand, ((const int*)params)[0]);
++}
++
++void create_skip_next_int(LootFunction* lf, const int bound)
++{
++    init_function(lf);
++    lf->params = lf->params_int;
++    lf->params_int[0] = bound;
++    lf->fun = skip_next_int_function;
++}
++
+ void create_set_count(LootFunction* lf, const int min, const int max)
+ {
+     init_function(lf);
+diff --git a/loot/loot_functions.h b/loot/loot_functions.h
+index cce1395..524ad19 100644
+--- a/loot/loot_functions.h
++++ b/loot/loot_functions.h
+@@ -229,6 +229,7 @@ void create_set_damage(LootFunction* lf);
+ void create_skip_calls(LootFunction* lf, const int skip_count);
+ void create_no_op(LootFunction* lf);
+ void create_enchant_randomly_one_enchant(LootFunction* lf, const Enchantment enchantment);
++void create_skip_next_int(LootFunction* lf, const int bound);
+ void create_enchant_randomly_list(LootFunction* lf, const Enchantment* list, const int list_length);
+ void create_enchant_randomly(LootFunction* lf, const int version, const ItemType item, const int isTreasure);
+ void create_enchant_randomly_tag(LootFunction* lf, const int version, const ItemType item, const char* tag, const int allowTreasure);
+diff --git a/loot/loot_tables.c b/loot/loot_tables.c
+index 1271820..dc0c0b8 100644
+--- a/loot/loot_tables.c
++++ b/loot/loot_tables.c
+@@ -62,8 +62,143 @@
+ #include "loot_tables/stronghold_crossing_1_13.h"
+ #include "loot_tables/stronghold_library_1_13.h"
+ #include "loot_tables/stronghold_library_1_20.h"
++#include "loot_table_parser.h"
++#include <stdlib.h>
++
++// Fixes applied to a table as it is loaded, each one measured against a real
++// 1.21.1 server (tier3-java/check_loot_seed.py in the project that carries
++// this patch). The compiled contexts are static and shared, so a table that
++// needs one is copied and the copy changed; the shared one is never touched.
++//
++// 1. enchant_randomly in 1.21+. From 1.21 every vanilla enchant_randomly that
++//    names no enchantments of its own carries
++//    "options": "#minecraft:on_random_loot" -- 39 enchantments in the tag's
++//    order, curses, frost walker and mending last. The tables compiled from
++//    1.20 and earlier, which this library also serves for the first 1.21.x
++//    releases (desert pyramid and shipwreck supply until 1.21.6, ruined portal
++//    until 1.21.5, outposts until 1.21.9, ...), build their own default list
++//    instead. A different list picks a different enchantment for the same
++//    roll, and one with a single level skips the level roll, so the rest of
++//    the chest drifts too: a desert pyramid chest held an emerald where the
++//    1.20 table rolled an enchanted golden apple, right after an enchanted
++//    book. Each real 1.21.1 table this touches is the 1.20 one plus those
++//    "options" lines. Single explicit enchantments (soul speed) use another
++//    function and are left alone.
++//
++// 2. Goat horns (outposts, 1.19+). The pool's set_instrument picks the horn's
++//    sound with one nextInt over #minecraft:regular_goat_horns (4 entries),
++//    and the compiled tables drop the function, so every roll after a goat
++//    horn drifts: an outpost chest got two sentry trims the real one did not.
++//    The draw is appended after the entry's own functions, where a pool
++//    function runs.
++#define GOAT_HORN_SOUNDS 4
++
++static int pool_function_count(const LootPool* pool)
++{
++    int n = 0;
++    for (int e = 0; e < pool->entry_count; e++) {
++        const int end = pool->entry_functions_index[e] + pool->entry_functions_count[e];
++        if (end > n) n = end;
++    }
++    return n;
++}
++
++static int is_goat_horn(const LootTableContext* ctx, int item)
++{
++    return item >= 0 && item < ctx->item_count && strcmp(ctx->item_names[item], "minecraft:goat_horn") == 0;
++}
++
++static LootTableContext* fixup_loot_table(LootTableContext* src, int version)
++{
++    if (!src)
++        return src;
++
++    LootFunction probe;
++    const Enchantment one[1] = { PROTECTION };
++    create_enchant_randomly_list(&probe, one, 1);
++    void (*enchant_randomly)(uint64_t*, ItemStack*, const void*) = probe.fun;
++    free(probe.varparams_int);
++
++    const int fix_enchants = version >= MC_1_21_1 && src->version < MC_1_21_1;
++
++    // Is there anything to change at all?
++    int needed = 0;
++    for (int p = 0; p < src->pool_count && !needed; p++) {
++        const LootPool* pool = &src->loot_pools[p];
++        for (int e = 0; e < pool->entry_count && !needed; e++) {
++            if (is_goat_horn(src, pool->entry_to_item[e]))
++                needed = 1;
++            for (int f = 0; fix_enchants && f < pool->entry_functions_count[e]; f++)
++                if (pool->loot_functions[pool->entry_functions_index[e] + f].fun == enchant_randomly)
++                    needed = 1;
++        }
++    }
++    if (!needed)
++        return src;
++
++    LootTableContext* ctx = (LootTableContext*)malloc(sizeof *ctx);
++    LootPool* pools = (LootPool*)malloc(src->pool_count * sizeof *pools);
++    if (!ctx || !pools) { free(ctx); free(pools); return src; }
++    *ctx = *src;
++    memcpy(pools, src->loot_pools, src->pool_count * sizeof *pools);
++    ctx->loot_pools = pools;
++
++    for (int p = 0; p < ctx->pool_count; p++) {
++        LootPool* pool = &pools[p];
++        const int nfun = pool_function_count(pool);
++        int extra = 0;
++        for (int e = 0; e < pool->entry_count; e++)
++            if (is_goat_horn(ctx, pool->entry_to_item[e]))
++                extra += pool->entry_functions_count[e] + 1;
++
++        // A private function list (with room to move each goat horn's
++        // functions to the end and add the draw) and private index/count.
++        LootFunction* fs = (LootFunction*)malloc((nfun + extra + 1) * sizeof *fs);
++        int* idx = (int*)malloc((pool->entry_count + 1) * sizeof *idx);
++        int* cnt = (int*)malloc((pool->entry_count + 1) * sizeof *cnt);
++        if (!fs || !idx || !cnt) { free(fs); free(idx); free(cnt); return src; }
++        if (nfun > 0)
++            memcpy(fs, pool->loot_functions, nfun * sizeof *fs);
++        memcpy(idx, pool->entry_functions_index, pool->entry_count * sizeof *idx);
++        memcpy(cnt, pool->entry_functions_count, pool->entry_count * sizeof *cnt);
++
++        int top = nfun;
++        for (int e = 0; e < pool->entry_count; e++) {
++            const int item = pool->entry_to_item[e];
++            if (fix_enchants && item >= 0 && item < ctx->item_count) {
++                for (int f = 0; f < cnt[e]; f++) {
++                    LootFunction* lf = &fs[idx[e] + f];
++                    if (lf->fun == enchant_randomly)
++                        create_enchant_randomly_tag(lf, version, get_item_type(ctx->item_names[item]),
++                                                    "#minecraft:on_random_loot", 0);
++                }
++            }
++            if (is_goat_horn(ctx, item)) {
++                memmove(&fs[top], &fs[idx[e]], cnt[e] * sizeof *fs);
++                idx[e] = top;
++                top += cnt[e];
++                create_skip_next_int(&fs[top], GOAT_HORN_SOUNDS);
++                top++;
++                cnt[e]++;
++            }
++        }
++        pool->loot_functions = fs;
++        pool->entry_functions_index = idx;
++        pool->entry_functions_count = cnt;
++    }
++    return ctx;
++}
++
++static int init_loot_table_name_raw(LootTableContext** context, const char* loot_table, int version);
+ 
+ int init_loot_table_name(LootTableContext** context, const char* loot_table, int version) {
++    const int rc = init_loot_table_name_raw(context, loot_table, version);
++    if (rc && *context)
++        *context = fixup_loot_table(*context, version);
++    return rc;
++}
++
++static int init_loot_table_name_raw(LootTableContext** context, const char* loot_table, int version) {
+     if (strcmp(loot_table, "bastion_bridge") == 0) {
+         return init_bastion_bridge(context, version);
+     }

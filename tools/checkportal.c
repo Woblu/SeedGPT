@@ -15,6 +15,7 @@
 #include "biomes.h"
 #include "rng.h"
 #include "util.h"
+#include "biomeat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,7 +61,7 @@ int main(int argc, char **argv)
     }
     uint64_t seed = (uint64_t)strtoll(argv[1], NULL, 10);
     int mc = (argc > 2) ? str2mc(argv[2]) : MC_1_21;
-    if (mc < 0) { fprintf(stderr, "unknown version\n"); return 2; }
+    if (mc <= MC_UNDEF) { fprintf(stderr, "unknown version\n"); return 2; }
 
     Generator g; setupGenerator(&g, mc, 0);
     applySeed(&g, DIM_OVERWORLD, seed);
@@ -69,7 +70,7 @@ int main(int argc, char **argv)
     // matched), rather than searching for the nearest.
     if (argc >= 6 && !strcmp(argv[3], "--at")) {
         Pos best = { atoi(argv[4]), atoi(argv[5]) };
-        int biomeID = getBiomeAt(&g, 0, (best.x>>4)*4+2, 319>>2, (best.z>>4)*4+2);
+        int biomeID = chunkBiome(&g, best.x, best.z);
         StructureVariant sv;
         getVariant(&sv, Ruined_Portal, mc, seed, best.x, best.z, biomeID);
         int reref = rederive_underground(mc, seed, best.x, best.z, biomeID);
@@ -101,7 +102,7 @@ int main(int argc, char **argv)
     }
     if (!found) { printf("%lld no ruined_portal within %d\n", (long long)seed, radius); return 1; }
 
-    int biomeID = getBiomeAt(&g, 0, (best.x>>4)*4+2, 319>>2, (best.z>>4)*4+2);
+    int biomeID = chunkBiome(&g, best.x, best.z);
     StructureVariant sv;
     getVariant(&sv, Ruined_Portal, mc, seed, best.x, best.z, biomeID);
     int reref = rederive_underground(mc, seed, best.x, best.z, biomeID);
