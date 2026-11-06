@@ -84,11 +84,11 @@ static int self(int trials)
                 if (out[k] == (ws & LCG_MASK)) found = 1;
                 if (((getPopulationSeed(mc, out[k], x, z) ^ pop) & LCG_MASK) != 0) {
                     if (bad++ < 10) printf("WRONG %s pop=%" PRIu64 " x=%d z=%d seed=%" PRIu64 "\n",
-                                           mc2str(mc), pop & LCG_MASK, x, z, out[k]);
+                                           mc2str(mc), (uint64_t)(pop & LCG_MASK), x, z, out[k]);
                 }
             }
             if (!found && bad++ < 10)
-                printf("MISSED %s ws=%" PRIu64 " x=%d z=%d (%d answers)\n", mc2str(mc), ws & LCG_MASK, x, z, n);
+                printf("MISSED %s ws=%" PRIu64 " x=%d z=%d (%d answers)\n", mc2str(mc), (uint64_t)(ws & LCG_MASK), x, z, n);
         }
     }
     if (popInvert(MC_1_18, 0, 16, 16, out, 1) != -1) { bad++; printf("1.18 not refused\n"); }
