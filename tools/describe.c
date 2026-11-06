@@ -146,7 +146,7 @@ int main(int argc, char **argv)
     }
 
     printf("seed %" PRId64 "   (MC %s)\n", (int64_t)seed, mc2str(mc));
-    printf("  structure seed (low 48) : %" PRIu64 "\n", seed & ((1ULL << 48) - 1));
+    printf("  structure seed (low 48) : %" PRIu64 "\n", (uint64_t)(seed & ((1ULL << 48) - 1)));
     printf("  world spawn : x=%d z=%d   biome=%s\n\n",
            spawn.x, spawn.z, biome2str(mc, spawnBiome));
 

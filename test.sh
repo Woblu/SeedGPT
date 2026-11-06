@@ -1356,7 +1356,7 @@ PY
 grep -q "ROUTED True" /tmp/sc_test/tool.txt   && ok "a routed prompt survives the query whitelist instead of being discarded"   || bad "tool routing dropped by api_gemini" "$(head -3 /tmp/sc_test/tool.txt)"
 grep -q "REJECTED True" /tmp/sc_test/tool.txt   && ok "an invented tool name is rejected, not sent to a panel that does not exist"   || bad "invalid tool name accepted" ""
 grep -q "CLAMPED True" /tmp/sc_test/tool.txt   && ok "tool parameters are clamped to a sane range"   || bad "tool radius not clamped" ""
-grep -q "ABSENT True" /tmp/sc_test/tool.txt \n  && ok "a request for a tool this install lacks is refused, not searched another way" \n  || bad "missing tool not refused" "$(tail -3 /tmp/sc_test/tool.txt)"
+grep -q "ABSENT True" /tmp/sc_test/tool.txt   && ok "a request for a tool this install lacks is refused, not searched another way"   || bad "missing tool not refused" "$(tail -3 /tmp/sc_test/tool.txt)"
 
 # The casing readout reported the raw landing block, skipping vanilla's "unless
 # it is air or water, the fill is the block BELOW". It emitted fill=air, which no
